@@ -119,6 +119,7 @@ export class LaunchFenceError extends Error {
       | 'not_committed'
       | 'already_armed'
       | 'not_armed'
+      | 'lease_invalid'
       | 'token_mismatch'
       | 'epoch_mismatch'
       | 'lease_expired'
@@ -147,6 +148,57 @@ function reservationPath(turnId: string, cwd?: string): string {
 
 function reservationLockPath(turnId: string, cwd?: string): string {
   return path.join(reservationLocksDir(cwd), `${turnId}.lock`);
+}
+
+// PR2a review round 2 (BLOCKING): the consume-XOR-revoke decision is committed
+// via ATOMIC exclusive-create (`wx`) of ONE per-(turn,epoch) decision file — not
+// a lock-guarded read-modify-write, which leaves a check-then-write TOCTOU a
+// reaped holder can exploit. The FIRST writer to create the file wins; the loser
+// gets EEXIST and reads the winner's verdict. This is the "one conditional
+// durable mutation" the fence requires (dec#138), and it is race-free by
+// construction — no lock needed for the decision itself.
+interface LaunchDecisionFile {
+  decision: 'crossed' | 'revoked';
+  token: string;
+  epoch: number;
+  at: string;
+  reason?: string;
+}
+
+function launchDecisionPath(turnId: string, epoch: number, cwd?: string): string {
+  return path.join(reservationsDir(cwd), `${turnId}.launch-${epoch}.decision.json`);
+}
+
+function readLaunchDecision(turnId: string, epoch: number, cwd?: string): LaunchDecisionFile | undefined {
+  const p = launchDecisionPath(turnId, epoch, cwd);
+  if (!fs.existsSync(p)) return undefined;
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')) as LaunchDecisionFile; } catch { return undefined; }
+}
+
+/** Atomically claim the decision via exclusive-create. Returns the committed
+ * decision (this caller's if it won, or the incumbent's if it lost). */
+function claimLaunchDecision(turnId: string, decision: LaunchDecisionFile, cwd?: string): LaunchDecisionFile {
+  ensureDirs(cwd);
+  const p = launchDecisionPath(turnId, decision.epoch, cwd);
+  const body = `${JSON.stringify(decision, null, 2)}\n`;
+  try {
+    // 'wx' = O_CREAT | O_EXCL — atomic; fails with EEXIST if a decision exists.
+    const fd = fs.openSync(p, 'wx');
+    try {
+      const buf = Buffer.from(body, 'utf8');
+      let off = 0;
+      while (off < buf.length) off += fs.writeSync(fd, buf, off, buf.length - off);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    return decision; // won
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const incumbent = readLaunchDecision(turnId, decision.epoch, cwd);
+    if (!incumbent) throw err; // decision file vanished mid-race — surface it
+    return incumbent; // lost — the incumbent decision stands
+  }
 }
 
 function ensureDirs(cwd?: string): void {
@@ -187,7 +239,7 @@ function writeReservation(record: TurnReservation, cwd?: string): void {
  * primitive (stale-reaping, O_EXCL, fencing) so the decision CAS is atomic
  * across processes — two racing writers cannot both mutate the decision.
  */
-function withReservationLock<R>(turnId: string, agentId: string, fn: () => R, cwd?: string): R {
+function withReservationLock<R>(turnId: string, agentId: string, fn: (fence: () => void) => R, cwd?: string): R {
   ensureDirs(cwd);
   const lock = acquireLock({
     lockPath: reservationLockPath(turnId, cwd),
@@ -196,7 +248,12 @@ function withReservationLock<R>(turnId: string, agentId: string, fn: () => R, cw
     maxMutationDurationMs: 30_000,
   });
   try {
-    return fn();
+    // PR2a review (BLOCKING): the callback MUST invoke `fence()` immediately
+    // before any durable write. If this lock was reaped (holder suspended past
+    // the hard deadline) and re-acquired by another writer, fenceCheck throws
+    // LockLostError so a stale holder can never overwrite the other terminal
+    // transition — the consume-XOR-revoke fence stays durable across recovery.
+    return fn(lock.fenceCheck);
   } finally {
     lock.release();
   }
@@ -217,7 +274,7 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
   return withReservationLock(
     input.turn_id,
     agentId,
-    () => {
+    (fence) => {
       const existing = readReservation(input.turn_id, cwd);
       if (existing) {
         throw new ReservationStateError(
@@ -246,6 +303,7 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
         decision: 'prepared',
         created_at: nowISO(),
       };
+      fence();
       writeReservation(record, cwd);
       return record;
     },
@@ -263,7 +321,7 @@ export function commitReservation(turnId: string, cwd?: string, agentId = 'syste
   return withReservationLock(
     turnId,
     agentId,
-    () => {
+    (fence) => {
       const record = readReservation(turnId, cwd);
       if (!record) {
         throw new ReservationStateError(turnId, 'reservation_not_found', `commitReservation: unknown turn_id ${turnId}`);
@@ -277,6 +335,7 @@ export function commitReservation(turnId: string, cwd?: string, agentId = 'syste
         );
       }
       const next: TurnReservation = { ...record, decision: 'committed', decided_at: nowISO() };
+      fence();
       writeReservation(next, cwd);
       return next;
     },
@@ -294,7 +353,7 @@ export function abortReservation(turnId: string, reason: string, cwd?: string, a
   return withReservationLock(
     turnId,
     agentId,
-    () => {
+    (fence) => {
       const record = readReservation(turnId, cwd);
       if (!record) {
         throw new ReservationStateError(turnId, 'reservation_not_found', `abortReservation: unknown turn_id ${turnId}`);
@@ -308,6 +367,7 @@ export function abortReservation(turnId: string, reason: string, cwd?: string, a
         );
       }
       const next: TurnReservation = { ...record, decision: 'aborted', decided_at: nowISO(), abort_reason: reason };
+      fence();
       writeReservation(next, cwd);
       return next;
     },
@@ -373,7 +433,7 @@ export interface ArmLaunchInput {
  * strictly higher epoch (a fresh attempt generation).
  */
 export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, agentId = 'system'): TurnReservation {
-  return withReservationLock(turnId, agentId, () => {
+  return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `armLaunch: unknown turn_id ${turnId}`);
     if (record.decision !== 'committed') {
@@ -385,10 +445,17 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
     if (record.launch && input.epoch <= record.launch.epoch) {
       throw new LaunchFenceError(turnId, 'epoch_mismatch', `armLaunch: re-arm epoch ${input.epoch} must exceed prior ${record.launch.epoch}`);
     }
+    // PR2a review (BLOCKING): reject a non-parseable lease at arm time — an
+    // invalid string makes Date.parse NaN and `now > NaN` false, so the grant
+    // would never expire and a matching supervisor could cross it unbounded.
+    if (!Number.isFinite(Date.parse(input.lease_deadline))) {
+      throw new LaunchFenceError(turnId, 'lease_invalid', `armLaunch: lease_deadline "${input.lease_deadline}" is not a parseable timestamp`);
+    }
     const next: TurnReservation = {
       ...record,
       launch: { status: 'armed', token: input.token, epoch: input.epoch, lease_deadline: input.lease_deadline, armed_at: nowISO() },
     };
+    fence();
     writeReservation(next, cwd);
     return next;
   }, cwd);
@@ -401,19 +468,29 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
  * the token/epoch do not match — the supervisor MUST NOT spawn on refusal.
  */
 export function consumeLaunchGrant(turnId: string, token: string, epoch: number, cwd?: string, agentId = 'system'): TurnReservation {
-  return withReservationLock(turnId, agentId, () => {
+  return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrant: unknown turn_id ${turnId}`);
     const g = record.launch;
     if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrant: turn_id ${turnId} has no launch grant`);
-    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
+    // Epoch/token/lease validated against the immutable grant fields (set once
+    // at arm). Epoch BEFORE token so a stale generation reports epoch_mismatch.
     if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
-    if (g.status === 'crossed') return record; // idempotent supervisor retry
-    if (g.status === 'revoked') throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
-    if (Date.parse(nowISO()) > Date.parse(g.lease_deadline)) {
+    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
+    // Expiry is inclusive (now >= deadline) — the SAME rule the sweep uses.
+    if (Date.parse(nowISO()) >= Date.parse(g.lease_deadline)) {
       throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrant: grant for ${turnId} expired at ${g.lease_deadline}`);
     }
-    const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: nowISO() } };
+    // ATOMIC XOR — claim the decision via exclusive-create. If a revoke already
+    // won (even from a newer holder after this one was reaped), we LOSE here and
+    // must not spawn. No TOCTOU: the create, not a prior check, is the commit.
+    const committed = claimLaunchDecision(turnId, { decision: 'crossed', token, epoch, at: nowISO() }, cwd);
+    if (committed.decision === 'revoked') {
+      throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
+    }
+    // Won (or idempotently already crossed). Update the record projection.
+    const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: committed.at } };
+    fence();
     writeReservation(next, cwd);
     return next;
   }, cwd);
@@ -426,22 +503,37 @@ export function consumeLaunchGrant(turnId: string, token: string, epoch: number,
  * attempt as launch_attempted_unknown and never re-spawn.
  */
 export function revokeLaunchGrant(turnId: string, epoch: number, reason: string, cwd?: string, agentId = 'system'): TurnReservation {
-  return withReservationLock(turnId, agentId, () => {
+  return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `revokeLaunchGrant: unknown turn_id ${turnId}`);
     const g = record.launch;
     if (!g) throw new LaunchFenceError(turnId, 'not_armed', `revokeLaunchGrant: turn_id ${turnId} has no launch grant`);
     if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `revokeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
-    if (g.status === 'revoked') return record; // idempotent
-    if (g.status === 'crossed') throw new LaunchFenceError(turnId, 'crossed_not_revocable', `revokeLaunchGrant: grant for ${turnId} already crossed — worker launched, cannot revoke`);
-    const next: TurnReservation = { ...record, launch: { ...g, status: 'revoked', revoked_at: nowISO(), revoke_reason: reason } };
+    // ATOMIC XOR — claim the decision. If a consume already crossed (even from a
+    // newer holder), we LOSE: the worker launched, so the attempt is
+    // launch_attempted_unknown and must never be treated as re-spawnable.
+    const committed = claimLaunchDecision(turnId, { decision: 'revoked', token: g.token, epoch, at: nowISO(), reason }, cwd);
+    if (committed.decision === 'crossed') {
+      throw new LaunchFenceError(turnId, 'crossed_not_revocable', `revokeLaunchGrant: grant for ${turnId} already crossed — worker launched, cannot revoke`);
+    }
+    const next: TurnReservation = { ...record, launch: { ...g, status: 'revoked', revoked_at: committed.at, revoke_reason: committed.reason ?? reason } };
+    fence();
     writeReservation(next, cwd);
     return next;
   }, cwd);
 }
 
 export function launchGrant(turnId: string, cwd?: string): TurnReservation['launch'] | undefined {
-  return readReservation(turnId, cwd)?.launch;
+  const g = readReservation(turnId, cwd)?.launch;
+  if (!g) return undefined;
+  // The decision file is AUTHORITATIVE — a winner may have crashed after the
+  // atomic exclusive-create but before updating the record projection, so
+  // reconcile the status from the decision file when one exists.
+  const d = readLaunchDecision(turnId, g.epoch, cwd);
+  if (!d) return g;
+  return d.decision === 'crossed'
+    ? { ...g, status: 'crossed', crossed_at: d.at }
+    : { ...g, status: 'revoked', revoked_at: d.at, revoke_reason: d.reason };
 }
 
 /**
@@ -453,9 +545,10 @@ export function sweepExpiredLaunchGrants(cwd?: string, agentId = 'system'): stri
   const now = Date.parse(nowISO());
   const revoked: string[] = [];
   for (const r of listReservations({}, cwd)) {
-    const g = r.launch;
+    const g = launchGrant(r.turn_id, cwd); // authoritative status (decision-file reconciled)
     if (!g || g.status !== 'armed') continue;
-    if (Date.parse(g.lease_deadline) >= now) continue;
+    // Expired ⟺ now >= deadline (inclusive), matching consumeLaunchGrant.
+    if (Date.parse(g.lease_deadline) > now) continue;
     try {
       revokeLaunchGrant(r.turn_id, g.epoch, 'reserved_never_launched', cwd, agentId);
       revoked.push(r.turn_id);
