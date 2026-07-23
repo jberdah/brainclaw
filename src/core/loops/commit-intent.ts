@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { z } from 'zod';
+
 import { memoryDir } from '../io.js';
 import { nowISO } from '../ids.js';
 import { logger } from '../logger.js';
@@ -41,6 +43,22 @@ export interface LoopCommitIntent {
   thread_snapshot: LoopThread;
   created_at: string;
 }
+
+/**
+ * Strict schema for a PERSISTED intent (PR #102 review round 2, HIGH). A
+ * JSON-valid file is not enough: recovery must reject a structurally-invalid or
+ * cross-loop intent before replaying it. `loadValidatedIntent` additionally
+ * binds every embedded loop_id / thread id to the directory loop.
+ */
+export const LoopCommitIntentSchema = z.object({
+  intent_id: z.string().min(1),
+  loop_id: z.string().min(1),
+  kind: z.literal(COMMIT_INTENT_KIND),
+  base_version: z.number().int().nonnegative(),
+  events: z.array(LoopEventSchema).min(1),
+  thread_snapshot: LoopThreadSchema,
+  created_at: z.string().min(1),
+});
 
 /** Injectable crash point for fault-injection tests (simulates process death mid-apply). */
 export type IntentFaultPoint = 'after_intent' | 'after_journal' | 'after_thread' | 'before_marker';
@@ -338,8 +356,9 @@ export function applyIntent(intent: LoopCommitIntent, cwd?: string, faultAt?: In
     fsyncDirChain(commitsDir(intent.loop_id, cwd), cwd);
   }
   // Bounded audit-marker GC so the commits dir does not grow without bound
-  // (review LOW): keep markers for a short window for forensics, drop older.
-  gcCommitMarkers(intent.loop_id, 60 * 60 * 1000, cwd);
+  // (review LOW): drop markers older than 1h AND cap to the newest 20 so a busy
+  // hour cannot make each getLoop directory scan O(marker count).
+  gcCommitMarkers(intent.loop_id, 60 * 60 * 1000, cwd, 20);
 }
 
 export function commitViaIntent(
@@ -361,30 +380,57 @@ function listPendingIntentFiles(loopId: string, cwd?: string): string[] {
   return fs.readdirSync(dir).filter((f) => f.endsWith('.intent.json')).sort();
 }
 
+/** Quarantine a bad pending intent to `.corrupt`. FAILS CLOSED on genuine I/O
+ * (PR #102 review round 2): only a benign ENOENT race is tolerated; an
+ * EIO/ENOSPC during the quarantine rename/fsync propagates and aborts recovery
+ * rather than being miscounted as handled. */
+function quarantineCorruptIntent(loopId: string, file: string, why: string, cwd?: string): void {
+  const intentId = file.replace(/\.intent\.json$/, '');
+  const full = path.join(commitsDir(loopId, cwd), file);
+  try {
+    fs.renameSync(full, corruptPath(loopId, intentId, cwd));
+    fsyncDirChain(commitsDir(loopId, cwd), cwd);
+  } catch (mvErr) {
+    if ((mvErr as NodeJS.ErrnoException).code !== 'ENOENT') throw mvErr; // genuine I/O → fail closed
+  }
+  logger.warn(`recoverPendingIntents: quarantined intent ${file} for loop ${loopId}: ${why}`);
+}
+
+/** Read + STRICTLY validate a persisted intent and bind it to its directory
+ * loop (PR #102 review round 2, HIGH): a JSON-valid intent for a different loop
+ * must never be applied. Throws on schema failure or any cross-loop id mismatch. */
+function loadValidatedIntent(loopId: string, file: string, cwd?: string): LoopCommitIntent {
+  const full = path.join(commitsDir(loopId, cwd), file);
+  const intent = LoopCommitIntentSchema.parse(JSON.parse(fs.readFileSync(full, 'utf8')));
+  if (intent.loop_id !== loopId) throw new Error(`intent.loop_id ${intent.loop_id} != dir loop ${loopId}`);
+  if (intent.thread_snapshot.id !== loopId) throw new Error(`intent.thread_snapshot.id ${intent.thread_snapshot.id} != dir loop ${loopId}`);
+  for (const e of intent.events) {
+    if (e.loop_id !== loopId) throw new Error(`intent event ${e.event_id} loop_id ${e.loop_id} != dir loop ${loopId}`);
+  }
+  return intent;
+}
+
 /**
  * Recover any pending intents for a loop. MUST run at loop-lock entry, before
- * load/version-check/seq-allocation. FAILS CLOSED (review HIGH): a genuine apply
- * error (torn/unreadable journal, I/O) propagates so the mutation does not
- * proceed against corrupt state. A quarantined conflict is counted, not thrown.
- * A malformed intent file is quarantined to `.corrupt` (visible), not silently
- * skipped. Returns { applied, conflicted, corrupt }.
+ * load/version-check/seq-allocation. First repairs a torn trailing journal
+ * record UNCONDITIONALLY (an ordinary appendEvent crash can leave one with NO
+ * pending intent — PR #102 review round 2, HIGH). FAILS CLOSED: a genuine apply
+ * or quarantine I/O error propagates so the mutation never proceeds against
+ * corrupt state; a quarantined conflict is counted, not thrown; a malformed or
+ * cross-loop intent is quarantined to `.corrupt` (visible). Returns counts.
  */
 export function recoverPendingIntents(loopId: string, cwd?: string): { applied: number; conflicted: number; corrupt: number } {
+  if (readJournalTolerant(loopId, cwd).tornTail) repairTornJournalTail(loopId, cwd);
+
   let applied = 0;
   let conflicted = 0;
   let corrupt = 0;
   for (const file of listPendingIntentFiles(loopId, cwd)) {
-    const full = path.join(commitsDir(loopId, cwd), file);
-    let intent: LoopCommitIntent | undefined;
+    let intent: LoopCommitIntent;
     try {
-      intent = JSON.parse(fs.readFileSync(full, 'utf8')) as LoopCommitIntent;
+      intent = loadValidatedIntent(loopId, file, cwd);
     } catch (err) {
-      const intentId = file.replace(/\.intent\.json$/, '');
-      try {
-        fs.renameSync(full, corruptPath(loopId, intentId, cwd));
-        fsyncDirChain(commitsDir(loopId, cwd), cwd);
-      } catch { /* racing — leave for next pass */ }
-      logger.warn(`recoverPendingIntents: quarantined malformed intent ${file} for loop ${loopId}: ${err instanceof Error ? err.message : String(err)}`);
+      quarantineCorruptIntent(loopId, file, err instanceof Error ? err.message : String(err), cwd);
       corrupt += 1;
       continue;
     }
@@ -408,11 +454,14 @@ export function reconstructConsistentThread(loopId: string, onDisk: LoopThread |
   let best = onDisk;
   for (const file of listPendingIntentFiles(loopId, cwd)) {
     try {
-      const intent = JSON.parse(fs.readFileSync(path.join(commitsDir(loopId, cwd), file), 'utf8')) as LoopCommitIntent;
-      const snap = LoopThreadSchema.parse(intent.thread_snapshot);
+      // Strict validation + loop-binding: a malformed or cross-loop intent must
+      // never be returned as this loop's consistent view (recovery quarantines
+      // it at the next lock entry). Best-effort here — never throws on a read.
+      const intent = loadValidatedIntent(loopId, file, cwd);
+      const snap = intent.thread_snapshot;
       if (!best || snap.version > best.version) best = snap;
     } catch {
-      /* skip malformed — recovery quarantines it at the next lock entry */
+      /* skip malformed/cross-loop — recovery quarantines it at the next lock entry */
     }
   }
   return best;
@@ -422,22 +471,33 @@ export function hasPendingIntent(loopId: string, cwd?: string): boolean {
   return listPendingIntentFiles(loopId, cwd).length > 0;
 }
 
-/** Bounded GC of `.applied` / `.conflict` / `.corrupt` markers older than maxAgeMs. */
-export function gcCommitMarkers(loopId: string, maxAgeMs: number, cwd?: string): number {
+/** Bounded GC of `.applied` / `.conflict` / `.corrupt` markers: removes those
+ * older than maxAgeMs, then — when `maxCount` is given — keeps only the newest
+ * `maxCount` survivors (a cardinality bound so a busy hour cannot make each
+ * getLoop's directory scan O(marker count); PR #102 review round 2, LOW). */
+export function gcCommitMarkers(loopId: string, maxAgeMs: number, cwd?: string, maxCount?: number): number {
   const dir = commitsDir(loopId, cwd);
   if (!fs.existsSync(dir)) return 0;
-  let removed = 0;
   const cutoff = Date.now() - maxAgeMs;
+  const markers: Array<{ fp: string; mtime: number }> = [];
   for (const file of fs.readdirSync(dir)) {
     if (!/\.(applied|conflict|corrupt)\.json$/.test(file)) continue;
     const fp = path.join(dir, file);
-    try {
-      if (fs.statSync(fp).mtimeMs < cutoff) {
-        fs.unlinkSync(fp);
-        removed += 1;
-      }
-    } catch {
-      /* racing unlink — skip */
+    try { markers.push({ fp, mtime: fs.statSync(fp).mtimeMs }); } catch { /* racing — skip */ }
+  }
+  let removed = 0;
+  const survivors: Array<{ fp: string; mtime: number }> = [];
+  for (const m of markers) {
+    if (m.mtime < cutoff) {
+      try { fs.unlinkSync(m.fp); removed += 1; } catch { /* racing */ }
+    } else {
+      survivors.push(m);
+    }
+  }
+  if (typeof maxCount === 'number' && survivors.length > maxCount) {
+    survivors.sort((a, b) => b.mtime - a.mtime); // newest first
+    for (const m of survivors.slice(maxCount)) {
+      try { fs.unlinkSync(m.fp); removed += 1; } catch { /* racing */ }
     }
   }
   return removed;

@@ -150,7 +150,11 @@ export function appendEvent(
   // never be durable ahead of the event that explains it (trp_8b17c2d0).
   const fd = fs.openSync(eventsPath(loopId, cwd), 'a');
   try {
-    fs.writeSync(fd, `${JSON.stringify(parsed)}\n`);
+    // Loop the write to completion so a short/partial write never leaves a torn
+    // final record for the next append to fuse with (PR #102 review round 2).
+    const buf = Buffer.from(`${JSON.stringify(parsed)}\n`, 'utf8');
+    let off = 0;
+    while (off < buf.length) off += fs.writeSync(fd, buf, off, buf.length - off);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);

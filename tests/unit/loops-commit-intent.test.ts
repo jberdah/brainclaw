@@ -282,3 +282,58 @@ describe('commit-intent — crash-safety hardening (review round 1 fixes)', () =
     assert.equal(hasPendingIntent(loop.id, cwd), false, 'intent quarantined to .conflict');
   });
 });
+
+// Hardening from the PR #102 symmetric review ROUND 2 (unconditional tail
+// repair, strict cross-loop intent validation).
+describe('commit-intent — crash-safety hardening (review round 2 fixes)', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = makeWorkspace(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  it('recoverPendingIntents repairs a torn tail even with NO pending intent, so a later normal append survives', () => {
+    const loop = seedLoop(cwd);
+    const jp = path.join(cwd, '.brainclaw', 'loops', 'events', `${loop.id}.jsonl`);
+    // Ordinary appendEvent crash: a torn fragment with NO pending intent.
+    fs.appendFileSync(jp, '{"event_id":"torn","seq":2,"partial');
+
+    // Lock-entry recovery must repair the tail unconditionally.
+    const res = recoverPendingIntents(loop.id, cwd);
+    assert.equal(res.applied, 0);
+    assert.equal(res.corrupt, 0);
+    assert.deepEqual(listLoopEvents(loop.id, cwd).map((e) => e.seq), [1], 'torn tail repaired without any pending intent');
+
+    // A subsequent normal append lands cleanly (not fused with the torn fragment,
+    // so the legitimate event is never hidden/lost).
+    appendEvent(loop.id, {
+      event_id: crypto.randomUUID(), loop_id: loop.id, seq: 2, at: '2026-07-23T21:00:00.000Z',
+      by: 'x', mutation_id: crypto.randomUUID().replace(/-/g, ''), kind: 'paused', reason: 'x',
+    } as LoopEvent, cwd);
+    assert.deepEqual(listLoopEvents(loop.id, cwd).map((e) => e.seq), [1, 2], 'legitimate post-repair event survives');
+  });
+
+  it('a valid intent for a DIFFERENT loop placed in this loop dir is quarantined, never applied', () => {
+    const loopA = seedLoop(cwd);
+    const loopB = openLoop(
+      { kind: 'review', title: 'B', slots: [{ role: 'reviewer', agent: 'codex' }], created_by: 'agt_test' },
+      cwd,
+    );
+    // A structurally-VALID intent for loop B, misplaced into loop A's commits dir.
+    const intentB = {
+      ...completeTurnIntentInput(loopB),
+      intent_id: 'xloop',
+      kind: 'complete_turn' as const,
+      created_at: '2026-07-23T21:00:00.000Z',
+    };
+    const dirA = path.join(cwd, '.brainclaw', 'loops', 'commits', loopA.id);
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.writeFileSync(path.join(dirA, 'xloop.intent.json'), JSON.stringify(intentB));
+
+    const res = recoverPendingIntents(loopA.id, cwd);
+    assert.equal(res.corrupt, 1, 'cross-loop intent quarantined');
+    assert.equal(res.applied, 0);
+    assert.equal(getLoop(loopB.id, cwd)?.version, 1, 'loop B was NOT advanced by the misplaced intent');
+    assert.ok(fs.existsSync(path.join(dirA, 'xloop.corrupt.json')), 'quarantined to .corrupt');
+    // A read of loop A must not surface B's snapshot either.
+    assert.equal(getLoop(loopA.id, cwd)?.id, loopA.id);
+  });
+});
