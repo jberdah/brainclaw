@@ -181,9 +181,11 @@ describe('launch-grant fence — expiry sweep (reserved_never_launched)', () => 
     assert.equal(launchGrant('tat_fresh', cwd)?.status, 'armed', 'fresh grant untouched');
     assert.equal(launchGrant('tat_cross', cwd)?.status, 'crossed', 'crossed grant untouched');
 
-    // A late supervisor for the swept attempt cannot spawn.
+    // A late supervisor for the swept attempt cannot spawn. The grant is both
+    // expired AND revoked; consume checks expiry before claiming the decision,
+    // so either refusal code proves it will not cross.
     assert.throws(() => consumeLaunchGrant('tat_exp', 'e', 1, cwd),
-      (e: unknown) => e instanceof LaunchFenceError && e.code === 'revoked');
+      (e: unknown) => e instanceof LaunchFenceError && (e.code === 'revoked' || e.code === 'lease_expired'));
   });
 });
 
@@ -209,5 +211,47 @@ describe('launch-grant fence — review fixes (lease validation + epoch-before-t
     assert.throws(() => consumeLaunchGrant(t, 'tokN', 1, cwd),
       (e: unknown) => e instanceof LaunchFenceError && e.code === 'epoch_mismatch');
     assert.equal(launchGrant(t, cwd)?.status, 'armed', 'the epoch-2 grant is untouched by the stale consume');
+  });
+});
+
+// PR #103 round 2 (BLOCKING): the XOR must survive a reaped holder. The decision
+// is now an ATOMIC exclusive-create, so we can force the exact race
+// deterministically by pre-committing the competitor's decision file (simulating
+// a newer holder that won after this one was reaped) and asserting the stale
+// caller LOSES — closing the TOCTOU the pre-write fence could not.
+describe('launch-grant fence — atomic XOR survives a reap (deterministic race)', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = makeWorkspace(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  function decisionPath(turnId: string, epoch: number): string {
+    return path.join(cwd, '.brainclaw', 'loops', 'reservations', `${turnId}.launch-${epoch}.decision.json`);
+  }
+
+  it('a stale consume LOSES to an already-committed revoke decision → MUST NOT spawn', () => {
+    const t = committed(cwd);
+    armLaunch(t, { token: 'tok1', epoch: 1, lease_deadline: future() }, cwd);
+    // A newer holder (after reaping this one) already committed `revoked`.
+    fs.writeFileSync(decisionPath(t, 1), JSON.stringify({ decision: 'revoked', token: 'tok1', epoch: 1, at: new Date().toISOString(), reason: 'reaped-then-revoked' }));
+    assert.throws(() => consumeLaunchGrant(t, 'tok1', 1, cwd),
+      (e: unknown) => e instanceof LaunchFenceError && e.code === 'revoked');
+    assert.equal(launchGrant(t, cwd)?.status, 'revoked', 'the committed revoke stands; no crossing');
+  });
+
+  it('a stale revoke LOSES to an already-committed crossed decision → attempt stays launch_attempted', () => {
+    const t = committed(cwd);
+    armLaunch(t, { token: 'tok1', epoch: 1, lease_deadline: future() }, cwd);
+    fs.writeFileSync(decisionPath(t, 1), JSON.stringify({ decision: 'crossed', token: 'tok1', epoch: 1, at: new Date().toISOString() }));
+    assert.throws(() => revokeLaunchGrant(t, 1, 'too late', cwd),
+      (e: unknown) => e instanceof LaunchFenceError && e.code === 'crossed_not_revocable');
+    assert.equal(launchGrant(t, cwd)?.status, 'crossed', 'the committed cross stands; never re-spawnable');
+  });
+
+  it('launchGrant reconciles from the authoritative decision file when the record projection is stale', () => {
+    const t = committed(cwd);
+    armLaunch(t, { token: 'tok1', epoch: 1, lease_deadline: future() }, cwd);
+    // Winner committed the decision but "crashed" before updating the projection.
+    fs.writeFileSync(decisionPath(t, 1), JSON.stringify({ decision: 'crossed', token: 'tok1', epoch: 1, at: new Date().toISOString() }));
+    assert.equal(launchGrant(t, cwd)?.status, 'crossed', 'decision file wins over the stale armed projection');
   });
 });
