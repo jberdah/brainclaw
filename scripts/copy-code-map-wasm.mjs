@@ -74,6 +74,7 @@ const grammars = [
   ['tree-sitter-wasms/out/tree-sitter-python.wasm', 'tree-sitter-python.wasm'],
   ['tree-sitter-wasms/out/tree-sitter-php.wasm', 'tree-sitter-php.wasm'],
   ['tree-sitter-wasms/out/tree-sitter-java.wasm', 'tree-sitter-java.wasm'],
+  ['tree-sitter-wasms/out/tree-sitter-go.wasm', 'tree-sitter-go.wasm'],
 ];
 
 let grammarOk = true;
@@ -94,6 +95,7 @@ try {
     ['src/core/code-map/lang/python', 'dist/core/code-map/lang/python', ['tags.scm', 'imports.scm']],
     ['src/core/code-map/lang/php', 'dist/core/code-map/lang/php', ['tags.scm', 'imports.scm']],
     ['src/core/code-map/lang/java', 'dist/core/code-map/lang/java', ['tags.scm', 'imports.scm']],
+    ['src/core/code-map/lang/go', 'dist/core/code-map/lang/go', ['tags.scm', 'imports.scm']],
   ];
   for (const [scmSrcDir, scmDestDir, names] of scmSets) {
     fs.mkdirSync(scmDestDir, { recursive: true });

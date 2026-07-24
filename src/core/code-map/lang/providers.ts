@@ -16,6 +16,7 @@ import { typeScriptProvider } from './typescript/index.js';
 import { pythonProvider } from './python/index.js';
 import { phpProvider } from './php/index.js';
 import { javaProvider } from './java/index.js';
+import { goProvider } from './go/index.js';
 
 /**
  * The default registry, pre-loaded with the bundled providers. Add a new
@@ -26,4 +27,5 @@ export const defaultRegistry: DefaultCodeLanguageRegistry = createRegistry(
   pythonProvider,
   phpProvider,
   javaProvider,
+  goProvider,
 );
