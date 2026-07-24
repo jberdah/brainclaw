@@ -128,6 +128,15 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   saved.BRAINCLAW_PROJECT = process.env.BRAINCLAW_PROJECT;
   saved.BRAINCLAW_CLAIM_ID = process.env.BRAINCLAW_CLAIM_ID;
   saved.BRAINCLAW_SESSION_ID = process.env.BRAINCLAW_SESSION_ID;
+  // Cloud/federation opt-in env vars: resolveCloudConfig() treats a present
+  // BRAINCLAW_CLOUD_API_KEY as explicit enablement (federation-cloud.ts), so on
+  // a cloud-configured dev machine every in-process test would see federation
+  // ENABLED regardless of workspace config — flipping "disabled"-path assertions
+  // and silently enqueuing outbox records into the test store. Subprocess e2e
+  // is already safe via sanitizedProcessEnv()'s blanket BRAINCLAW_* strip; this
+  // is the in-process equivalent (root-caused 2026-07-24 on the pln#627 branch).
+  const cloudEnvKeys = ['BRAINCLAW_CLOUD_URL', 'BRAINCLAW_CLOUD_API_KEY', 'BRAINCLAW_PROJECT_ID', 'BRAINCLAW_CLOUD_REQUIRE_SIGNED'];
+  for (const key of cloudEnvKeys) saved[key] = process.env[key];
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;
   delete process.env.HOMEDRIVE;
@@ -137,6 +146,7 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   delete process.env.BRAINCLAW_PROJECT;
   delete process.env.BRAINCLAW_CLAIM_ID;
   delete process.env.BRAINCLAW_SESSION_ID;
+  for (const key of cloudEnvKeys) delete process.env[key];
   return {
     fakeHome,
     restore: () => cleanupTestEnv({ fakeHome, envBackup: saved }),
