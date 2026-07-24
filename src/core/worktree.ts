@@ -1515,6 +1515,16 @@ export function isBranchMergedByContent(
 }
 
 /**
+ * True when a LOCAL git branch of this exact name exists (pln#529). Lets the
+ * gated-sequence base selector distinguish "predecessor branch gone (merged +
+ * cleaned → code is on HEAD)" from "branch present but not yet integrated →
+ * fork the dependent lane from it". Returns false on any git failure.
+ */
+export function localBranchExists(mainWorktreePath: string, branchName: string): boolean {
+  return runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branchName}`], mainWorktreePath).ok;
+}
+
+/**
  * Removes worktrees whose branch has been fully merged into the current branch
  * (typically master/main after a merge). Also removes brainclaw-managed
  * worktree directories that no longer have a corresponding git worktree entry

@@ -37,6 +37,7 @@ import { buildClaimEnvPrefix } from './execution-profile.js';
 import { getActiveSequence } from './sequence.js';
 import { loadState, persistState } from './state.js';
 import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
+import { sanitizeBranchComponent, isBranchMergedByContent, localBranchExists } from './worktree.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment } from './messaging.js';
 import { memoryDir } from './io.js';
@@ -75,6 +76,14 @@ export interface ReadyLane {
    * an integration branch) is a separate, human-arbitrated design choice.
    */
   code_propagation_note?: string;
+  /**
+   * pln#529 (dec#122 B+A) — the fork base resolved for this gated lane by
+   * `resolveGatedLaneBase`: `baseRef: 'HEAD'` when every predecessor's code is
+   * content-verified on HEAD, or `baseRef: <predecessor branch>` when exactly one
+   * predecessor is committed-but-unintegrated (so the dependent worker carries the
+   * socle code). Consumed by `dispatch()` — replaces the old blind `HEAD`.
+   */
+  worktreeBase?: WorktreeBaseSelection;
 }
 
 export interface BlockedLane {
@@ -189,6 +198,12 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
     if (p.short_label) planIndex.set(p.short_label, p);
   }
 
+  // pln#529 — index sequence items by planId so a gated lane can resolve each
+  // predecessor lane's scope (→ deterministic `feat/<scope>` branch) for the
+  // content-aware fork-base decision.
+  const itemByPlanId = new Map<string, SequenceItem>();
+  for (const it of sequence.items) itemByPlanId.set(it.planId, it);
+
   // Collect plan IDs that are done or dropped (terminal states)
   const terminalPlanIds = new Set<string>();
   for (const p of state.plan_items) {
@@ -268,17 +283,38 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
       continue;
     }
 
+    // pln#529 (dec#122 B+A) — for a gated lane, readiness ≠ code-availability:
+    // resolve the fork base by CONTENT. A ≥2-unintegrated diamond keeps the gate
+    // CLOSED (A); otherwise the lane is ready with its resolved base (HEAD, or a
+    // predecessor branch when the socle isn't on HEAD yet — B).
+    if (item.hard_after.length > 0) {
+      const base = resolveGatedLaneBase(item.hard_after, itemByPlanId, cwd);
+      if (base.gateBlocked) {
+        blocked.push({
+          item,
+          plan,
+          lane: item.lane,
+          reason: base.gateBlocked.reason,
+          blocked_by: base.gateBlocked.unintegrated,
+        });
+        continue;
+      }
+      ready.push({
+        item,
+        plan,
+        lane: item.lane,
+        reason: `All hard dependencies met${softNote}`,
+        worktreeBase: base,
+        code_propagation_note: base.reason,
+      });
+      continue;
+    }
+
     ready.push({
       item,
       plan,
       lane: item.lane,
       reason: `All hard dependencies met${softNote}`,
-      // pln#529 — readiness ≠ code-availability for gated lanes.
-      ...(item.hard_after.length > 0 ? {
-        code_propagation_note:
-          `Unblocked by hard_after [${item.hard_after.join(', ')}]. Ensure that work is committed AND on the dispatch base (HEAD), ` +
-          `or dispatch this lane with ref=<predecessor branch> — otherwise the worker spawns from HEAD without it.`,
-      } : {}),
     });
   }
 
@@ -877,24 +913,85 @@ export interface WorktreeBaseSelection {
   baseRef?: string;
   resetExistingBranch?: boolean;
   reason?: string;
+  /**
+   * pln#529 (dec#122 A) — set when the hard_after gate must stay CLOSED because
+   * the socle code is not safely forkable: ≥2 predecessors are committed on
+   * separate branches but not integrated on HEAD (a single worktree cannot fork
+   * from multiple un-integrated bases without silently dropping some predecessor's
+   * code). `analyzeSequence` routes such a lane to `blocked` with this reason.
+   */
+  gateBlocked?: { reason: string; unintegrated: string[] };
 }
 
+/**
+ * pln#529 (dec#122 B+A) — resolve the fork base for a gated lane whose hard_after
+ * predecessors are all plan-terminal. "Readiness ≠ code-availability": a done
+ * predecessor's code may be committed on its own branch but NOT integrated on
+ * HEAD (the standard squash-merge breaks ancestry — trp#926 — so integration is
+ * detected by CONTENT via `isBranchMergedByContent`, patch-id + file-content, not
+ * ancestry). Per predecessor:
+ *   - branch gone            → assume merged + cleaned (code is on HEAD);
+ *   - branch present, merged → on HEAD;
+ *   - branch present, NOT    → committed-but-unintegrated (must fork from it).
+ * Then: 0 unintegrated → `HEAD`; exactly 1 → fork from that branch (B); ≥2 →
+ * gateBlocked (A) — the honest v1 limit; integrate them first.
+ */
+export function resolveGatedLaneBase(
+  hardAfter: string[],
+  itemByPlanId: Map<string, SequenceItem>,
+  cwd: string,
+): WorktreeBaseSelection {
+  if (hardAfter.length === 0) return {};
+  const unintegrated: Array<{ planId: string; branch: string }> = [];
+  for (const predId of hardAfter) {
+    const predItem = itemByPlanId.get(predId);
+    const predScope = predItem?.scope_hint ?? predId;
+    const branch = `feat/${sanitizeBranchComponent(predScope)}`;
+    if (!localBranchExists(cwd, branch)) continue;            // gone → merged+cleaned (on HEAD)
+    if (isBranchMergedByContent(cwd, branch, 'HEAD')) continue; // present + content-integrated
+    unintegrated.push({ planId: predId, branch });
+  }
+  if (unintegrated.length === 0) {
+    return {
+      baseRef: 'HEAD',
+      resetExistingBranch: true,
+      reason: `hard_after predecessors content-verified on HEAD: ${hardAfter.join(', ')}`,
+    };
+  }
+  if (unintegrated.length === 1) {
+    const u = unintegrated[0];
+    return {
+      baseRef: u.branch,
+      resetExistingBranch: true,
+      reason: `pln#529(B): predecessor ${u.planId} is committed on ${u.branch} but not yet integrated on HEAD — the dependent lane forks from that branch so it carries the socle code (not a HEAD that lacks it).`,
+    };
+  }
+  return {
+    gateBlocked: {
+      reason: `pln#529(A): ${unintegrated.length} hard_after predecessors are committed on separate branches but not integrated on HEAD (${unintegrated.map((u) => `${u.planId}→${u.branch}`).join(', ')}). Integrate them onto HEAD (merge/squash) before dispatching this lane — a single worktree cannot fork from multiple un-integrated bases without silently dropping some predecessor's code.`,
+      unintegrated: unintegrated.map((u) => u.planId),
+    },
+  };
+}
+
+/**
+ * @deprecated pln#529 — superseded by `resolveGatedLaneBase` (content-aware).
+ * Retained for callers that only have `(item, analysis)`; forwards to the new
+ * resolver using the analysis's done set as the predecessor index. Prefer the
+ * pre-computed `ReadyLane.worktreeBase`.
+ */
 export function selectWorktreeBaseForReadyLane(
   item: SequenceItem,
   analysis: DispatchAnalysis,
+  cwd: string = process.cwd(),
 ): WorktreeBaseSelection {
   const hardAfter = item.hard_after ?? [];
   if (hardAfter.length === 0) return {};
-
   const donePlanIds = new Set(analysis.done.map((entry) => entry.planId));
-  const allHardDepsDone = hardAfter.every((planId) => donePlanIds.has(planId));
-  if (!allHardDepsDone) return {};
-
-  return {
-    baseRef: 'HEAD',
-    resetExistingBranch: true,
-    reason: `hard_after dependencies already integrated: ${hardAfter.join(', ')}`,
-  };
+  if (!hardAfter.every((planId) => donePlanIds.has(planId))) return {};
+  const itemByPlanId = new Map<string, SequenceItem>();
+  for (const entry of analysis.done) itemByPlanId.set(entry.planId, entry);
+  return resolveGatedLaneBase(hardAfter, itemByPlanId, cwd);
 }
 
 /**
@@ -989,7 +1086,10 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
     let claimId = '(dry-run)';
     let worktreePath: string | undefined;
     if (!options.dryRun) {
-      const worktreeBase = selectWorktreeBaseForReadyLane(readyItem.item, analysis);
+      // pln#529 — use the content-aware base resolved during analyzeSequence
+      // (HEAD when the socle is integrated, else the predecessor branch). Fall
+      // back to a fresh resolution for direct callers that bypassed analyze.
+      const worktreeBase = readyItem.worktreeBase ?? selectWorktreeBaseForReadyLane(readyItem.item, analysis, cwd);
       const claimResult = createCoordinatorClaim({
         agent: targetAgent,
         scope: claimScope,
