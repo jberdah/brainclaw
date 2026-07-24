@@ -109,7 +109,12 @@ export function findLatestAgentRunForAssignment(assignmentId: string, cwd?: stri
 }
 
 const VALID_TRANSITIONS = new Map<AgentRunStatus, Set<AgentRunStatus>>([
-  ['created', new Set(['launching', 'waiting_input', 'running', 'cancelled', 'interrupted'])],
+  // `failed` added (pln#630 PR2c-lease): a turn-owned run preallocated `created`
+  // whose launch grant CROSSED but crashed before the created→launching
+  // transition is `launch_attempted_unknown` — a failure, reconciled straight
+  // from `created`. (reserved_never_launched, where the grant never crossed,
+  // goes to `cancelled`, already permitted.)
+  ['created', new Set(['launching', 'waiting_input', 'running', 'failed', 'cancelled', 'interrupted'])],
   ['launching', new Set(['waiting_input', 'running', 'failed', 'cancelled', 'timed_out', 'interrupted'])],
   ['waiting_input', new Set(['launching', 'running', 'blocked', 'cancelled', 'timed_out', 'interrupted'])],
   ['running', new Set(['blocked', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted'])],

@@ -40,7 +40,8 @@ import { loadAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
 import { readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
-import { findReservationByRunId, evidenceMatchesAttempt } from './loops/attempt-reservation.js';
+import { findReservationByRunId, evidenceMatchesAttempt, launchGrant } from './loops/attempt-reservation.js';
+import type { TurnReservation } from './loops/attempt-reservation.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ export type ReconcileAction =
   | 'health_check_unverified'
   | 'inferred_completed'
   | 'inferred_failed'
+  | 'inferred_cancelled'
   | 'cancelled_dead_pid';
 
 export interface ReconcileEvidence {
@@ -345,7 +347,7 @@ function fsActiveWithin(evidence: ReconcileEvidence, windowMs: number): boolean 
  * Inference only fires after the stale window with no life evidence, so this is
  * conservative. (Loop auto-close on failure is a follow-up.)
  */
-function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string): void {
+function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string, terminalStatus: 'failed' | 'cancelled' = 'failed'): void {
   if (!run.claim_id) return;
   try {
     const claim = loadClaim(run.claim_id, cwd);
@@ -354,8 +356,8 @@ function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string): vo
       createRuntimeEvent({
         agent: actor,
         session_id: run.session_id,
-        event_type: 'run_failed',
-        text: `Auto-released claim ${run.claim_id} after run ${run.id} was reconciled to failed (trp#433 GC cascade)`,
+        event_type: terminalStatus === 'cancelled' ? 'run_cancelled' : 'run_failed',
+        text: `Auto-released claim ${run.claim_id} after run ${run.id} was reconciled to ${terminalStatus} (trp#433 GC cascade)`,
         tags: ['reconciler', 'gc', 'claim-release'],
         assignment_id: run.assignment_id,
         run_id: run.id,
@@ -503,6 +505,19 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     };
   }
 
+  // pln#630 PR2c-lease (§4 + R5): a turn-owned run preallocated `created`/
+  // `launching` converges on its DISPATCH/LAUNCH LEASE, not the pid/heartbeat
+  // heuristics below (which assume a worker already spawned and can emit
+  // life-signs). Delegate before the generic evidence path so these runs never
+  // orphan `created`/`launching` forever. Inert for non-turn-owned runs
+  // (evidence.turn_owned=false → fall through to the unchanged generic path).
+  if ((run.status === 'created' || run.status === 'launching') && evidence.turn_owned) {
+    const reservation = findReservationByRunId(run.id, cwd);
+    if (reservation) {
+      return reconcileTurnOwnedPreRunLease(run, reservation, evidence, cwd, options);
+    }
+  }
+
   const grace = options.healthCheckGraceMs ?? DEFAULT_HEALTH_CHECK_GRACE_MS;
   const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
   const actor = options.actor ?? 'reconciler';
@@ -595,6 +610,81 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     reason: `delivered_but_unverified (age=${Math.round(evidence.age_ms / 1000)}s, process_alive=${evidence.process_alive})`,
     evidence, previous_status, current_status: run.status,
   };
+}
+
+/**
+ * pln#630 PR2c-lease (§4 + R5) — converge a TURN-OWNED run still in `created`/
+ * `launching` against its dispatch/launch LEASE, not the pid/heartbeat heuristics
+ * (which presuppose a spawned, life-sign-emitting worker). Reached only from
+ * `reconcileAgentRun`'s turn-owned delegate branch, so it always has the owning
+ * reservation + pre-collected evidence.
+ *
+ * Outcomes (never `completed` — no phantom success from an unspawned/unproven run):
+ *   - turn-keyed completion present → NO-OP (finalization is reconcileTurn's job, PR3);
+ *   - within lease → NO-OP (the worker may yet cross the launch fence / start);
+ *   - past lease + launch grant CROSSED → `failed` / `launch_attempted_unknown`
+ *     (the worker WAS invoked; its outcome is unknowable, so it must not complete);
+ *   - past lease + grant not crossed → `cancelled` / `reserved_never_launched`
+ *     (no launch receipt — nothing ran; matches attemptStatus(revoked)='cancelled').
+ */
+function reconcileTurnOwnedPreRunLease(
+  run: AgentRun,
+  reservation: TurnReservation,
+  evidence: ReconcileEvidence,
+  cwd: string | undefined,
+  options: ReconcileOptions,
+): ReconcileResult {
+  const now = options.nowMs ?? Date.now();
+  const actor = options.actor ?? 'reconciler';
+  const previous_status = run.status;
+
+  // A genuine turn-keyed completion is NOT an expiry: never fail/cancel a run
+  // that produced accepted evidence. Its finalization (assignment/claim/artifacts)
+  // is reconcileTurn's responsibility (PR3); here we simply decline to expire it.
+  if (evidence.turn_keyed_completed) {
+    return {
+      run_id: run.id, action: 'no_op',
+      reason: 'turn-keyed completion present — defer finalization to reconcileTurn',
+      evidence, previous_status, current_status: run.status,
+    };
+  }
+
+  // Effective deadline: once armed, the launch lease is the tighter authoritative
+  // bound; before arm, the dispatch lease bounds how long a committed reservation
+  // may wait to spawn. A non-parseable lease cannot expire a run (fail-safe: leave
+  // it for explicit reconcile rather than converge on garbage).
+  const leaseISO = reservation.launch?.lease_deadline ?? reservation.lease_deadline;
+  const leaseMs = Date.parse(leaseISO);
+  if (!Number.isFinite(leaseMs) || now < leaseMs) {
+    return {
+      run_id: run.id, action: 'no_op',
+      reason: Number.isFinite(leaseMs)
+        ? `within lease (deadline ${leaseISO})`
+        : `lease deadline unparseable (${leaseISO}) — cannot expire`,
+      evidence, previous_status, current_status: run.status,
+    };
+  }
+
+  // Past lease, no accepted completion — the launch-grant status (authoritative,
+  // decision-file reconciled) decides the terminal.
+  const grant = launchGrant(reservation.turn_id, cwd);
+  const crossed = grant?.status === 'crossed';
+  const targetStatus: AgentRunStatus = crossed ? 'failed' : 'cancelled';
+  const action: ReconcileAction = crossed ? 'inferred_failed' : 'inferred_cancelled';
+  const reason = crossed
+    ? `launch_attempted_unknown: launch grant crossed but run never reached running by lease ${leaseISO} — outcome unknown, never completed`
+    : `reserved_never_launched: no launch receipt by lease ${leaseISO} (grant=${grant?.status ?? 'none'})`;
+  try {
+    transitionAgentRun(run.id, targetStatus, { actor, status_reason: reason }, cwd);
+    cascadeReleaseOnFailure(run, actor, cwd, targetStatus);
+    return { run_id: run.id, action, reason, evidence, previous_status, current_status: targetStatus };
+  } catch (err) {
+    return {
+      run_id: run.id, action: 'no_op',
+      reason: `lease-expiry transition rejected: ${err instanceof Error ? err.message : String(err)}`,
+      evidence, previous_status, current_status: run.status,
+    };
+  }
 }
 
 /**
@@ -766,6 +856,29 @@ export function sweepDeadPidRunningAgentRunsAtRead(cwd?: string, options: Reconc
     })
     .slice(0, limit);
   return candidates.map((run) => reconcileDeadPidRunningAgentRunAtRead(run.id, cwd, options));
+}
+
+/**
+ * pln#630 PR2c-lease — lazy read-path sweep for TURN-OWNED runs still in
+ * `created`/`launching`, converging them on their dispatch/launch lease via
+ * `reconcileAgentRun`'s turn-owned delegate. Strictly turn-owned: a legacy
+ * (non-reservation-owned) `created`/`launching` run is SKIPPED here, so this
+ * sweep changes nothing for existing runs and is fully inert until live
+ * turn-owned dispatch (PR2c-b) mints such a run. Errors are isolated per run.
+ */
+export function sweepTurnOwnedPreRunLeaseAtRead(cwd?: string, options: ReconcileOptions = {}): ReconcileResult[] {
+  const results: ReconcileResult[] = [];
+  for (const status of ['created', 'launching'] as AgentRunStatus[]) {
+    for (const run of listAgentRuns(cwd, { status })) {
+      // Only turn-owned runs converge on the lease here — legacy runs keep their
+      // existing (non-read-path) reconciliation route untouched.
+      if (!findReservationByRunId(run.id, cwd)) continue;
+      try {
+        results.push(reconcileAgentRun(run.id, cwd, options));
+      } catch { /* best-effort — never block reads on reconciliation errors */ }
+    }
+  }
+  return results;
 }
 
 /**
