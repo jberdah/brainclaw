@@ -46,7 +46,27 @@ export interface TurnEcho {
   nonce: string;
 }
 
+// The turn-echo values are raw-embedded into a shell one-liner (see marker()),
+// so the `[A-Za-z0-9_-]` safety invariant documented on TurnEcho is LOAD-BEARING,
+// not cosmetic. A stray `"` desyncs cmd.exe quote-parity (no sentinel file is
+// written → the turn-owned run never converges under read-strict acceptance —
+// exactly the §13 D2 non-convergence this feature prevents); a `'` breaks out of
+// the POSIX `printf '…'` wrapper. All real sources (deriveTurnId/deriveChildIds
+// hex, crypto.randomUUID nonce) satisfy it, so this guard never fires in
+// production — it exists to turn a future out-of-class caller's SILENT corruption
+// into a loud, fast failure at the embed site.
+const TURN_ECHO_SAFE = /^[A-Za-z0-9_-]+$/;
+
 export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, isWin32: boolean, turnEcho?: TurnEcho): string {
+  if (turnEcho) {
+    for (const [field, value] of Object.entries(turnEcho)) {
+      if (!TURN_ECHO_SAFE.test(value)) {
+        throw new Error(
+          `buildAckWrapCommand: turnEcho.${field} must match ${TURN_ECHO_SAFE} to be shell-safe for the completion sentinel (got ${JSON.stringify(value)})`,
+        );
+      }
+    }
+  }
   const touch = isWin32
     ? (p: string) => `type nul > "${p}"`
     : (p: string) => `touch "${p}"`;

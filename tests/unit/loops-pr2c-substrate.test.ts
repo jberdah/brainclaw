@@ -56,6 +56,20 @@ describe('buildAckWrapCommand turn-keyed completion body (pln#630 PR2c-a D2)', (
     assert.doesNotMatch(legacy, /turn_id/);
   });
 
+  it('throws loudly on an out-of-class turnEcho value instead of silently corrupting the sentinel', () => {
+    // A `"` desyncs cmd.exe quote-parity (no file written → non-convergence);
+    // a `'` breaks out of the POSIX printf wrapper. Both must fail fast at the
+    // embed site rather than emit a broken one-liner.
+    for (const bad of [
+      { turn_id: 'tat_abc', run_id: 'run_def', nonce: 'a"b' },
+      { turn_id: 'tat_abc', run_id: 'run_def', nonce: "a'b" },
+      { turn_id: 'tat_abc', run_id: 'has space', nonce: 'tok-1' },
+      { turn_id: 'tat_&evil', run_id: 'run_def', nonce: 'tok-1' },
+    ]) {
+      assert.throws(() => buildAckWrapCommand('node -e ""', paths(), isWin32, bad), /shell-safe/);
+    }
+  });
+
   it('EXECUTED: a success wrapper writes a turn-keyed completed body that readCompletionSignal parses', () => {
     const cmd = buildAckWrapCommand('node -e ""', paths(), isWin32, echo);
     execSync(cmd, { cwd: root, stdio: 'ignore' });
