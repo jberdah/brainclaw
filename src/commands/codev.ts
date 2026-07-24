@@ -19,7 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { memoryExists, readProjectVision } from '../core/io.js';
-import { sendMessage, getThread, getThreadCount } from '../core/messaging.js';
+import { sendMessage, getThread, getThreadCount, type SendMessageResult } from '../core/messaging.js';
+import { writePhaseArtifact } from '../core/codev-responses.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { CODEV_PERSONAS, listPersonas } from '../core/codev-personas.js';
 import type { CodevPersona } from '../core/codev-personas.js';
@@ -55,6 +56,45 @@ function toSlug(topic: string): string {
 
 function sanitizeForPath(slug: string): string {
   return slug.replace(/[<>:"/\\|?*]/g, '_');
+}
+
+/**
+ * Head of each phase body kept inline in the thread message (pln#627 Phase C).
+ * Comfortably covers the largest thread readback (`getThread(truncateText: 3000)`
+ * used to build the next phase's brief), so rerouting the full body to the
+ * artifact store leaves CoDev's iterative context byte-identical while the
+ * inbox message stays a few KB instead of hundreds.
+ */
+export const CODEV_INBOX_HEAD_CHARS = 4000;
+
+/**
+ * Persist a phase body to the artifact store and post a bounded head + pointer
+ * to the thread instead of the full text (pln#627 Phase C). Returns the
+ * sendMessage result. The full body is always readable at the returned relPath.
+ */
+export function postPhase(opts: {
+  agent: string;
+  threadId: string;
+  label: string;
+  text: string;
+  tags: string[];
+  cwd: string;
+}): SendMessageResult {
+  const { agent, threadId, label, text, tags, cwd } = opts;
+  const artifact = writePhaseArtifact(threadId, label, text, cwd);
+  const body = text.length > CODEV_INBOX_HEAD_CHARS
+    ? `${text.slice(0, CODEV_INBOX_HEAD_CHARS)}\n\n[…full phase body (${artifact.charCount} chars) at ${artifact.relPath}]`
+    : text;
+  return sendMessage({
+    from: agent,
+    to: agent,
+    type: 'rfc',
+    text: body,
+    ref: artifact.relPath,
+    thread_id: threadId,
+    payload: { artifact_path: artifact.relPath, phase: label, char_count: artifact.charCount },
+    tags,
+  }, cwd);
 }
 
 const STOP_WORDS = new Set([
@@ -139,14 +179,14 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
 
   // ── Phase 1: Exposition ───────────────────────────────────
   const expositionText = buildExposition(topic, vision, relatedPlans, constraints, traps);
-  const opening = sendMessage({
-    from: agent,
-    to: agent,
-    type: 'rfc',
+  const opening = postPhase({
+    agent,
+    threadId,
+    label: 'exposition',
     text: expositionText,
-    thread_id: threadId,
     tags: ['codev', 'phase:exposition'],
-  }, cwd);
+    cwd,
+  });
 
   // ── Resolve spawn agents ──────────────────────────────────
   let spawnAgents: ResolvedAgent[] = [];
@@ -275,14 +315,14 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     // Each spawned agent gets the exposition + their persona brief — that's enough context.
     const threadHistory = options.spawn ? [] : getThread(threadId, cwd, { truncateText: 2000 });
     const brief = buildConsultantBrief(persona, expositionText, 'clarification', threadHistory);
-    sendMessage({
-      from: agent,
-      to: agent,
-      type: 'rfc',
+    postPhase({
+      agent,
+      threadId,
+      label: `clarification_${persona.name}`,
       text: brief,
-      thread_id: threadId,
       tags: ['codev', 'phase:clarification', `persona:${persona.name}`],
-    }, cwd);
+      cwd,
+    });
 
     if (options.spawn && spawnAgents.length > 0) {
       const targetAgent = spawnAgents[i % spawnAgents.length];
@@ -306,14 +346,14 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   const clarificationMessages = getThread(threadId, cwd, { truncateText: 3000 })
     .filter(m => m.tags?.includes('phase:clarification'));
   const contractText = buildContract(topic, clarificationMessages, decisions, constraints, traps);
-  sendMessage({
-    from: agent,
-    to: agent,
-    type: 'rfc',
+  postPhase({
+    agent,
+    threadId,
+    label: 'contract',
     text: contractText,
-    thread_id: threadId,
     tags: ['codev', 'phase:contract'],
-  }, cwd);
+    cwd,
+  });
 
   // ── Phase 4: Consultation briefs ──────────────────────────
   for (let i = 0; i < personas.length; i++) {
@@ -321,14 +361,14 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     // For spawned agents, include only the contract (not full history) to avoid message explosion
     const threadHistory = options.spawn ? [] : getThread(threadId, cwd, { truncateText: 2000 });
     const brief = buildConsultantBrief(persona, expositionText, 'consultation', threadHistory);
-    sendMessage({
-      from: agent,
-      to: agent,
-      type: 'rfc',
+    postPhase({
+      agent,
+      threadId,
+      label: `consultation_${persona.name}`,
       text: brief,
-      thread_id: threadId,
       tags: ['codev', 'phase:consultation', `persona:${persona.name}`],
-    }, cwd);
+      cwd,
+    });
 
     if (options.spawn && spawnAgents.length > 0) {
       const targetAgent = spawnAgents[i % spawnAgents.length];
@@ -352,14 +392,14 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   const consultationMessages = getThread(threadId, cwd, { truncateText: 3000 })
     .filter(m => m.tags?.includes('phase:consultation'));
   const synthesisText = buildSynthesis(topic, consultationMessages);
-  sendMessage({
-    from: agent,
-    to: agent,
-    type: 'rfc',
+  postPhase({
+    agent,
+    threadId,
+    label: 'synthesis',
     text: synthesisText,
-    thread_id: threadId,
     tags: ['codev', 'phase:synthesis'],
-  }, cwd);
+    cwd,
+  });
 
   // ── Output ────────────────────────────────────────────────
   if (options.json) {
