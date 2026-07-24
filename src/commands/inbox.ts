@@ -190,6 +190,9 @@ export function runInboxSend(to: string, text: string, options: InboxSendOptions
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`✔ Message sent: [${result.shortLabel}] ${result.type} → ${result.to}`);
+      if (result.warning) {
+        console.warn(`⚠ ${result.warning}`);
+      }
     }
   } catch (err) {
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);

@@ -534,6 +534,13 @@ export const InboxMessageSchema = z.object({
   read_at: z.string().optional(),
   /** When the message was acknowledged */
   ack_at: z.string().optional(),
+  /** True when the body was truncated at WRITE time because it exceeded the
+   *  inline size cap (pln#627 Phase B). Unlike read-time previews, the omitted
+   *  tail is NOT stored inline — the full artifact belongs in a dedicated store
+   *  (e.g. ideation responses), with the message carrying only a pointer. */
+  truncated_at_write: z.boolean().optional(),
+  /** Original body length in characters before write-time truncation. */
+  original_text_length: z.number().int().nonnegative().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   author: z.string(),

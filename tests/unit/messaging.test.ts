@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { sendMessage, readInbox, ackMessage, archiveMessage, getThread, countPending, countActionable, hasActiveAssignment } from '../../src/core/messaging.js';
+import { sendMessage, readInbox, ackMessage, archiveMessage, getThread, countPending, countActionable, hasActiveAssignment, MAX_INLINE_MESSAGE_CHARS } from '../../src/core/messaging.js';
 import type { MessageType } from '../../src/core/schema.js';
 
 function createTestStore(): string {
@@ -86,6 +86,41 @@ describe('core/messaging', () => {
       );
       assert.ok(dirs.includes('codex'));
       assert.ok(dirs.includes('cursor'));
+    });
+  });
+
+  describe('sendMessage write-size guard (pln#627 Phase B)', () => {
+    it('truncates an over-cap body, flags it, and warns', () => {
+      const big = 'Z'.repeat(MAX_INLINE_MESSAGE_CHARS + 5000);
+      const result = sendMessage({ from: 'claude-code', to: 'codex', type: 'rfc', text: big }, testDir);
+      assert.ok(result.warning, 'a truncation warning should be returned');
+      assert.match(result.warning!, /truncated at write/i);
+
+      const stored = readInbox({ agent: 'codex', markAsRead: false }, testDir).messages[0]!;
+      assert.ok(stored.text.length <= MAX_INLINE_MESSAGE_CHARS, 'stored body must not exceed the cap');
+      assert.equal(stored.truncated_at_write, true);
+      assert.equal(stored.original_text_length, big.length);
+      assert.match(stored.text, /\[truncated at write:/);
+    });
+
+    it('leaves a normal-sized body untouched (no warning, no flag)', () => {
+      const normal = 'hello '.repeat(100); // ~600 chars, well under the cap
+      const result = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: normal }, testDir);
+      assert.equal(result.warning, undefined);
+
+      const stored = readInbox({ agent: 'codex', markAsRead: false }, testDir).messages[0]!;
+      assert.equal(stored.text, normal);
+      assert.equal(stored.truncated_at_write, undefined);
+      assert.equal(stored.original_text_length, undefined);
+    });
+
+    it('keeps a body exactly at the cap intact', () => {
+      const exact = 'Q'.repeat(MAX_INLINE_MESSAGE_CHARS);
+      const result = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: exact }, testDir);
+      assert.equal(result.warning, undefined);
+      const stored = readInbox({ agent: 'codex', markAsRead: false }, testDir).messages[0]!;
+      assert.equal(stored.text.length, MAX_INLINE_MESSAGE_CHARS);
+      assert.equal(stored.truncated_at_write, undefined);
     });
   });
 

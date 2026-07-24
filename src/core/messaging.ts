@@ -84,6 +84,29 @@ export interface SendMessageResult {
   shortLabel: string;
   to: string;
   type: MessageType;
+  /** Set when the body was truncated at write time because it exceeded
+   *  MAX_INLINE_MESSAGE_CHARS (pln#627 Phase B). */
+  warning?: string;
+}
+
+/**
+ * Hard cap on the inline body persisted per inbox message (pln#627 Phase B).
+ * Bodies above this are truncated at write time and flagged — the inbox must
+ * never again store a multi-hundred-KB persona/CoDev dump (root cause: one rfc
+ * message reached 960 KB). Large content belongs in a dedicated artifact store
+ * (Phase C), with the message carrying only a summary + pointer.
+ */
+export const MAX_INLINE_MESSAGE_CHARS = 32_768;
+
+/** Truncate an over-cap body, appending a marker that names the original size. */
+function capMessageBody(text: string): { text: string; truncated: boolean; originalLength: number } {
+  const originalLength = text.length;
+  if (originalLength <= MAX_INLINE_MESSAGE_CHARS) {
+    return { text, truncated: false, originalLength };
+  }
+  const marker = `\n\n[truncated at write: ${originalLength} chars exceeded the ${MAX_INLINE_MESSAGE_CHARS}-char inbox cap; full body not stored inline — persist large content in an artifact store and reference it here]`;
+  const keep = Math.max(0, MAX_INLINE_MESSAGE_CHARS - marker.length);
+  return { text: text.slice(0, keep) + marker, truncated: true, originalLength };
 }
 
 export function sendMessage(input: SendMessageInput, cwd: string): SendMessageResult {
@@ -91,6 +114,7 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
     const { id, short_label } = generateIdWithLabel('inbox_messages', cwd);
     const timestamp = nowISO();
     const resolvedTo = resolveAgentAlias(input.to);
+    const capped = capMessageBody(input.text);
 
     const message: InboxMessage = {
       id,
@@ -98,7 +122,8 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
       from: input.from,
       to: resolvedTo,
       type: input.type,
-      text: input.text,
+      text: capped.text,
+      ...(capped.truncated ? { truncated_at_write: true, original_text_length: capped.originalLength } : {}),
       ref: input.ref,
       payload: input.payload,
       scope: input.scope,
@@ -122,7 +147,15 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
     saveVersionedJsonFile('message' as VersionedDocumentType, path.join(dir, `${id}.json`), message);
     commitMemoryChange(`message ${id} sent to ${resolvedTo}`, cwd);
 
-    return { id, shortLabel: short_label, to: resolvedTo, type: input.type };
+    return {
+      id,
+      shortLabel: short_label,
+      to: resolvedTo,
+      type: input.type,
+      ...(capped.truncated
+        ? { warning: `Message body truncated at write: ${capped.originalLength} chars exceeded the ${MAX_INLINE_MESSAGE_CHARS}-char inbox cap. Store large content in an artifact store and send a pointer instead.` }
+        : {}),
+    };
   });
 }
 
