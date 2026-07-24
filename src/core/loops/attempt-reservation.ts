@@ -148,6 +148,7 @@ export class LaunchFenceError extends Error {
       | 'token_mismatch'
       | 'epoch_mismatch'
       | 'lease_expired'
+      | 'dispatch_lease_expired'
       | 'revoked'
       | 'crossed_not_revocable',
     message: string,
@@ -202,7 +203,7 @@ function readLaunchDecision(turnId: string, epoch: number, cwd?: string): Launch
 
 /** Atomically claim the decision via exclusive-create. Returns the committed
  * decision (this caller's if it won, or the incumbent's if it lost). */
-function claimLaunchDecision(turnId: string, decision: LaunchDecisionFile, cwd?: string): LaunchDecisionFile {
+function claimLaunchDecision(turnId: string, decision: LaunchDecisionFile, cwd?: string): { decision: LaunchDecisionFile; won: boolean } {
   ensureDirs(cwd);
   const p = launchDecisionPath(turnId, decision.epoch, cwd);
   const body = `${JSON.stringify(decision, null, 2)}\n`;
@@ -217,12 +218,12 @@ function claimLaunchDecision(turnId: string, decision: LaunchDecisionFile, cwd?:
     } finally {
       fs.closeSync(fd);
     }
-    return decision; // won
+    return { decision, won: true }; // THIS call performed the atomic create
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     const incumbent = readLaunchDecision(turnId, decision.epoch, cwd);
     if (!incumbent) throw err; // decision file vanished mid-race — surface it
-    return incumbent; // lost — the incumbent decision stands
+    return { decision: incumbent, won: false }; // lost — the incumbent decision stands (adopted)
   }
 }
 
@@ -471,6 +472,16 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
     if (record.launch && input.epoch <= record.launch.epoch) {
       throw new LaunchFenceError(turnId, 'epoch_mismatch', `armLaunch: re-arm epoch ${input.epoch} must exceed prior ${record.launch.epoch}`);
     }
+    // PR2b-b (§13 R5 gap 2): enforce the DISPATCH lease. A committed reservation
+    // is never abortable (repairable-only), so a stale one can't be swept away —
+    // instead we refuse to arm it once its dispatch lease has passed. Without
+    // this, a supervisor arriving long after the lease could arm a fresh grant
+    // and spawn (phantom-spawn-after-lease). The reservation stays committed but
+    // reserved_never_launched: it simply never spawns.
+    const dispatchLeaseMs = Date.parse(record.lease_deadline);
+    if (Number.isFinite(dispatchLeaseMs) && Date.parse(nowISO()) >= dispatchLeaseMs) {
+      throw new LaunchFenceError(turnId, 'dispatch_lease_expired', `armLaunch: dispatch lease ${record.lease_deadline} for ${turnId} has passed — reserved_never_launched, must not spawn`);
+    }
     // PR2a review (BLOCKING): reject a non-parseable lease at arm time — an
     // invalid string makes Date.parse NaN and `now > NaN` false, so the grant
     // would never expire and a matching supervisor could cross it unbounded.
@@ -493,7 +504,19 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
  * by the same token+epoch (a supervisor retry). Refused if revoked, expired, or
  * the token/epoch do not match — the supervisor MUST NOT spawn on refusal.
  */
-export function consumeLaunchGrant(turnId: string, token: string, epoch: number, cwd?: string, agentId = 'system'): TurnReservation {
+/**
+ * Result of a consume attempt. `wonTransition` is the exactly-once SPAWN
+ * AUTHORITY (§13 R5): TRUE only when THIS invocation performed the
+ * armed→crossed transition. `wonTransition=false` means the grant was ALREADY
+ * crossed by another invocation — the attempt is launch_attempted_unknown and
+ * the caller MUST NOT spawn (the double-spawn-across-restart guard).
+ */
+export interface ConsumeResult {
+  reservation: TurnReservation;
+  wonTransition: boolean;
+}
+
+export function consumeLaunchGrant(turnId: string, token: string, epoch: number, cwd?: string, agentId = 'system'): ConsumeResult {
   return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrant: unknown turn_id ${turnId}`);
@@ -510,15 +533,16 @@ export function consumeLaunchGrant(turnId: string, token: string, epoch: number,
     // ATOMIC XOR — claim the decision via exclusive-create. If a revoke already
     // won (even from a newer holder after this one was reaped), we LOSE here and
     // must not spawn. No TOCTOU: the create, not a prior check, is the commit.
-    const committed = claimLaunchDecision(turnId, { decision: 'crossed', token, epoch, at: nowISO() }, cwd);
+    const { decision: committed, won } = claimLaunchDecision(turnId, { decision: 'crossed', token, epoch, at: nowISO() }, cwd);
     if (committed.decision === 'revoked') {
       throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
     }
-    // Won (or idempotently already crossed). Update the record projection.
+    // Won → this call crossed (may spawn). Adopted (won=false) → already crossed
+    // by another invocation: launch_attempted_unknown, caller MUST NOT spawn.
     const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: committed.at } };
     fence();
     writeReservation(next, cwd);
-    return next;
+    return { reservation: next, wonTransition: won };
   }, cwd);
 }
 
@@ -538,7 +562,7 @@ export function revokeLaunchGrant(turnId: string, epoch: number, reason: string,
     // ATOMIC XOR — claim the decision. If a consume already crossed (even from a
     // newer holder), we LOSE: the worker launched, so the attempt is
     // launch_attempted_unknown and must never be treated as re-spawnable.
-    const committed = claimLaunchDecision(turnId, { decision: 'revoked', token: g.token, epoch, at: nowISO(), reason }, cwd);
+    const { decision: committed } = claimLaunchDecision(turnId, { decision: 'revoked', token: g.token, epoch, at: nowISO(), reason }, cwd);
     if (committed.decision === 'crossed') {
       throw new LaunchFenceError(turnId, 'crossed_not_revocable', `revokeLaunchGrant: grant for ${turnId} already crossed — worker launched, cannot revoke`);
     }
@@ -575,6 +599,28 @@ export function currentNonce(reservation: TurnReservation): string | undefined {
   // dead generation and must not be reported as current (review PR2b-a #1).
   const l = reservation.launch;
   return (l?.status === 'armed' || l?.status === 'crossed') ? l.token : undefined;
+}
+
+/**
+ * Read-strict evidence predicate (§13 R3) — the foundation the acceptance path
+ * (PR2b-c) builds on. Evidence is accepted for a turn-owned attempt ONLY when it
+ * carries the matching `turn_id`, the attempt's derived `run_id`, AND the
+ * current launch-generation `nonce` (the consumed token). Returns false when the
+ * generation is not live (revoked / never armed → `currentNonce` undefined), so
+ * a stale prior-generation or bare assignment-keyed signal can never match. The
+ * `run.status === 'completed'` gate is applied separately by the caller.
+ */
+export function evidenceMatchesAttempt(
+  reservation: TurnReservation,
+  evidence: { turn_id?: string; run_id?: string; nonce?: string },
+): boolean {
+  const nonce = currentNonce(reservation);
+  if (!nonce) return false;
+  return (
+    evidence.turn_id === reservation.turn_id &&
+    evidence.run_id === reservation.child_ids.run_id &&
+    evidence.nonce === nonce
+  );
 }
 
 /** Derived attempt status (spec §2) projected from the two shipped axes

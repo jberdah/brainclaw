@@ -12,6 +12,10 @@ import {
   revokeLaunchGrant,
   launchGrant,
   sweepExpiredLaunchGrants,
+  evidenceMatchesAttempt,
+  currentNonce,
+  deriveChildIds,
+  getReservation,
   LaunchFenceError,
   type ReserveInput,
 } from '../../src/core/loops/attempt-reservation.js';
@@ -80,20 +84,23 @@ describe('launch-grant fence — consume (the atomic pre-exec gate)', () => {
   beforeEach(() => { cwd = makeWorkspace(); });
   afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
 
-  it('consume armed → crossed with the matching token+epoch', () => {
+  it('consume armed → crossed with the matching token+epoch (winner may spawn)', () => {
     const t = committed(cwd);
     armLaunch(t, { token: 'tok1', epoch: 1, lease_deadline: future() }, cwd);
     const r = consumeLaunchGrant(t, 'tok1', 1, cwd);
-    assert.equal(r.launch?.status, 'crossed');
-    assert.ok(r.launch?.crossed_at);
+    assert.equal(r.reservation.launch?.status, 'crossed');
+    assert.ok(r.reservation.launch?.crossed_at);
+    assert.equal(r.wonTransition, true, 'the crossing invocation won → may spawn');
   });
 
-  it('consume is idempotent for the same token+epoch (supervisor retry)', () => {
+  it('consume is idempotent, but a retry is ADOPTED not won (must not spawn — §13 R5)', () => {
     const t = committed(cwd);
     armLaunch(t, { token: 'tok1', epoch: 1, lease_deadline: future() }, cwd);
-    consumeLaunchGrant(t, 'tok1', 1, cwd);
+    const first = consumeLaunchGrant(t, 'tok1', 1, cwd);
+    assert.equal(first.wonTransition, true);
     const again = consumeLaunchGrant(t, 'tok1', 1, cwd);
-    assert.equal(again.launch?.status, 'crossed');
+    assert.equal(again.reservation.launch?.status, 'crossed');
+    assert.equal(again.wonTransition, false, 'a second consume adopted the crossed grant → double-spawn guard');
   });
 
   it('refuses a token or epoch mismatch (a stale supervisor cannot cross)', () => {
@@ -186,6 +193,54 @@ describe('launch-grant fence — expiry sweep (reserved_never_launched)', () => 
     // so either refusal code proves it will not cross.
     assert.throws(() => consumeLaunchGrant('tat_exp', 'e', 1, cwd),
       (e: unknown) => e instanceof LaunchFenceError && (e.code === 'revoked' || e.code === 'lease_expired'));
+  });
+});
+
+describe('PR2b-b — dispatch-lease gate + evidence matcher (pln#630 §13 R5/R3)', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = makeWorkspace(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  it('arm REFUSES a committed reservation whose DISPATCH lease has passed (phantom-spawn guard)', () => {
+    // A committed reservation cannot be aborted (repairable-only), so a stale
+    // one is fenced at arm: a supervisor arriving after the dispatch lease
+    // cannot arm a fresh grant and spawn.
+    reserve({ ...reserveInput(cwd, 'tat_stale'), lease_deadline: past() }, cwd);
+    commitReservation('tat_stale', cwd);
+    assert.throws(() => armLaunch('tat_stale', { token: 'x', epoch: 1, lease_deadline: future() }, cwd),
+      (e: unknown) => e instanceof LaunchFenceError && e.code === 'dispatch_lease_expired');
+    assert.equal(launchGrant('tat_stale', cwd), undefined, 'never armed → never spawns');
+  });
+
+  it('arm still works while the dispatch lease is live', () => {
+    const t = committed(cwd, 'tat_live'); // 60s future dispatch lease
+    const r = armLaunch(t, { token: 'x', epoch: 1, lease_deadline: future() }, cwd);
+    assert.equal(r.launch?.status, 'armed');
+  });
+
+  it('evidenceMatchesAttempt requires turn_id + derived run_id + current generation nonce', () => {
+    const t = committed(cwd, 'tat_ev');
+    armLaunch(t, { token: 'gen-tok-1', epoch: 1, lease_deadline: future() }, cwd);
+    const r = getReservation(t, cwd)!;
+    const runId = deriveChildIds(t).run_id;
+    assert.equal(currentNonce(r), 'gen-tok-1');
+
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: t, run_id: runId, nonce: 'gen-tok-1' }), true);
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: t, run_id: runId, nonce: 'WRONG' }), false, 'stale/other generation nonce rejected');
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: 'tat_other', run_id: runId, nonce: 'gen-tok-1' }), false);
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: t, run_id: 'run_wrong', nonce: 'gen-tok-1' }), false);
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: t, run_id: runId }), false, 'bare assignment-keyed (no nonce) never matches');
+  });
+
+  it('evidenceMatchesAttempt is false for an unarmed or revoked generation (no live nonce)', () => {
+    const t = committed(cwd, 'tat_unarmed');
+    const unarmed = getReservation(t, cwd)!;
+    assert.equal(evidenceMatchesAttempt(unarmed, { turn_id: t, run_id: deriveChildIds(t).run_id, nonce: 'anything' }), false);
+
+    armLaunch(t, { token: 'g', epoch: 1, lease_deadline: future() }, cwd);
+    revokeLaunchGrant(t, 1, 'superseded', cwd);
+    const revoked = getReservation(t, cwd)!;
+    assert.equal(evidenceMatchesAttempt(revoked, { turn_id: t, run_id: deriveChildIds(t).run_id, nonce: 'g' }), false, 'revoked generation never matches');
   });
 });
 
