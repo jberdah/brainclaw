@@ -10,6 +10,21 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Changed — `bclaw_read_inbox` bounded + focused reads (pln#627 Phase A)**
+- Default status filter is now **actionable** (pending + read); acknowledged and
+  archived are hidden unless `includeAll=true` or an explicit `status` is passed.
+  Previously an unset status returned every message (the "pending by default"
+  description was wrong).
+- Results are ordered **newest-first** by `created_at` before pagination, so a
+  bounded page serves the most recent messages instead of the oldest debris.
+- Message bodies are **previewed** (~500 chars) with `text_length` + `truncated`;
+  the full body is returned only with `full=true`. The page is size-bounded by
+  `budget_tokens` (like `bclaw_find` / `bclaw_search`), with `has_more` /
+  `next_offset` paging hints — a single read can no longer blow the token budget.
+- Input schema gains `includeAll`, `full`, and `budget_tokens` (additive; moves
+  the surface fingerprint — see the current section). `structuredContent.messages`
+  now carries `text_length` + `truncated` per message.
+
 **Added — `LaneResultSchema.review_verdict` / `review_summary` (pln#628 Focus 4B)**
 - `LANE-RESULT.json` (the worktree-root file a dispatched worker writes) gains two
   optional fields: `review_verdict` (`approve` | `request_changes`) and
@@ -238,7 +253,11 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:468f0103414e97e8`
+- MCP public surface fingerprint: `sha256:fd8a7e910bf5f751`
+  (updated 2026-07-24 for pln#627 Phase A: the `bclaw_read_inbox` input schema
+  gains `includeAll`, `full`, and `budget_tokens`. Additive — no tool
+  added/removed/renamed; the three new typed properties move the fingerprint.)
+  Previous: `sha256:468f0103414e97e8`
   (updated 2026-07-18 for pln#625 PR #83 + Codex review: `bclaw_list_agents`
   retired and `bclaw_find(entity='agent')` gains `includeReputation` — now typed
   as a boolean in `GRAMMAR_FILTER_CONTRACT.booleanKeys` and validated at the MCP
