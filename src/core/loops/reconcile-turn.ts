@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { getReservation, evidenceMatchesAttempt, currentNonce, type TurnReservation } from './attempt-reservation.js';
 import { getLoop } from './store.js';
 import { complete_turn, add_artifact, advance } from './verbs.js';
@@ -89,6 +91,22 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   const reservation: TurnReservation | undefined = getReservation(turn_id, cwd);
   if (!reservation) return { reconciled: false, reason: `unknown turn_id ${turn_id}` };
 
+  // ── Containment gate (§8 Q6): the reservation must belong to the store we are
+  // operating on. Before any mutation / on-behalf convergence, refuse to reconcile
+  // a reservation whose store_root resolves to a DIFFERENT project than `cwd` — a
+  // cross-project reconcile must never converge another store's loop/claim.
+  // Case-folded on win32 (review Finding 2) so a `C:\`-vs-`c:\` casing difference
+  // between the reserve-time cwd and the reconcile cwd never false-rejects on the
+  // Windows-primary target. ──
+  const operatingRoot = path.resolve(cwd ?? process.cwd());
+  const reservationRoot = path.resolve(reservation.store_root);
+  const sameStore = process.platform === 'win32'
+    ? reservationRoot.toLowerCase() === operatingRoot.toLowerCase()
+    : reservationRoot === operatingRoot;
+  if (!sameStore) {
+    return { reconciled: false, reason: `containment: reservation store_root ${reservation.store_root} != operating store ${operatingRoot}` };
+  }
+
   // ── §2 read-strict evidence gate: the LANE must be turn-keyed to THIS attempt's
   // current launch generation. A stale/mismatched result never converges the loop. ──
   if (!evidenceMatchesAttempt(reservation, { turn_id: lane.turn_id, run_id: lane.run_id, nonce: lane.nonce })) {
@@ -133,9 +151,22 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   const slot = loop.slots.find((s) => s.slot_id === reservation.slot_id);
   if (!slot) return { reconciled: false, reason: `slot ${reservation.slot_id} not in loop ${reservation.loop_id}` };
 
+  // ── Superseded-turn guard (PR4 / review round-2 follow-up). A NEWER turn has
+  // taken over this slot when `slot.current_turn_id` is set and points elsewhere
+  // (each dispatch's turn() rebinds the slot pointer). A late/duplicate reconcile
+  // of the OLD turn must then NOT re-terminalize the slot or advance on a stale
+  // outcome — the slot has moved on. No-op. (When current_turn_id is unset — a
+  // direct reconcile with no preceding turn() — this does not fire, so the
+  // primitive stays testable in isolation.) This is safe against
+  // crossed_not_revocable: we never try to revoke the old crossed grant; we just
+  // decline to converge a superseded turn. ──
+  if (slot.current_turn_id !== undefined && slot.current_turn_id !== turn_id) {
+    return { reconciled: false, reason: `turn ${turn_id} superseded by current turn ${slot.current_turn_id} on slot ${slot.slot_id}` };
+  }
+
   // A terminal loop already converged → idempotent no-op (any trigger may fire us).
   if (LOOP_TERMINAL.has(loop.status)) {
-    return { reconciled: true, reason: `loop already ${loop.status} (idempotent no-op)`, loop_status: loop.status };
+    return { reconciled: true, reason: `loop already ${loop.status} (idempotent no-op)`, artifacts_added: 0, loop_status: loop.status };
   }
 
   // ── Idempotency (review Findings 1+2): a TERMINAL slot durably means this turn's

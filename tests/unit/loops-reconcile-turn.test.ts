@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
-import { complete_turn } from '../../src/core/loops/verbs.js';
+import { complete_turn, turn } from '../../src/core/loops/verbs.js';
 import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds,
@@ -159,6 +159,19 @@ describe('reconcileTurn §8', () => {
     assert.ok(Buffer.byteLength(verdict.body ?? '', 'utf8') <= 4096, 'verdict body capped to the schema limit');
     assert.ok((verdict.body ?? '').startsWith('accepted'), 'truncation preserves the accepted prefix → still fires reviewer_green');
     assert.equal(r.auto_closed, true);
+  });
+
+  it('SUPERSEDED turn → no-op (a newer turn took over the slot; never re-terminalize on a stale outcome)', () => {
+    const { turnId, loopId, lane } = setup(cwd, 'approve');
+    // A newer turn rebinds the slot pointer (as prepare's turn() would for the next iteration).
+    turn({ id: loopId, slot_id: 'lsl_r', actor: 'coord', turn_id: 'tat_newer' }, cwd);
+    const r = reconcileTurn({ turn_id: turnId, lane, cwd });
+    assert.equal(r.reconciled, false);
+    assert.match(r.reason, /superseded/);
+    // The superseded turn recorded no verdict and did not close the loop.
+    const loop = getLoop(loopId, cwd)!;
+    assert.equal(loop.status, 'open');
+    assert.ok(!loop.artifacts.some((a) => a.type === 'verdict'));
   });
 
   it('lane completed + turn-keyed FAILED sentinel → conflict withheld (Finding 5)', () => {
