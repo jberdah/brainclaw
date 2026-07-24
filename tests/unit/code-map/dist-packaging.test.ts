@@ -45,6 +45,13 @@ const GRAMMAR_WASMS = [
   'tree-sitter-python.wasm',
   'tree-sitter-php.wasm',
   'tree-sitter-java.wasm',
+  // langs batch 2 (Go/Rust/C#/Ruby/C/C++)
+  'tree-sitter-go.wasm',
+  'tree-sitter-rust.wasm',
+  'tree-sitter-c_sharp.wasm',
+  'tree-sitter-ruby.wasm',
+  'tree-sitter-c.wasm',
+  'tree-sitter-cpp.wasm',
 ];
 
 const SCM_SETS: Array<[string, string[]]> = [
@@ -52,6 +59,12 @@ const SCM_SETS: Array<[string, string[]]> = [
   ['python', ['tags.scm', 'imports.scm']],
   ['php', ['tags.scm', 'imports.scm']],
   ['java', ['tags.scm', 'imports.scm']],
+  ['go', ['tags.scm', 'imports.scm']],
+  ['rust', ['tags.scm', 'imports.scm']],
+  ['csharp', ['tags.scm', 'imports.scm']],
+  ['ruby', ['tags.scm', 'imports.scm']],
+  ['c', ['tags.scm', 'imports.scm']],
+  ['cpp', ['tags.scm', 'imports.scm']],
 ];
 
 describe('code-map dist packaging smoke (langs#3-4)', () => {

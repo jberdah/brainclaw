@@ -75,6 +75,11 @@ const grammars = [
   ['tree-sitter-wasms/out/tree-sitter-php.wasm', 'tree-sitter-php.wasm'],
   ['tree-sitter-wasms/out/tree-sitter-java.wasm', 'tree-sitter-java.wasm'],
   ['tree-sitter-wasms/out/tree-sitter-go.wasm', 'tree-sitter-go.wasm'],
+  ['tree-sitter-wasms/out/tree-sitter-rust.wasm', 'tree-sitter-rust.wasm'],
+  ['tree-sitter-wasms/out/tree-sitter-c_sharp.wasm', 'tree-sitter-c_sharp.wasm'],
+  ['tree-sitter-wasms/out/tree-sitter-ruby.wasm', 'tree-sitter-ruby.wasm'],
+  ['tree-sitter-wasms/out/tree-sitter-c.wasm', 'tree-sitter-c.wasm'],
+  ['tree-sitter-wasms/out/tree-sitter-cpp.wasm', 'tree-sitter-cpp.wasm'],
 ];
 
 let grammarOk = true;
@@ -96,6 +101,11 @@ try {
     ['src/core/code-map/lang/php', 'dist/core/code-map/lang/php', ['tags.scm', 'imports.scm']],
     ['src/core/code-map/lang/java', 'dist/core/code-map/lang/java', ['tags.scm', 'imports.scm']],
     ['src/core/code-map/lang/go', 'dist/core/code-map/lang/go', ['tags.scm', 'imports.scm']],
+    ['src/core/code-map/lang/rust', 'dist/core/code-map/lang/rust', ['tags.scm', 'imports.scm']],
+    ['src/core/code-map/lang/csharp', 'dist/core/code-map/lang/csharp', ['tags.scm', 'imports.scm']],
+    ['src/core/code-map/lang/ruby', 'dist/core/code-map/lang/ruby', ['tags.scm', 'imports.scm']],
+    ['src/core/code-map/lang/c', 'dist/core/code-map/lang/c', ['tags.scm', 'imports.scm']],
+    ['src/core/code-map/lang/cpp', 'dist/core/code-map/lang/cpp', ['tags.scm', 'imports.scm']],
   ];
   for (const [scmSrcDir, scmDestDir, names] of scmSets) {
     fs.mkdirSync(scmDestDir, { recursive: true });
