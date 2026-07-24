@@ -382,6 +382,43 @@ describe('MCP server', () => {
     }
   });
 
+  it('previews large inbox bodies by default and returns the full body with full=true (pln#627 Phase A)', async () => {
+    const bigBody = 'X'.repeat(600);
+    const sent = run(['inbox', 'send', 'codex', bigBody], dir);
+    assert.equal(sent.exitCode, 0, sent.stderr);
+
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+
+      const preview = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'inbox-preview',
+        method: 'tools/call',
+        params: { name: 'bclaw_read_inbox', arguments: { agent: 'codex' } },
+      });
+      assert.equal(preview.result.isError, false);
+      const previewMsg = preview.result.structuredContent.messages[0];
+      assert.equal(previewMsg.text.length, 500, 'body should be previewed to 500 chars');
+      assert.equal(previewMsg.truncated, true);
+      assert.equal(previewMsg.text_length, 600);
+
+      const fullRead = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'inbox-full',
+        method: 'tools/call',
+        params: { name: 'bclaw_read_inbox', arguments: { agent: 'codex', full: true } },
+      });
+      assert.equal(fullRead.result.isError, false);
+      const fullMsg = fullRead.result.structuredContent.messages[0];
+      assert.equal(fullMsg.text.length, 600, 'full=true should return the whole body');
+      assert.equal(fullMsg.truncated, false);
+      assert.equal(fullMsg.text_length, 600);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('returns the full catalog when tools/list requests catalog=all', async () => {
     const proc = startMcp(dir);
     try {

@@ -1945,6 +1945,8 @@ function dispatchReadTool(
   if (name === 'bclaw_read_inbox') {
     const agentName = (args.agent as string | undefined) ?? ctx.getAgentName();
     const markAsRead = args.markAsRead === true; // default: false — reading doesn't imply processing
+    const includeAll = args.includeAll === true; // pln#627 Phase A — widen past the actionable default
+    const full = args.full === true;             // pln#627 Phase A — return whole bodies, not previews
     const result = readInbox({
       agent: agentName,
       status: args.status as MessageStatus | undefined,
@@ -1952,22 +1954,80 @@ function dispatchReadTool(
       thread_id: args.thread_id as string | undefined,
       limit: args.limit as number | undefined,
       offset: args.offset as number | undefined,
+      includeAll,
       markAsRead,
     }, cwd);
 
-    const lines: string[] = [`Inbox for ${agentName} — ${result.total} message(s):`];
-    for (const msg of result.messages) {
+    // pln#627 Phase A — bound the payload so a single inbox read can never blow
+    // the MCP token budget (root cause: persona/CoDev dumps persisted as inbox
+    // messages, one at 960 KB). Two independent guards:
+    //   1. per-message: preview each body to INBOX_PREVIEW_CHARS unless full=true;
+    //      the whole body stays available via full=true (bclaw_get(inbox_message)
+    //      is per-agent-scoped and cannot serve one message by id).
+    //   2. whole-page: boundListResult trims messages until the JSON fits the
+    //      char budget, the same way bclaw_find / bclaw_search do (~4 chars/token).
+    const INBOX_PREVIEW_CHARS = 500;
+    const projected = result.messages.map((msg) => {
+      const textLength = msg.text.length;
+      const truncated = !full && textLength > INBOX_PREVIEW_CHARS;
+      return {
+        ...msg,
+        text: truncated ? msg.text.slice(0, INBOX_PREVIEW_CHARS) : msg.text,
+        text_length: textLength,
+        truncated,
+      };
+    });
+    const budgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
+    const charBudget = budgetTokens ? Math.min(budgetTokens * 4, DEFAULT_FIND_CHAR_BUDGET) : DEFAULT_FIND_CHAR_BUDGET;
+    const bounded = boundListResult({ entity: 'inbox_message', total: result.total, items: projected }, result.offset, charBudget);
+
+    const scopeNote = includeAll || args.status ? '' : ' actionable (pending+read); pass includeAll=true for acknowledged/archived';
+    const lines: string[] = [`Inbox for ${agentName} — ${result.total} message(s)${scopeNote}:`];
+    for (const msg of bounded.items) {
       const ack = msg.requires_ack ? ' [ACK required]' : '';
       const thread = msg.thread_id ? ` thread:${msg.thread_id}` : '';
       lines.push(`  [${msg.short_label ?? msg.id}] ${msg.type} from ${msg.from} (${msg.status})${ack}${thread}`);
-      lines.push(`    ${msg.text.slice(0, 200)}${msg.text.length > 200 ? '...' : ''}`);
+      const preview = msg.text.slice(0, 200);
+      const more = msg.truncated || msg.text_length > 200;
+      const moreNote = more
+        ? `… (${msg.text_length} chars${msg.truncated ? '; pass full=true for the whole body' : ''})`
+        : '';
+      lines.push(`    ${preview}${moreNote}`);
     }
-    if (result.messages.length === 0) {
+    if (bounded.items.length === 0) {
       lines.push('  (no messages)');
     }
+    if (bounded.hint) lines.push('', bounded.hint);
+
+    const nextActions = bounded.has_more
+      ? [{
+          tool: 'bclaw_read_inbox',
+          args: {
+            ...(args.agent ? { agent: args.agent } : {}),
+            offset: bounded.next_offset,
+            ...(args.limit ? { limit: args.limit } : {}),
+            ...(args.status ? { status: args.status } : {}),
+            ...(includeAll ? { includeAll: true } : {}),
+          },
+          when: 'to fetch the next page',
+        }]
+      : [];
+
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
-      structuredContent: { ...result, schema_version: SCHEMA_VERSION },
+      structuredContent: {
+        total: result.total,
+        offset: result.offset,
+        limit: result.limit,
+        messages: bounded.items,
+        returned: bounded.returned,
+        has_more: bounded.has_more,
+        ...(bounded.next_offset !== undefined ? { next_offset: bounded.next_offset } : {}),
+        ...(bounded.omitted_for_size ? { omitted_for_size: bounded.omitted_for_size } : {}),
+        ...(bounded.hint ? { hint: bounded.hint } : {}),
+        ...(nextActions.length ? { next_actions: nextActions } : {}),
+        schema_version: SCHEMA_VERSION,
+      },
     };
   }
 

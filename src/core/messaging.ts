@@ -138,6 +138,15 @@ export interface ReadInboxInput {
   limit?: number;
   offset?: number;
   markAsRead?: boolean;
+  /**
+   * Widen the default status filter to include done messages (pln#627 Phase A).
+   * When `status` is unset, the read serves only ACTIONABLE messages
+   * (pending + read); acknowledged + archived are hidden so the debris of
+   * dozens of processed messages never crowds out the live ones. Set
+   * `includeAll: true` to disable that default and return every status.
+   * Ignored when an explicit `status` is provided.
+   */
+  includeAll?: boolean;
 }
 
 export interface ReadInboxResult {
@@ -150,7 +159,15 @@ export interface ReadInboxResult {
 /** Apply all inbox filters (status, type, thread_id, claim_id) to a message list. */
 function applyInboxFilters(messages: InboxMessage[], input: ReadInboxInput): InboxMessage[] {
   let filtered = messages;
-  if (input.status) filtered = filtered.filter(m => m.status === input.status);
+  if (input.status) {
+    filtered = filtered.filter(m => m.status === input.status);
+  } else if (!input.includeAll) {
+    // Default = actionable only (pln#627 Phase A): hide acknowledged + archived
+    // so a long tail of processed messages can't bury the live ones. Callers
+    // opt back into the full set with includeAll, or target a done status
+    // explicitly with `status`.
+    filtered = filtered.filter(m => m.status === 'pending' || m.status === 'read');
+  }
   if (input.type) filtered = filtered.filter(m => m.type === input.type);
   if (input.thread_id) filtered = filtered.filter(m => m.thread_id === input.thread_id);
   if (input.claimId) {
@@ -162,6 +179,18 @@ function applyInboxFilters(messages: InboxMessage[], input: ReadInboxInput): Inb
   return filtered;
 }
 
+/**
+ * Filter + order a directory's messages for a read (pln#627 Phase A).
+ * Ordered newest-first by created_at so a bounded page always serves the most
+ * recent messages, not the oldest debris — loadMessagesFromDir returns disk
+ * order (oldest-first, trp#291), which would otherwise make slice(0, limit)
+ * page through ancient processed messages first.
+ */
+function loadMessagesForRead(dir: string, input: ReadInboxInput): InboxMessage[] {
+  const filtered = applyInboxFilters(loadMessagesFromDir(dir), input);
+  return filtered.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   const dir = agentInboxDir(input.agent, cwd);
 
@@ -170,7 +199,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   if (input.markAsRead) {
     return mutate({ cwd }, () => {
       // Fresh read inside lock
-      const messages = applyInboxFilters(loadMessagesFromDir(dir), input);
+      const messages = loadMessagesForRead(dir, input);
 
       const total = messages.length;
       const offset = input.offset ?? 0;
@@ -192,7 +221,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   }
 
   // Read-only path: no lock needed
-  const messages = applyInboxFilters(loadMessagesFromDir(dir), input);
+  const messages = loadMessagesForRead(dir, input);
 
   const total = messages.length;
   const offset = input.offset ?? 0;

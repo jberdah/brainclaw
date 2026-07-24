@@ -19,6 +19,16 @@ function cleanupTestStore(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+/** Overwrite a message's created_at on disk so ordering tests are deterministic
+ *  (nowISO() collisions within the same ms would otherwise make newest-first
+ *  ambiguous). The on-disk shape is the flat document + schema_version. */
+function setCreatedAt(dir: string, agent: string, msgId: string, iso: string): void {
+  const file = path.join(dir, '.brainclaw', 'coordination', 'inbox', agent, `${msgId}.json`);
+  const doc = JSON.parse(fs.readFileSync(file, 'utf-8'));
+  doc.created_at = iso;
+  fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
+}
+
 describe('core/messaging', () => {
   let testDir: string;
 
@@ -140,6 +150,85 @@ describe('core/messaging', () => {
       const result = readInbox({ agent: 'nonexistent', markAsRead: false }, testDir);
       assert.equal(result.total, 0);
       assert.equal(result.messages.length, 0);
+    });
+  });
+
+  describe('readInbox default filter + ordering (pln#627 Phase A)', () => {
+    // Build an inbox with one message in each status: pending, read,
+    // acknowledged, archived. read is created first so markAsRead only touches it.
+    function seedAllStatuses(): void {
+      const toRead = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: 'READ msg' }, testDir);
+      readInbox({ agent: 'codex', markAsRead: true }, testDir); // pending -> read (only toRead exists)
+      const toAck = sendMessage({ from: 'claude-code', to: 'codex', type: 'assign', text: 'ACK msg' }, testDir);
+      ackMessage(toAck.id, 'codex', testDir); // -> acknowledged
+      const toArchive = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: 'ARCHIVED msg' }, testDir);
+      archiveMessage(toArchive.id, 'codex', testDir); // -> archived
+      sendMessage({ from: 'claude-code', to: 'codex', type: 'assign', text: 'PENDING msg' }, testDir); // pending
+      void toRead;
+    }
+
+    it('default serves only actionable messages (pending + read), hiding acknowledged + archived', () => {
+      seedAllStatuses();
+      const result = readInbox({ agent: 'codex', markAsRead: false }, testDir);
+      assert.equal(result.total, 2);
+      const statuses = result.messages.map(m => m.status).sort();
+      assert.deepEqual(statuses, ['pending', 'read']);
+    });
+
+    it('includeAll returns every status', () => {
+      seedAllStatuses();
+      const result = readInbox({ agent: 'codex', includeAll: true, markAsRead: false }, testDir);
+      assert.equal(result.total, 4);
+    });
+
+    it('an explicit done status still overrides the actionable default', () => {
+      seedAllStatuses();
+      const ackd = readInbox({ agent: 'codex', status: 'acknowledged', markAsRead: false }, testDir);
+      assert.equal(ackd.total, 1);
+      assert.equal(ackd.messages[0]!.text, 'ACK msg');
+
+      const archived = readInbox({ agent: 'codex', status: 'archived', markAsRead: false }, testDir);
+      assert.equal(archived.total, 1);
+      assert.equal(archived.messages[0]!.text, 'ARCHIVED msg');
+    });
+
+    it('orders messages newest-first regardless of disk order', () => {
+      const a = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: 'oldest' }, testDir);
+      const b = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: 'middle' }, testDir);
+      const c = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: 'newest' }, testDir);
+      setCreatedAt(testDir, 'codex', a.id, '2026-01-01T00:00:00.000Z');
+      setCreatedAt(testDir, 'codex', b.id, '2026-01-02T00:00:00.000Z');
+      setCreatedAt(testDir, 'codex', c.id, '2026-01-03T00:00:00.000Z');
+
+      const result = readInbox({ agent: 'codex', markAsRead: false }, testDir);
+      assert.deepEqual(result.messages.map(m => m.text), ['newest', 'middle', 'oldest']);
+    });
+
+    it('pagination serves the newest messages first, not the oldest debris', () => {
+      const ids: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        ids.push(sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: `msg-${i}` }, testDir).id);
+      }
+      // created_at ascending with i so msg-4 is newest
+      ids.forEach((id, i) => setCreatedAt(testDir, 'codex', id, `2026-02-0${i + 1}T00:00:00.000Z`));
+
+      const page1 = readInbox({ agent: 'codex', limit: 2, offset: 0, markAsRead: false }, testDir);
+      assert.deepEqual(page1.messages.map(m => m.text), ['msg-4', 'msg-3']);
+
+      const page2 = readInbox({ agent: 'codex', limit: 2, offset: 2, markAsRead: false }, testDir);
+      assert.deepEqual(page2.messages.map(m => m.text), ['msg-2', 'msg-1']);
+    });
+
+    it('markAsRead path applies the actionable default + newest-first too', () => {
+      const a = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: 'first' }, testDir);
+      const b = sendMessage({ from: 'claude-code', to: 'codex', type: 'info', text: 'second' }, testDir);
+      setCreatedAt(testDir, 'codex', a.id, '2026-03-01T00:00:00.000Z');
+      setCreatedAt(testDir, 'codex', b.id, '2026-03-02T00:00:00.000Z');
+      const result = readInbox({ agent: 'codex', markAsRead: true }, testDir);
+      assert.deepEqual(result.messages.map(m => m.text), ['second', 'first']);
+      // Both are now read (still actionable), so a follow-up default read still sees them
+      const after = readInbox({ agent: 'codex', markAsRead: false }, testDir);
+      assert.equal(after.total, 2);
     });
   });
 
