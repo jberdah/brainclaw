@@ -570,7 +570,11 @@ export function launchGrant(turnId: string, cwd?: string): TurnReservation['laun
  * read-strict acceptance path (PR2b-c) matches on. `undefined` until armed.
  */
 export function currentNonce(reservation: TurnReservation): string | undefined {
-  return reservation.launch?.token;
+  // Only a LIVE generation (armed or crossed) has a current nonce. A revoked
+  // grant means the worker never crossed → never spawned, so its token is a
+  // dead generation and must not be reported as current (review PR2b-a #1).
+  const l = reservation.launch;
+  return (l?.status === 'armed' || l?.status === 'crossed') ? l.token : undefined;
 }
 
 /** Derived attempt status (spec §2) projected from the two shipped axes

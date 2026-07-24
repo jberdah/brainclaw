@@ -10,6 +10,16 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Added — turn-attempt evidence-correlation fields (pln#630 PR2b-a)**
+- Additive, backward-compatible: `LaneResultSchema` gains optional `turn_id` /
+  `run_id` / `nonce`; `RuntimeEventSchema` gains optional `turn_id` / `nonce`
+  (`run_id` already present); `LoopSlotSchema` gains optional `current_turn_id`;
+  a `turn_reserved` variant joins the loop event journal. All optional/defaulted
+  — legacy records parse unchanged. No tool added/removed/renamed and no tool
+  inputSchema field changed, so the **public MCP surface fingerprint is
+  unchanged**. (`LoopSlot` is reachable via `bclaw_loop(open)` slot input, but
+  the field is inert and `bclaw_loop` is not in the fingerprint set.)
+
 **Changed — `bclaw_read_inbox` bounded + focused reads (pln#627 Phase A)**
 - Default status filter is now **actionable** (pending + read); acknowledged and
   archived are hidden unless `includeAll=true` or an explicit `status` is passed.

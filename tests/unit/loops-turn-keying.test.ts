@@ -5,9 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { LaneResultSchema, RuntimeEventSchema } from '../../src/core/schema.js';
+import { LoopEventSchema, LoopSlotSchema } from '../../src/core/loops/types.js';
 import {
   writeCompletionSignal,
   readCompletionSignal,
+  readCompletionSignals,
   getRuntimeSignalPath,
   signalExists,
   ensureRuntimeDirs,
@@ -52,6 +54,20 @@ describe('turn-keying — LANE-RESULT + runtime-signal schema deltas', () => {
     });
     assert.equal(e.turn_id, undefined);
   });
+
+  it('turn_reserved LoopEvent variant parses with its required fields', () => {
+    const base = { event_id: 'lev_1', loop_id: 'lop_abc', seq: 1, at: new Date().toISOString(), mutation_id: 'mut_1' };
+    const ev = LoopEventSchema.parse({ ...base, kind: 'turn_reserved', slot_id: 'lsl_r', phase: 'findings', turn_id: 'tat_1' });
+    assert.equal(ev.kind, 'turn_reserved');
+    assert.throws(() => LoopEventSchema.parse({ ...base, kind: 'turn_reserved', slot_id: 'lsl_r', phase: 'findings' }), 'turn_id is required');
+  });
+
+  it('LoopSlot round-trips current_turn_id and parses legacy slots without it', () => {
+    const withPtr = LoopSlotSchema.parse({ slot_id: 'lsl_a', role: 'reviewer', status: 'open', current_turn_id: 'tat_9' });
+    assert.equal(withPtr.current_turn_id, 'tat_9');
+    const legacy = LoopSlotSchema.parse({ slot_id: 'lsl_b', role: 'reviewer', status: 'open' });
+    assert.equal(legacy.current_turn_id, undefined);
+  });
 });
 
 describe('turn-keying — typed completion-sentinel body (read-strict foundation)', () => {
@@ -88,5 +104,32 @@ describe('turn-keying — typed completion-sentinel body (read-strict foundation
 
   it('returns undefined when no sentinel exists', () => {
     assert.equal(readCompletionSignal(root, 'asgn_absent'), undefined);
+    assert.deepEqual(readCompletionSignals(root, 'asgn_absent'), {});
+  });
+
+  it('round-trips a failed body', () => {
+    const body: CompletionSignalBody = { turn_id: 'tat_f', run_id: 'run_f', nonce: 'tok_f', status: 'failed', at: new Date().toISOString() };
+    writeCompletionSignal(root, 'asgn_f', body);
+    assert.deepEqual(readCompletionSignal(root, 'asgn_f'), body);
+    assert.deepEqual(readCompletionSignals(root, 'asgn_f'), { failed: body });
+  });
+
+  it('surfaces a completed+failed contradiction (R4); singular prefers completed', () => {
+    const completed: CompletionSignalBody = { turn_id: 'tat_c', run_id: 'run_c', nonce: 'tok_c', status: 'completed', at: 'c' };
+    const failed: CompletionSignalBody = { turn_id: 'tat_c', run_id: 'run_c', nonce: 'tok_c', status: 'failed', at: 'f' };
+    writeCompletionSignal(root, 'asgn_conflict', completed);
+    writeCompletionSignal(root, 'asgn_conflict', failed);
+    const both = readCompletionSignals(root, 'asgn_conflict');
+    assert.deepEqual(both.completed, completed, 'completed sentinel surfaced');
+    assert.deepEqual(both.failed, failed, 'failed sentinel ALSO surfaced (no silent collapse)');
+    assert.deepEqual(readCompletionSignal(root, 'asgn_conflict'), completed, 'convenience reader prefers completed');
+  });
+
+  it('returns undefined for a non-JSON body (never throws)', () => {
+    const p = getRuntimeSignalPath(root, 'asgn_junk', 'completed');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, 'not json at all {{{', 'utf-8');
+    assert.equal(readCompletionSignal(root, 'asgn_junk'), undefined);
+    assert.deepEqual(readCompletionSignals(root, 'asgn_junk'), {});
   });
 });
