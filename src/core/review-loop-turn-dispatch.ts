@@ -18,7 +18,7 @@
  * command-level orchestrator that owns both and calls this to spawn. Nothing
  * here imports harvest or review-loop-close, so no import cycle is introduced.
  */
-import { createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaim } from './claims.js';
+import { createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment } from './claims.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId, loadAssignment } from './assignments.js';
 import { turn } from './loops/verbs.js';
 import { getLoop } from './loops/store.js';
@@ -358,14 +358,18 @@ export async function dispatchReviewLoopTurn(
         // crossed / revoked / lease-expired). MUST NOT spawn AND MUST NOT fall back
         // to legacy — a legacy spawn beside the live reservation is the double-spawn
         // hole the fence exists to close (dec#144 MUST-FIX 1).
-        // Release ONLY a claim THIS dispatch actually created (review Finding 2):
-        // createCoordinatorClaim reuses an existing scope+agent claim, which
-        // belongs to the WINNING dispatch (its slot/run/assignment bind to it) —
-        // releasing that shared claim would sabotage the winner. A freshly-created
-        // (non-reused) claim is genuinely ours and unused now, so GC it.
-        if (!claimResult.reusedExisting) {
-          try { releaseClaim(claimResult.claimId, cwd); } catch { /* best-effort GC */ }
-        }
+        //
+        // Do NOT release the coordinator claim here (review Finding 2, round 2):
+        // createCoordinatorClaim dedups on scope+agent, so a same-turn concurrent
+        // dispatch SHARES one claim C1 — and claim-creation order is uncoupled from
+        // fence-crossing order (different locks), so the loser can be C1's creator
+        // while the WINNER merely reused it and bound its slot/run/assignment to C1.
+        // releaseClaim() runs unauthenticated with no active-binding guard, so ANY
+        // release in the denied path can flip a claim a live winner depends on to
+        // `released` (re-opening the slot.claim_id divergence MUST-FIX 3 closed). A
+        // genuine orphan — the rare double-failure where no dispatch wins — is
+        // low-harm and reaped by the claim staleness sweep (auto_release_after_hours);
+        // sabotaging a live winner is high-harm and not self-healing. So we leave it.
         result.execution_status = 'inbox_only';
         result.error = prep.reason;
         return result;
