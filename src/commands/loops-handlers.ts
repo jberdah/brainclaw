@@ -2,6 +2,7 @@ import { ZodError } from 'zod';
 import type { FacadeResponse } from '../core/facade-schema.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
+import { findReservationByRunId } from '../core/loops/attempt-reservation.js';
 import {
   add_artifact,
   advance,
@@ -365,7 +366,18 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
             const assignmentId = (slot as { assignment_id?: string }).assignment_id;
             if (!assignmentId) continue;
             if (slotStatus === 'done' || slotStatus === 'failed' || slotStatus === 'cancelled') continue;
+            // pln#630 PR2b-c (§13 R6): GET is strictly observational for
+            // TURN-OWNED slots. A slot carrying current_turn_id reconciles only
+            // via the dedicated mutating reconcile path (never on a read), so a
+            // stale/racing read can't phantom-complete its run. Legacy slots
+            // (no current_turn_id) keep the intentional lazy reconcile
+            // (trp_fdf3e590) that converges silent-completion on access.
+            if ((slot as { current_turn_id?: string }).current_turn_id) continue;
             for (const run of listAgentRuns(options.cwd, { assignment_id: assignmentId })) {
+              // Belt-and-braces (review PR2b-c #D): skip by ACTUAL ownership too,
+              // not just the slot pointer — if a run is turn-owned but its slot
+              // wasn't stamped (write-ordering), GET must still not mutate it.
+              if (findReservationByRunId(run.id, options.cwd)) continue;
               reconcileAgentRun(run.id, options.cwd);
             }
           }

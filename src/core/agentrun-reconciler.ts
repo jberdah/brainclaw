@@ -39,7 +39,8 @@ import { loadClaim, releaseClaim } from './claims.js';
 import { loadAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
-import { readHeartbeat, readLogTail, signalExists, latestActivityMs } from './runtime-signals.js';
+import { readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
+import { findReservationByRunId, evidenceMatchesAttempt } from './loops/attempt-reservation.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -97,6 +98,20 @@ export interface ReconcileEvidence {
   completed_signal: boolean;
   /** Wrapper wrote the `failed` sentinel (agent exited non-zero). */
   failed_signal: boolean;
+  /**
+   * pln#630 PR2b-c (§13 R3) — this run is owned by a turn-attempt reservation
+   * (deriveChildIds match). Turn-owned runs use READ-STRICT acceptance: only
+   * turn-keyed completion evidence counts, never a bare assignment-keyed
+   * presence sentinel or an assignment-keyed proxy (claim_released etc.).
+   */
+  turn_owned: boolean;
+  /**
+   * True iff a turn-keyed `completed` sentinel is present whose turn_id/run_id/
+   * nonce match the owning attempt's CURRENT launch generation. The single
+   * acceptance signal for a turn-owned run (closes the stale-sentinel + presence
+   * -only phantom-completion holes).
+   */
+  turn_keyed_completed: boolean;
   /** Worker wrote a `heartbeat` (work_loop_reached) at least once. */
   heartbeat_exists: boolean;
   /** Age of the heartbeat in ms (undefined when no heartbeat). */
@@ -266,9 +281,50 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
     if (lastFs !== undefined) fs_activity_age_ms = now - lastFs;
   } catch { /* defensive */ }
 
+  // pln#630 PR2b-c (§13 R3) — read-strict gate. A run owned by a turn-attempt
+  // reservation is completed ONLY on turn-keyed evidence: a `completed` sentinel
+  // body whose turn_id/run_id/nonce match the attempt's CURRENT launch
+  // generation. A bare assignment-keyed presence sentinel — or a stale prior
+  // generation's body — never counts (closes phantom-completion). Legacy runs
+  // (no owning reservation) keep presence-based acceptance.
+  let turn_owned = false;
+  let turn_keyed_completed = false;
+  try {
+    const reservation = findReservationByRunId(run.id, cwd);
+    if (reservation) {
+      turn_owned = true;
+      const bodies = readCompletionSignals(signalRoot, run.assignment_id);
+      // Evidence must be turn-keyed AND carry the RIGHT status (a `.completed`
+      // file whose body says status:'failed' is not completion evidence —
+      // read-strict trusts the body, not the filename, review PR2b-c #C2).
+      const matchedCompleted = bodies.completed !== undefined
+        && bodies.completed.status === 'completed'
+        && evidenceMatchesAttempt(reservation, bodies.completed);
+      const matchedFailed = bodies.failed !== undefined
+        && bodies.failed.status === 'failed'
+        && evidenceMatchesAttempt(reservation, bodies.failed);
+      if (matchedCompleted && matchedFailed) {
+        // §13 R4 — a completed+failed contradiction WITHHOLDS both (never a
+        // silent accept). Conflict-event journaling is deferred to
+        // reconcileTurn (PR3); collectEvidence stays side-effect-free.
+        turn_keyed_completed = false;
+        failed_signal = false;
+      } else {
+        turn_keyed_completed = matchedCompleted;
+        // Read-strict governs FAILURE too for a turn-owned run: override the
+        // presence-based failed_signal so a stale/legacy bare `.failed` marker
+        // cannot phantom-FAIL a healthy generation (symmetric to completed,
+        // review PR2b-c #B). A genuine death with no turn-keyed evidence still
+        // fails via the process-dead + stale path below.
+        failed_signal = matchedFailed;
+      }
+    }
+  } catch { /* defensive — fall back to legacy (non-turn-owned) behavior */ }
+
   return {
     age_ms, has_post_start_commit, claim_released, assignment_completed, process_alive,
     completed_signal, failed_signal, heartbeat_exists, heartbeat_age_ms, fs_activity_age_ms,
+    turn_owned, turn_keyed_completed,
   };
 }
 
@@ -311,6 +367,12 @@ function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string): vo
 }
 
 function anyCompletionEvidence(evidence: ReconcileEvidence): boolean {
+  // pln#630 PR2b-c (§13 R3): a turn-owned run is completed ONLY on turn-keyed
+  // evidence — never a bare presence sentinel or an assignment-keyed proxy
+  // (claim_released / assignment_completed / post_start_commit). This is the
+  // read-strict split that closes the stale-sentinel + presence-only
+  // phantom-completion holes. Legacy (non-turn-owned) runs are unchanged.
+  if (evidence.turn_owned) return evidence.turn_keyed_completed;
   return evidence.completed_signal
     || evidence.has_post_start_commit
     || evidence.claim_released
@@ -422,7 +484,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     const evidence: ReconcileEvidence = {
       age_ms: 0, has_post_start_commit: false, claim_released: false,
       assignment_completed: false, process_alive: undefined,
-      completed_signal: false, failed_signal: false, heartbeat_exists: false,
+      completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false,
     };
     return {
       run_id: runId, action: 'no_op', reason: 'run not found', evidence,
@@ -563,7 +625,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
     const evidence: ReconcileEvidence = {
       age_ms: 0, has_post_start_commit: false, claim_released: false,
       assignment_completed: false, process_alive: undefined,
-      completed_signal: false, failed_signal: false, heartbeat_exists: false,
+      completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false,
     };
     return {
       run_id: runId, action: 'no_op', reason: 'run not found', evidence,
@@ -727,7 +789,7 @@ export function reconcileAllOpenRuns(
       } catch {
         results.push({
           run_id: run.id, action: 'no_op', reason: 'reconcile threw — skipped',
-          evidence: { age_ms: 0, has_post_start_commit: false, claim_released: false, assignment_completed: false, process_alive: undefined, completed_signal: false, failed_signal: false, heartbeat_exists: false },
+          evidence: { age_ms: 0, has_post_start_commit: false, claim_released: false, assignment_completed: false, process_alive: undefined, completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false },
           previous_status: run.status, current_status: run.status,
         });
       }
