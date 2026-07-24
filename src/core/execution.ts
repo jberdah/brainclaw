@@ -19,6 +19,7 @@ import {
   type ExecutionAdapter,
   type SpawnCapability,
   type SpawnResult,
+  type TurnEcho,
 } from './execution-adapters.js';
 
 // ── Types ───────────────────────────────────────────────────
@@ -225,6 +226,11 @@ export async function attemptExecution(
      * unaffected.
      */
     requireWorktree?: boolean;
+    /**
+     * pln#630 PR2c — turn-attempt correlation for the ack-wrap completion
+     * sentinel (turn-owned dispatch). Flows to the adapter's buildAckWrapCommand.
+     */
+    turnEcho?: TurnEcho;
   },
 ): Promise<ExecutionResult> {
   const adapter = options.adapter ?? defaultExecutionAdapter;

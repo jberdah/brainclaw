@@ -247,6 +247,20 @@ export function deriveChildIds(turnId: string): { assignment_id: string; run_id:
   return { assignment_id: `asgn_${h('assignment')}`, run_id: `run_${h('run')}` };
 }
 
+/**
+ * DETERMINISTIC turn_id from (loop_id, slot_id, iteration) — pln#630 PR2c (§13
+ * A2). A duplicate dispatch of the same slot in the same iteration re-derives
+ * the SAME turn_id, so reserve() hits `reservation_exists` and the caller adopts
+ * the existing attempt instead of minting a second one — the closure for
+ * double-spawn-per-slot (a random turn_id would let two concurrent dispatches
+ * both reserve+arm+consume+spawn the same slot). `tat_` prefix matches the
+ * attempt-id convention.
+ */
+export function deriveTurnId(loopId: string, slotId: string, iteration: number): string {
+  const h = crypto.createHash('sha256').update(`${loopId}:${slotId}:${iteration}`).digest('hex').slice(0, 16);
+  return `tat_${h}`;
+}
+
 /* ============================ persistence ================================= */
 
 function readReservation(turnId: string, cwd?: string): TurnReservation | undefined {
