@@ -39,7 +39,7 @@ import { switchProject } from './switch.js';
 import { assessBootstrapNeed, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation } from '../core/setup-flow.js';
 import { WorkRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
-import { sweepDeadPidRunningAgentRunsAtRead } from '../core/agentrun-reconciler.js';
+import { sweepDeadPidRunningAgentRunsAtRead, sweepTurnOwnedPreRunLeaseAtRead } from '../core/agentrun-reconciler.js';
 import { bumpActiveAssignmentHeartbeat } from '../core/assignments.js';
 import {
   handleBclawAckMessage,
@@ -2247,6 +2247,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
 
   if ((payload.name === 'bclaw_find' || payload.name === 'bclaw_get') && payload.args.entity === 'agent_run') {
     try { sweepDeadPidRunningAgentRunsAtRead(cwd); } catch { /* best-effort */ }
+    // pln#630 PR2c-lease: converge turn-owned runs still `created`/`launching`
+    // on their dispatch/launch lease (inert until live turn-owned dispatch).
+    try { sweepTurnOwnedPreRunLeaseAtRead(cwd); } catch { /* best-effort */ }
   }
 
   // ── Delegate to inner handler ───────────────────────────────────────────────
