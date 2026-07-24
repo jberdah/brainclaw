@@ -136,8 +136,15 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
       // through to the fail-closed consume path (we may still legitimately win
       // the fence if the owner reserved-but-never-crossed; otherwise denied).
     } else {
-      // Any other reserve failure happened BEFORE identity was claimed → legacy.
-      return { kind: 'legacy' };
+      // FAIL-CLOSED (review Finding 1): any other reserve outcome is
+      // INDETERMINATE — a lock timeout (a live holder mid-critical-section),
+      // lock-lost, or unknown error does NOT prove that no identity was claimed.
+      // Degrading to `legacy` here would spawn an ungated worker beside a
+      // reservation that may well exist — the exact concurrent-dispatch
+      // double-spawn MUST-FIX 1 closes. (A definitively pre-identity error is
+      // unreachable here: the lease we build is always parseable, and
+      // loop-not-found is handled before reserve.)
+      return { kind: 'denied', reason: `reserve indeterminate — fail-closed (no legacy fallback): ${err instanceof Error ? err.message : String(err)}` };
     }
   }
 
@@ -350,9 +357,15 @@ export async function dispatchReviewLoopTurn(
         // The exactly-once fence says this dispatch is NOT the spawner (adopted /
         // crossed / revoked / lease-expired). MUST NOT spawn AND MUST NOT fall back
         // to legacy — a legacy spawn beside the live reservation is the double-spawn
-        // hole the fence exists to close (dec#144 MUST-FIX 1). Release our (now
-        // unused) coordinator claim so it does not orphan, and stop here.
-        try { releaseClaim(claimResult.claimId, cwd); } catch { /* best-effort GC */ }
+        // hole the fence exists to close (dec#144 MUST-FIX 1).
+        // Release ONLY a claim THIS dispatch actually created (review Finding 2):
+        // createCoordinatorClaim reuses an existing scope+agent claim, which
+        // belongs to the WINNING dispatch (its slot/run/assignment bind to it) —
+        // releasing that shared claim would sabotage the winner. A freshly-created
+        // (non-reused) claim is genuinely ours and unused now, so GC it.
+        if (!claimResult.reusedExisting) {
+          try { releaseClaim(claimResult.claimId, cwd); } catch { /* best-effort GC */ }
+        }
         result.execution_status = 'inbox_only';
         result.error = prep.reason;
         return result;

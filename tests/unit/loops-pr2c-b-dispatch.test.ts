@@ -11,6 +11,8 @@ import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant,
 } from '../../src/core/loops/attempt-reservation.js';
 import { loadAgentRun, listAgentRuns } from '../../src/core/agentruns.js';
+import { acquireLock } from '../../src/core/loops/lock.js';
+import { memoryDir } from '../../src/core/io.js';
 
 // pln#630 PR2c-b (dec#144) — coordinator-inline-consume: the exactly-once turn
 // machine wired into review dispatch. prepareTurnOwnedReviewDispatch runs the
@@ -117,5 +119,26 @@ describe('PR2c-b prepareTurnOwnedReviewDispatch (pln#630 dec#144)', () => {
     assert.equal(prep.kind, 'legacy', 'a pre-identity failure degrades to the legacy path');
     // No reservation was created for a would-be turn_id.
     assert.equal(getReservation(deriveTurnId('lop_doesnotexist', SLOT, 0), cwd), undefined);
+  });
+
+  it('DENIED (not legacy) when reserve is INDETERMINATE — a held reservation lock (review Finding 1)', () => {
+    // A live holder of the per-turn reservation lock makes reserve() time out
+    // (LockTimeoutError), which is NOT proof that no identity exists. Degrading to
+    // `legacy` here would spawn a second, ungated worker beside a reservation that
+    // may well exist → double-spawn. It MUST fail closed (denied).
+    const loopId = openReviewLoop(cwd);
+    const turnId = deriveTurnId(loopId, SLOT, 0);
+    const lockPath = path.join(memoryDir(cwd), 'loops', 'reservations', 'locks', `${turnId}.lock`);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    // Hold the lock (this process, alive → not stale) so reserve's acquireLock
+    // exhausts its backoff budget and throws LockTimeoutError.
+    const held = acquireLock({ lockPath, agentId: 'other-holder', intent: 'reservation', maxMutationDurationMs: 30_000 });
+    try {
+      const prep = prepareTurnOwnedReviewDispatch(prepInput(cwd, loopId));
+      assert.equal(prep.kind, 'denied', 'an indeterminate reserve must fail closed, never legacy');
+      if (prep.kind === 'denied') assert.match(prep.reason, /indeterminate|fail-closed/);
+    } finally {
+      held.release();
+    }
   });
 });
