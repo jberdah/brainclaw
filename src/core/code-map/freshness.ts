@@ -16,6 +16,7 @@
  */
 import crypto from 'node:crypto';
 import type {
+  CoarseFreshness,
   CodeLang,
   ExtractorConfig,
   FileShard,
@@ -23,6 +24,31 @@ import type {
   FreshnessStatus,
   Manifest,
 } from './types.js';
+
+/**
+ * pln#601 — collapse the detailed 7-value {@link FreshnessStatus} into the coarse,
+ * surface-uniform signal (`fresh|stale|partial|missing`). Every `stale_*` variant
+ * rolls up to `stale`; `missing_index` → `missing`; `partial`/`fresh` pass through.
+ * This is the SINGLE definition of the rollup so no surface can disagree.
+ */
+export function coarseFreshness(status: FreshnessStatus): CoarseFreshness {
+  switch (status) {
+    case 'fresh':
+      return 'fresh';
+    case 'partial':
+      return 'partial';
+    case 'missing_index':
+      return 'missing';
+    default:
+      // stale_changed_files | stale_extractor | stale_grammar | stale_git_head
+      return 'stale';
+  }
+}
+
+/** pln#601 — stamp/refresh a badge's `coarse` rollup from its (possibly just-adjusted) status. */
+export function withCoarse(b: FreshnessBadge): FreshnessBadge {
+  return { ...b, coarse: coarseFreshness(b.status) };
+}
 
 /** Stable serialization: sort object keys recursively so hashing is order-independent. */
 function stableStringify(value: unknown): string {
@@ -162,10 +188,11 @@ export function applyGitHeadDrift(
   indexHead: string | null | undefined,
   currentHead: string | null | undefined,
 ): FreshnessBadge {
-  if (!indexHead || !currentHead || indexHead === currentHead) return badge;
+  if (!indexHead || !currentHead || indexHead === currentHead) return withCoarse(badge);
   const status: FreshnessStatus = badge.status === 'fresh' ? 'stale_git_head' : badge.status;
   return {
     status,
+    coarse: coarseFreshness(status),
     details: {
       ...badge.details,
       git_head_changed: { index_head: indexHead, current_head: currentHead },

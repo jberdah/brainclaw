@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { hashContent } from './extractor.js';
+import { coarseFreshness } from './freshness.js';
 import {
   readImportsIndex,
   readManifest,
@@ -230,7 +231,7 @@ function deriveBadge(
   // <index_status>, this call's spot-check <status>".
   if (status !== base) details.index_status = base;
   void hadConfidentMatch;
-  return { status, details };
+  return { status, coarse: coarseFreshness(status), details };
 }
 
 // --- find() (spec §12.1) ---
@@ -274,20 +275,49 @@ function queryTokens(query: string): string[] {
 }
 
 /**
- * Score a symbol index entry against the query. Exact (full-query) token match
- * scores highest; a prefix/substring match scores lower. Exported symbols and
- * components/hooks get a small boost (these are what agents most want to find).
+ * pln#601 — normalize an identifier to a separator/case-INSENSITIVE canonical
+ * form (strip `_`, `-`, `.`, camelCase boundaries collapse to nothing; lowercase).
+ * `EntityRegistry`, `ENTITY_REGISTRY`, and `entity-registry` all → `entityregistry`.
+ * Without this, `scoreEntry` compared raw-lowercased strings, so a Pascal-case
+ * query `EntityRegistry` failed to exact/prefix/substring-match the snake_case
+ * `ENTITY_REGISTRY` and dropped it to the sub-token floor (score 1) alongside 19
+ * unrelated `*Registry` symbols — the Fable-audit "all results score 1 → the agent
+ * re-greps" defect that undercuts the whole "stop grepping blind" value prop.
  */
-function scoreEntry(entry: SymbolIndexEntry, query: string): number {
-  const q = query.toLowerCase();
-  const name = entry.name.toLowerCase();
+function normIdent(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/** pln#601 — a path that is a test/spec file (its symbols must not outrank the real def). */
+function isTestPath(p: string): boolean {
+  return (
+    /(?:^|[\\/])(?:tests?|__tests__|specs?|__mocks__)[\\/]/i.test(p) ||
+    /[._-](?:test|spec)\.[cm]?[jt]sx?$/i.test(p)
+  );
+}
+
+/**
+ * Score a symbol index entry against the query. Matching is separator/case
+ * INSENSITIVE (pln#601): an exact NORMALIZED match scores highest, then prefix,
+ * then substring, then the sub-token floor. Exported symbols + components/hooks
+ * get a small boost; test-file symbols are biased DOWN so a test helper never
+ * outranks the real definition of the same name (the Fable-audit brief-noise
+ * companion to the find defect). Exported for focused ranking tests.
+ */
+export function scoreEntry(entry: SymbolIndexEntry, query: string): number {
+  const q = normIdent(query);
+  const name = normIdent(entry.name);
   let score = 0;
-  if (name === q) score += 10;
-  else if (name.startsWith(q)) score += 6;
-  else if (name.includes(q)) score += 3;
-  else score += 1; // matched only via a sub-token bucket
+  if (q.length === 0) score += 1;
+  else if (name === q) score += 10;         // exact, style-insensitive
+  else if (name.startsWith(q)) score += 6;  // prefix
+  else if (name.includes(q)) score += 3;    // substring
+  else score += 1;                          // matched only via a sub-token bucket
   score *= entry.score_hint; // exported (1.0) vs internal (0.8)
   if (entry.subtype === 'component' || entry.subtype === 'hook') score += 1;
+  // pln#601 — source over test: a test/spec symbol of the same name must not
+  // outrank the real definition (keeps find/brief pointing at source first).
+  if (isTestPath(entry.path)) score *= 0.4;
   return score;
 }
 
@@ -330,7 +360,7 @@ export function find(query: string, limit: number | undefined, ctx: QueryContext
     return {
       query,
       matches: [],
-      freshness_badge: { status: 'missing_index', details: { hint: 'run refresh' } },
+      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
     };
   }
 
@@ -570,6 +600,44 @@ function rankFiles(
   );
 }
 
+/**
+ * pln#601 — reserve most of the §9 reading list for SOURCE files. On a symbol with
+ * many test importers, the reverse-dependent test files (blast radius, +5 each) can
+ * fill the entire {@link BRIEF_FILE_CAP} and crowd out the source files an agent needs
+ * to understand the symbol — the Fable-audit brief-noise defect. At most `maxTest`
+ * test files (~1/4 of the cap, min 2) are admitted UNLESS there aren't enough non-test
+ * files to fill the cap, in which case the deferred tests backfill the empty slots so
+ * the list is never artificially short. Defining files ARE the target and are never
+ * counted as noise (a symbol legitimately defined in a test file still leads the list).
+ * Input is pre-sorted by score; output preserves that order within each bucket.
+ */
+export function reserveSourceSlots(
+  ranked: RankedFile[],
+  cap: number,
+  definingPaths: Set<string>,
+): RankedFile[] {
+  const maxTest = Math.max(2, Math.floor(cap / 4)); // e.g. 3 of 12
+  const out: RankedFile[] = [];
+  const overflowTests: RankedFile[] = [];
+  let testsIncluded = 0;
+  for (const rf of ranked) {
+    if (out.length >= cap) break;
+    const isNoise = isTestPath(rf.path) && !definingPaths.has(rf.path);
+    if (isNoise && testsIncluded >= maxTest) {
+      overflowTests.push(rf);
+      continue;
+    }
+    out.push(rf);
+    if (isNoise) testsIncluded++;
+  }
+  // Non-test ran out before the cap → backfill the empty slots with deferred tests.
+  for (const rf of overflowTests) {
+    if (out.length >= cap) break;
+    out.push(rf);
+  }
+  return out;
+}
+
 /** Build a node-id → symbol index entry map (deduped; entries repeat across token buckets). */
 function buildNodeIdIndex(symbolsIndex: SymbolsIndex): Map<string, SymbolIndexEntry> {
   const out = new Map<string, SymbolIndexEntry>();
@@ -684,7 +752,7 @@ export function brief(
       target,
       suggested_files_to_read: [],
       related_memory: [],
-      freshness_badge: { status: 'missing_index', details: { hint: 'run refresh' } },
+      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
     };
   }
   const importsIndex = readImportsIndex(ctx.cwd, ctx.preferredDirName);
@@ -756,7 +824,9 @@ export function brief(
   }
 
   const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
-  const capped = confident.slice(0, cap);
+  // pln#601 — reserve source slots so test importers can't crowd out the source
+  // files the agent needs (defining files are the target, never counted as noise).
+  const capped = reserveSourceSlots(confident, cap, definingPaths);
 
   // Related memory (spec §11): match by the candidate paths + symbol names.
   const candidatePaths = capped.map((f) => f.path);

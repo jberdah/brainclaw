@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { readManifest, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
-import { applyGitHeadDrift } from './freshness.js';
+import { applyGitHeadDrift, withCoarse } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
 import { defaultMemoryReader } from './memory-reader.js';
 import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
@@ -146,7 +146,9 @@ export interface CodeQueryBackend {
 }
 
 function badge(status: FreshnessStatus, details: Record<string, unknown> = {}): FreshnessBadge {
-  return { status, details };
+  // pln#601 — stamp the coarse rollup at construction so every backend-built badge
+  // (status, missing_index fallbacks, find/brief base) carries it uniformly.
+  return withCoarse({ status, details });
 }
 
 /**
@@ -332,10 +334,7 @@ export class JsonlBackend implements CodeQueryBackend {
     const ctx = this.queryContext(input);
     const out = runFind(input.query, input.limit, ctx);
     const manifest = readManifest(input.cwd, input.preferredDirName);
-    const base: FreshnessBadge = {
-      status: out.freshness_badge.status,
-      details: out.freshness_badge.details,
-    };
+    const base: FreshnessBadge = badge(out.freshness_badge.status, out.freshness_badge.details);
     return {
       query: out.query,
       matches: out.matches,
@@ -352,10 +351,7 @@ export class JsonlBackend implements CodeQueryBackend {
     const ctx = this.queryContext(input);
     const out = runBrief(input.target, input.limit, ctx, this.memoryReader);
     const manifest = readManifest(input.cwd, input.preferredDirName);
-    const base: FreshnessBadge = {
-      status: out.freshness_badge.status,
-      details: out.freshness_badge.details,
-    };
+    const base: FreshnessBadge = badge(out.freshness_badge.status, out.freshness_badge.details);
     return {
       target: out.target,
       suggested_files_to_read: out.suggested_files_to_read,
