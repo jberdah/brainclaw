@@ -11,6 +11,8 @@ using Id = int;
 enum Color { Red, Green };
 enum class Mode { Fast, Slow };
 
+union Value { int i; float f; };
+
 struct Point {
   int x;
   int y;

@@ -87,6 +87,8 @@ const queries: QueryDeclarations = {
     { capture: 'definition.class.name', field: 'name' },
     { capture: 'definition.enum.node', field: 'node', subtype: 'enum' },
     { capture: 'definition.enum.name', field: 'name' },
+    { capture: 'definition.cpp.union.node', field: 'node', subtype: 'cpp.union' },
+    { capture: 'definition.cpp.union.name', field: 'name' },
     { capture: 'definition.namespace.node', field: 'node', subtype: 'namespace' },
     { capture: 'definition.namespace.name', field: 'name' },
     { capture: 'definition.function.node', field: 'node', subtype: 'function' },
@@ -102,7 +104,7 @@ const queries: QueryDeclarations = {
 };
 
 const vocabulary: ProviderVocabularyDeclaration = {
-  nodeSubtypes: ['class', 'enum', 'namespace', 'function', 'method', 'macro', 'type'],
+  nodeSubtypes: ['class', 'enum', 'cpp.union', 'namespace', 'function', 'method', 'macro', 'type'],
   edgeKinds: ['contains', 'defines', 'imports'],
   captureMap: queries.captureMap,
 };

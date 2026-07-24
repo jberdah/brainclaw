@@ -49,6 +49,13 @@
   name: (type_identifier) @definition.enum.name
   body: (_)) @definition.enum.node
 
+; union → cpp.union (namespaced, mirrors the C provider's c.union). body-guarded
+; so a union type reference / forward decl is not captured. Added because C++ wins
+; the shared `.h` extension, so header unions must be covered here too.
+(union_specifier
+  name: (type_identifier) @definition.cpp.union.name
+  body: (_)) @definition.cpp.union.node
+
 ; Named namespaces only (anonymous namespaces have no `name:` and are skipped). The
 ; name is a single `namespace_identifier` or, for `namespace a::b { }`, a
 ; `nested_namespace_specifier` whose text is the joined path `a::b`.

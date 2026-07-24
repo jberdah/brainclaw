@@ -72,6 +72,7 @@ describe('code-map C++ provider oracle', () => {
       'type:Id',
       'enum:Color',
       'enum:Mode',
+      'cpp.union:Value',
       'class:Point',
       'class:Config',
       'method:size',
