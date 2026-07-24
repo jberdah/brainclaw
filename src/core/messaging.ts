@@ -95,8 +95,14 @@ export interface SendMessageResult {
  * never again store a multi-hundred-KB persona/CoDev dump (root cause: one rfc
  * message reached 960 KB). Large content belongs in a dedicated artifact store
  * (Phase C), with the message carrying only a summary + pointer.
+ *
+ * Set ABOVE the largest *legitimate* message so real traffic is never
+ * corrupted: the loop brief assembler already bounds its memory bundle to
+ * DEFAULT_MAX_CHARS = 48 000 (brief-assembly.ts), and the coordinate dispatch
+ * envelope wraps that up to ~54 KB. 128 KB leaves ~2.4× headroom over that
+ * while still catching the ~960 KB dump class an order of magnitude below it.
  */
-export const MAX_INLINE_MESSAGE_CHARS = 32_768;
+export const MAX_INLINE_MESSAGE_CHARS = 131_072;
 
 /** Truncate an over-cap body, appending a marker that names the original size. */
 function capMessageBody(text: string): { text: string; truncated: boolean; originalLength: number } {
