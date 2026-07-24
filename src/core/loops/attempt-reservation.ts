@@ -126,6 +126,7 @@ export class ReservationStateError extends Error {
     public readonly code:
       | 'reservation_not_found'
       | 'reservation_exists'
+      | 'invalid_lease_deadline'
       | 'committed_not_abortable'
       | 'aborted_not_committable'
       | 'not_dispatchable',
@@ -297,6 +298,12 @@ export function getReservation(turnId: string, cwd?: string): TurnReservation | 
  */
 export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
   const agentId = input.agent_id ?? input.agent;
+  // Fail-CLOSED at the boundary (review PR2b-b #1): an unparseable dispatch
+  // lease must be rejected here, so no committed reservation can ever carry a
+  // garbage lease that the armLaunch dispatch-lease gate would then skip.
+  if (!Number.isFinite(Date.parse(input.lease_deadline))) {
+    throw new ReservationStateError(input.turn_id, 'invalid_lease_deadline', `reserve: lease_deadline "${input.lease_deadline}" is not a parseable timestamp`);
+  }
   return withReservationLock(
     input.turn_id,
     agentId,
@@ -447,7 +454,15 @@ export function listReservations(filter: { decision?: ReservationDecision } = {}
 /* ============================ launch-grant fence (PR2a, dec#138) ========== */
 
 export interface ArmLaunchInput {
-  token: string;
+  /**
+   * Fence token + evidence nonce for this generation (§13 R2). OMIT in
+   * production so armLaunch mints a cryptographically-random, generation-unique
+   * value — evidenceMatchesAttempt's "stale prior-generation can never match"
+   * guarantee depends on distinct tokens per generation. An explicitly-supplied
+   * token is honored (tests / explicit control); the caller then owns
+   * per-generation uniqueness.
+   */
+  token?: string;
   epoch: number;
   lease_deadline: string;
 }
@@ -478,9 +493,14 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
     // this, a supervisor arriving long after the lease could arm a fresh grant
     // and spawn (phantom-spawn-after-lease). The reservation stays committed but
     // reserved_never_launched: it simply never spawns.
+    // Fail-CLOSED (review PR2b-b #1): a non-parseable dispatch lease must refuse
+    // arm, not skip the gate — otherwise a garbage lease reopens the very
+    // phantom-spawn-after-lease this guard closes (the launch-lease check below
+    // is already fail-closed; the two must be symmetric). reserve() also
+    // validates the lease at the boundary, so this is defense-in-depth.
     const dispatchLeaseMs = Date.parse(record.lease_deadline);
-    if (Number.isFinite(dispatchLeaseMs) && Date.parse(nowISO()) >= dispatchLeaseMs) {
-      throw new LaunchFenceError(turnId, 'dispatch_lease_expired', `armLaunch: dispatch lease ${record.lease_deadline} for ${turnId} has passed — reserved_never_launched, must not spawn`);
+    if (!Number.isFinite(dispatchLeaseMs) || Date.parse(nowISO()) >= dispatchLeaseMs) {
+      throw new LaunchFenceError(turnId, 'dispatch_lease_expired', `armLaunch: dispatch lease ${record.lease_deadline} for ${turnId} is unparseable or has passed — reserved_never_launched, must not spawn`);
     }
     // PR2a review (BLOCKING): reject a non-parseable lease at arm time — an
     // invalid string makes Date.parse NaN and `now > NaN` false, so the grant
@@ -488,9 +508,14 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
     if (!Number.isFinite(Date.parse(input.lease_deadline))) {
       throw new LaunchFenceError(turnId, 'lease_invalid', `armLaunch: lease_deadline "${input.lease_deadline}" is not a parseable timestamp`);
     }
+    // Nonce = fence token + evidence key (§13 R2). Auto-generate a random,
+    // generation-unique value unless the caller supplied one — a distinct token
+    // per generation is what lets evidenceMatchesAttempt reject stale
+    // prior-generation evidence (review PR2b-b #2).
+    const token = input.token ?? crypto.randomUUID();
     const next: TurnReservation = {
       ...record,
-      launch: { status: 'armed', token: input.token, epoch: input.epoch, lease_deadline: input.lease_deadline, armed_at: nowISO() },
+      launch: { status: 'armed', token, epoch: input.epoch, lease_deadline: input.lease_deadline, armed_at: nowISO() },
     };
     fence();
     writeReservation(next, cwd);

@@ -17,6 +17,7 @@ import {
   deriveChildIds,
   getReservation,
   LaunchFenceError,
+  ReservationStateError,
   type ReserveInput,
 } from '../../src/core/loops/attempt-reservation.js';
 
@@ -241,6 +242,36 @@ describe('PR2b-b — dispatch-lease gate + evidence matcher (pln#630 §13 R5/R3)
     revokeLaunchGrant(t, 1, 'superseded', cwd);
     const revoked = getReservation(t, cwd)!;
     assert.equal(evidenceMatchesAttempt(revoked, { turn_id: t, run_id: deriveChildIds(t).run_id, nonce: 'g' }), false, 'revoked generation never matches');
+  });
+
+  it('evidenceMatchesAttempt matches in the CROSSED state (the real acceptance-time state)', () => {
+    const t = committed(cwd, 'tat_crossed_ev');
+    armLaunch(t, { token: 'gen-A', epoch: 1, lease_deadline: future() }, cwd);
+    consumeLaunchGrant(t, 'gen-A', 1, cwd); // → crossed
+    const r = getReservation(t, cwd)!;
+    assert.equal(r.launch?.status, 'crossed');
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: t, run_id: deriveChildIds(t).run_id, nonce: 'gen-A' }), true);
+  });
+
+  it('auto-generated tokens are distinct per generation → stale prior-generation evidence rejected (§13 R2)', () => {
+    const t = committed(cwd, 'tat_regen');
+    // OMIT the token → armLaunch mints a unique nonce.
+    const gen1 = armLaunch(t, { epoch: 1, lease_deadline: future() }, cwd);
+    const tokenA = gen1.launch!.token;
+    assert.ok(tokenA && tokenA.length >= 8, 'a random token was minted');
+    revokeLaunchGrant(t, 1, 'superseded', cwd);
+    const gen2 = armLaunch(t, { epoch: 2, lease_deadline: future() }, cwd);
+    const tokenB = gen2.launch!.token;
+    assert.notEqual(tokenA, tokenB, 'a fresh generation gets a fresh nonce');
+
+    const r = getReservation(t, cwd)!;
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: t, run_id: deriveChildIds(t).run_id, nonce: tokenA }), false, 'gen-1 nonce cannot match the live gen-2 attempt');
+    assert.equal(evidenceMatchesAttempt(r, { turn_id: t, run_id: deriveChildIds(t).run_id, nonce: tokenB }), true);
+  });
+
+  it('reserve REJECTS an unparseable dispatch lease (fail-closed boundary — review #1)', () => {
+    assert.throws(() => reserve({ ...reserveInput(cwd, 'tat_badlease'), lease_deadline: 'not-a-date' }, cwd),
+      (e: unknown) => e instanceof ReservationStateError && e.code === 'invalid_lease_deadline');
   });
 });
 
