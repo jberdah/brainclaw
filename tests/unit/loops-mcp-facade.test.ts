@@ -375,7 +375,10 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
 
   it('advance succeeds when expected_version matches', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'advance-cas-pass', agentId: 'agt_a' },
+      // ideation: its first phase (proposal) has no advance_gate, so this
+      // exercises the version-CAS mechanic without a phase gate interfering
+      // (pln#628 gave research an investigate advance_gate).
+      args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'advance-cas-pass', agentId: 'agt_a' },
       cwd,
     });
     const openedPayload = payload(opened.response.result);
@@ -396,7 +399,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
 
   it('advance returns version_conflict with actual_version when expected_version mismatches', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'advance-cas-fail', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'advance-cas-fail', agentId: 'agt_a' },
       cwd,
     });
     const openedPayload = payload(opened.response.result);
