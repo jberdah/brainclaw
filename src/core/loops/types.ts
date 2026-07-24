@@ -127,7 +127,7 @@ export type LoopPhase = z.infer<typeof LoopPhaseSchema> & {
 export const LoopIterationSchema = z.object({
   cycle: z.array(z.string().min(1)).min(1),
   max_iterations: z.number().int().positive(),
-  exit_when: z.enum(['critic_signal', 'no_new_critique_artifacts']),
+  exit_when: z.enum(['critic_signal', 'no_new_critique_artifacts', 'command_green']),
 });
 export type LoopIteration = z.infer<typeof LoopIterationSchema>;
 
@@ -360,9 +360,31 @@ export const REF_BASED_ARTIFACT_TYPES = new Set<string>([
  * is enforced. This preserves backward compatibility with proposal / critique
  * / revision / plan_draft / change_summary artifacts produced before pln#508.
  */
+/**
+ * pln#609 — implementation loop `verify_report` artifact body. Records the
+ * outcome of a verify command (tests/build/lint) for one execute↔verify
+ * iteration. `passed` is the single field the `command_green` iteration exit
+ * reads. Kept small (tails only) to fit LOOP_ARTIFACT_BODY_MAX_BYTES. In
+ * Increment 1 the report is produced by the verify turn (add_artifact); the
+ * engine-run execution seam (spawnSync, out of the loop lock) is Increment 2.
+ */
+export const VerifyReportBodySchema = z.object({
+  command: z.string().min(1),
+  exit_code: z.number().int().nullable(),
+  passed: z.boolean(),
+  duration_ms: z.number().int().nonnegative().optional(),
+  cwd: z.string().optional(),
+  timed_out: z.boolean().optional(),
+  stdout_tail: z.string().max(1024).optional(),
+  stderr_tail: z.string().max(1024).optional(),
+});
+export type VerifyReportBody = z.infer<typeof VerifyReportBodySchema>;
+
 export const KNOWN_ARTIFACT_BODY_SCHEMAS = {
   // inline JSON body: body = JSON.stringify({ ...fields per OperatorQuestionBodySchema })
   operator_question: OperatorQuestionBodySchema,
+  // inline JSON body: body = JSON.stringify({ ...fields per VerifyReportBodySchema })
+  verify_report: VerifyReportBodySchema,
 
   // inline JSON body: body = JSON.stringify({ ...fields per OperatorAnswerBodySchema })
   operator_answer: OperatorAnswerBodySchema,
@@ -828,15 +850,42 @@ export const DEFAULT_PROTOCOLS: Record<
     },
     stop_condition: { kind: 'artifact_produced', phase: 'synthesis', type: 'plan_draft' },
   },
+  // pln#609 — implementation loop v2. The loop ADDS to the dispatch pipeline
+  // what it lacked: a deterministic command_green gate + a bounded fix↔verify
+  // cycle + per-phase context sculpting. `bind` is an ENGINE action (bind
+  // plan+sequence and dispatch) not narration; execute↔verify iterates until
+  // the verify command is green (a passing verify_report this iteration) or
+  // the cycle cap is hit (→ handoff_ready with the red report → blocked).
   implementation: {
     phases: [
-      { name: 'sequence_build' },
-      { name: 'dispatch' },
-      { name: 'execute' },
-      { name: 'self_check' },
-      { name: 'handoff_ready' },
+      { name: 'bind', context_filter: ['plans', 'decisions', 'constraints', 'project_vision'] },
+      { name: 'execute', context_filter: ['decisions', 'constraints', 'traps', 'runtime_notes'] },
+      {
+        name: 'verify',
+        context_filter: ['traps', 'runtime_notes'],
+        // Cannot leave verify without having produced a verify_report THIS
+        // iteration — guards "narrated verify, didn't run it". Reuses the
+        // iteration-aware min_artifacts_by_type evaluator.
+        advance_gate: { kind: 'min_artifacts_by_type', type: 'verify_report', n: 1, scope: 'phase' },
+      },
+      { name: 'handoff_ready', context_filter: ['handoffs', 'plans'] },
     ],
-    stop_condition: { kind: 'artifact_produced', phase: 'handoff_ready', type: 'handoff' },
+    // execute ↔ verify bounded cycle; exit early when a passing verify_report
+    // exists in the current iteration (command_green).
+    iteration: {
+      cycle: ['execute', 'verify'],
+      max_iterations: 3,
+      exit_when: 'command_green',
+    },
+    // Mirrors review: handoff within budget → completed; cap exhausted without
+    // green → blocked (stopHitsMaxIterations).
+    stop_condition: {
+      kind: 'any',
+      conditions: [
+        { kind: 'artifact_produced', phase: 'handoff_ready', type: 'handoff' },
+        { kind: 'max_iterations', n: 3 },
+      ],
+    },
   },
   research: {
     phases: [{ name: 'investigate' }, { name: 'synthesize' }],

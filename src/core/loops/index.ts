@@ -45,6 +45,7 @@ export {
   artifactsInIteration,
   noNewCritiqueInIteration,
   hasCriticSignalInIteration,
+  hasPassingVerifyReportInIteration,
   type IterationProtocol,
   type NextPhaseDecision,
 } from './iteration-engine.js';
