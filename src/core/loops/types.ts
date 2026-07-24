@@ -887,12 +887,58 @@ export const DEFAULT_PROTOCOLS: Record<
       ],
     },
   },
+  // pln#628 PART 3 — research loop, ideation-shaped: investigate ↔ synthesize
+  // converges on a deliverable. NO max_iterations in the stop → research ALWAYS
+  // lands in `conclude` and completes with a synthesis (there is no "blocked"
+  // research outcome). exit_when=critic_signal: `synthesize` emits it when the
+  // question is judged answered (explicit sufficiency beats saturation-by-absence
+  // for open-ended research). Reuses existing machinery only.
   research: {
-    phases: [{ name: 'investigate' }, { name: 'synthesize' }],
-    stop_condition: { kind: 'manual' },
+    phases: [
+      {
+        name: 'investigate',
+        context_filter: ['plans', 'decisions', 'constraints', 'project_vision', 'candidates', 'runtime_notes', 'traps'],
+        // Don't synthesize an empty round: ≥1 finding gathered THIS iteration
+        // (iteration-aware phase scope) before advancing.
+        advance_gate: { kind: 'min_artifacts_by_type', type: 'finding', n: 1, scope: 'phase' },
+      },
+      { name: 'synthesize', context_filter: ['*'] },
+      { name: 'conclude', context_filter: ['*'] },
+    ],
+    iteration: { cycle: ['investigate', 'synthesize'], max_iterations: 3, exit_when: 'critic_signal' },
+    stop_condition: { kind: 'artifact_produced', phase: 'conclude', type: 'synthesis' },
   },
+  // pln#628 PART 3 — debug loop, implementation-shaped: "bug fixed" ⟺ "the
+  // reproducing command is now green" ⟺ a passing verify_report. hypothesize →
+  // isolate → fix repeats until the repro no longer reproduces (command_green)
+  // or the cycle cap is hit (→ handoff with the red report → blocked). Reuses
+  // command_green + verify_report; no new engine machinery.
   debug: {
-    phases: [{ name: 'reproduce' }, { name: 'hypothesize' }, { name: 'isolate' }, { name: 'fix' }],
-    stop_condition: { kind: 'manual' },
+    phases: [
+      {
+        name: 'reproduce',
+        context_filter: ['traps', 'runtime_notes', 'handoffs', 'plans'],
+        // Cannot start hypothesizing until a reliable repro exists.
+        advance_gate: { kind: 'artifact_produced', phase: 'reproduce', type: 'repro' },
+      },
+      { name: 'hypothesize', context_filter: ['decisions', 'constraints', 'traps', 'runtime_notes'] },
+      { name: 'isolate', context_filter: ['decisions', 'constraints', 'traps', 'runtime_notes'] },
+      {
+        name: 'fix',
+        context_filter: ['traps', 'runtime_notes', 'constraints'],
+        // Mirrors implementation's verify gate: cannot leave fix without having
+        // re-run the repro THIS iteration (iteration-aware phase scope).
+        advance_gate: { kind: 'min_artifacts_by_type', type: 'verify_report', n: 1, scope: 'phase' },
+      },
+      { name: 'handoff', context_filter: ['handoffs', 'plans'] },
+    ],
+    iteration: { cycle: ['hypothesize', 'isolate', 'fix'], max_iterations: 3, exit_when: 'command_green' },
+    stop_condition: {
+      kind: 'any',
+      conditions: [
+        { kind: 'artifact_produced', phase: 'handoff', type: 'handoff' },
+        { kind: 'max_iterations', n: 3 },
+      ],
+    },
   },
 };
