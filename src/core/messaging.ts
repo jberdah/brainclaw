@@ -84,6 +84,35 @@ export interface SendMessageResult {
   shortLabel: string;
   to: string;
   type: MessageType;
+  /** Set when the body was truncated at write time because it exceeded
+   *  MAX_INLINE_MESSAGE_CHARS (pln#627 Phase B). */
+  warning?: string;
+}
+
+/**
+ * Hard cap on the inline body persisted per inbox message (pln#627 Phase B).
+ * Bodies above this are truncated at write time and flagged — the inbox must
+ * never again store a multi-hundred-KB persona/CoDev dump (root cause: one rfc
+ * message reached 960 KB). Large content belongs in a dedicated artifact store
+ * (Phase C), with the message carrying only a summary + pointer.
+ *
+ * Set ABOVE the largest *legitimate* message so real traffic is never
+ * corrupted: the loop brief assembler already bounds its memory bundle to
+ * DEFAULT_MAX_CHARS = 48 000 (brief-assembly.ts), and the coordinate dispatch
+ * envelope wraps that up to ~54 KB. 128 KB leaves ~2.4× headroom over that
+ * while still catching the ~960 KB dump class an order of magnitude below it.
+ */
+export const MAX_INLINE_MESSAGE_CHARS = 131_072;
+
+/** Truncate an over-cap body, appending a marker that names the original size. */
+function capMessageBody(text: string): { text: string; truncated: boolean; originalLength: number } {
+  const originalLength = text.length;
+  if (originalLength <= MAX_INLINE_MESSAGE_CHARS) {
+    return { text, truncated: false, originalLength };
+  }
+  const marker = `\n\n[truncated at write: ${originalLength} chars exceeded the ${MAX_INLINE_MESSAGE_CHARS}-char inbox cap; full body not stored inline — persist large content in an artifact store and reference it here]`;
+  const keep = Math.max(0, MAX_INLINE_MESSAGE_CHARS - marker.length);
+  return { text: text.slice(0, keep) + marker, truncated: true, originalLength };
 }
 
 export function sendMessage(input: SendMessageInput, cwd: string): SendMessageResult {
@@ -91,6 +120,7 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
     const { id, short_label } = generateIdWithLabel('inbox_messages', cwd);
     const timestamp = nowISO();
     const resolvedTo = resolveAgentAlias(input.to);
+    const capped = capMessageBody(input.text);
 
     const message: InboxMessage = {
       id,
@@ -98,7 +128,8 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
       from: input.from,
       to: resolvedTo,
       type: input.type,
-      text: input.text,
+      text: capped.text,
+      ...(capped.truncated ? { truncated_at_write: true, original_text_length: capped.originalLength } : {}),
       ref: input.ref,
       payload: input.payload,
       scope: input.scope,
@@ -122,7 +153,15 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
     saveVersionedJsonFile('message' as VersionedDocumentType, path.join(dir, `${id}.json`), message);
     commitMemoryChange(`message ${id} sent to ${resolvedTo}`, cwd);
 
-    return { id, shortLabel: short_label, to: resolvedTo, type: input.type };
+    return {
+      id,
+      shortLabel: short_label,
+      to: resolvedTo,
+      type: input.type,
+      ...(capped.truncated
+        ? { warning: `Message body truncated at write: ${capped.originalLength} chars exceeded the ${MAX_INLINE_MESSAGE_CHARS}-char inbox cap. Store large content in an artifact store and send a pointer instead.` }
+        : {}),
+    };
   });
 }
 
@@ -138,6 +177,15 @@ export interface ReadInboxInput {
   limit?: number;
   offset?: number;
   markAsRead?: boolean;
+  /**
+   * Widen the default status filter to include done messages (pln#627 Phase A).
+   * When `status` is unset, the read serves only ACTIONABLE messages
+   * (pending + read); acknowledged + archived are hidden so the debris of
+   * dozens of processed messages never crowds out the live ones. Set
+   * `includeAll: true` to disable that default and return every status.
+   * Ignored when an explicit `status` is provided.
+   */
+  includeAll?: boolean;
 }
 
 export interface ReadInboxResult {
@@ -150,7 +198,15 @@ export interface ReadInboxResult {
 /** Apply all inbox filters (status, type, thread_id, claim_id) to a message list. */
 function applyInboxFilters(messages: InboxMessage[], input: ReadInboxInput): InboxMessage[] {
   let filtered = messages;
-  if (input.status) filtered = filtered.filter(m => m.status === input.status);
+  if (input.status) {
+    filtered = filtered.filter(m => m.status === input.status);
+  } else if (!input.includeAll) {
+    // Default = actionable only (pln#627 Phase A): hide acknowledged + archived
+    // so a long tail of processed messages can't bury the live ones. Callers
+    // opt back into the full set with includeAll, or target a done status
+    // explicitly with `status`.
+    filtered = filtered.filter(m => m.status === 'pending' || m.status === 'read');
+  }
   if (input.type) filtered = filtered.filter(m => m.type === input.type);
   if (input.thread_id) filtered = filtered.filter(m => m.thread_id === input.thread_id);
   if (input.claimId) {
@@ -162,6 +218,18 @@ function applyInboxFilters(messages: InboxMessage[], input: ReadInboxInput): Inb
   return filtered;
 }
 
+/**
+ * Filter + order a directory's messages for a read (pln#627 Phase A).
+ * Ordered newest-first by created_at so a bounded page always serves the most
+ * recent messages, not the oldest debris — loadMessagesFromDir returns disk
+ * order (oldest-first, trp#291), which would otherwise make slice(0, limit)
+ * page through ancient processed messages first.
+ */
+function loadMessagesForRead(dir: string, input: ReadInboxInput): InboxMessage[] {
+  const filtered = applyInboxFilters(loadMessagesFromDir(dir), input);
+  return filtered.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   const dir = agentInboxDir(input.agent, cwd);
 
@@ -170,7 +238,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   if (input.markAsRead) {
     return mutate({ cwd }, () => {
       // Fresh read inside lock
-      const messages = applyInboxFilters(loadMessagesFromDir(dir), input);
+      const messages = loadMessagesForRead(dir, input);
 
       const total = messages.length;
       const offset = input.offset ?? 0;
@@ -192,7 +260,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   }
 
   // Read-only path: no lock needed
-  const messages = applyInboxFilters(loadMessagesFromDir(dir), input);
+  const messages = loadMessagesForRead(dir, input);
 
   const total = messages.length;
   const offset = input.offset ?? 0;

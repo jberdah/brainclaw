@@ -35,6 +35,28 @@ export function responseFilePath(
   return path.join(responseDir(threadSlug, cwd), `round_${roundNumber}_${persona}.json`);
 }
 
+/**
+ * Persist a full CoDev/ideation phase body to the artifact store (pln#627
+ * Phase C) and return a repo-relative pointer. The inbox thread then carries
+ * only a bounded head + this pointer instead of a multi-hundred-KB rfc dump
+ * (root cause of the 3.8 MB inbox: full phase briefs persisted as messages).
+ * The `.brainclaw/coordination/ideation/<slug>/phases/` dir sits alongside the
+ * existing per-round `responses/` store so a thread's artifacts stay together.
+ */
+export function writePhaseArtifact(
+  threadSlug: string,
+  label: string,
+  text: string,
+  cwd?: string,
+): { path: string; relPath: string; charCount: number } {
+  const dir = path.join(memoryDir(cwd), 'coordination', 'ideation', sanitizeForPath(threadSlug), 'phases');
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${sanitizeForPath(label)}.md`);
+  fs.writeFileSync(filePath, text, 'utf8');
+  const relPath = path.relative(memoryDir(cwd), filePath).split(path.sep).join('/');
+  return { path: filePath, relPath, charCount: text.length };
+}
+
 export function writeResponse(
   threadSlug: string,
   roundNumber: number,

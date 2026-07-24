@@ -268,11 +268,13 @@ export function handleBclawSendMessage(args: Record<string, unknown>, ctx: McpWr
     }, cwd);
     appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: result.id, item_type: 'message', scope: to }, cwd);
     const threadInfo = threadId ? ` thread:${threadId}` : '';
+    const warningLine = result.warning ? `\n⚠ ${result.warning}` : '';
     return {
       response: toolResponse({
-        content: [{ type: 'text', text: `✔ Message sent: [${result.shortLabel}] ${msgType} → ${to}${threadInfo}` }],
+        content: [{ type: 'text', text: `✔ Message sent: [${result.shortLabel}] ${msgType} → ${to}${threadInfo}${warningLine}` }],
         message_id: result.id,
         thread_id: threadId,
+        ...(result.warning ? { warning: result.warning } : {}),
       }),
     };
   } catch (err: unknown) {

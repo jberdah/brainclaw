@@ -36,13 +36,16 @@ export function runInboxList(options: InboxListOptions): void {
 
   const effectiveCwd = cwd ?? process.cwd();
   const agent = options.agent ?? resolveCurrentAgentName(effectiveCwd) ?? 'unknown';
-  const status = options.all ? undefined : (options.status as MessageStatus | undefined) ?? 'pending';
+  // --all widens past the core actionable default (pln#627 Phase A); without
+  // includeAll, a bare undefined status now hides acknowledged + archived.
+  const includeAll = options.all === true;
+  const status = includeAll ? undefined : (options.status as MessageStatus | undefined) ?? 'pending';
   const msgType = options.type as MessageType | undefined;
   const threadId = options.thread;
 
   let messages: InboxMessage[];
   if (options.localOnly) {
-    const result = readInbox({ agent, status, type: msgType, thread_id: threadId, markAsRead: false }, effectiveCwd);
+    const result = readInbox({ agent, status, includeAll, type: msgType, thread_id: threadId, markAsRead: false }, effectiveCwd);
     messages = result.messages;
   } else {
     const chain = resolveStoreChain(effectiveCwd);
@@ -51,7 +54,7 @@ export function runInboxList(options: InboxListOptions): void {
     for (const store of chain) {
       try {
         // Fetch all messages from this store (no pagination limit)
-        const storeResult = readInbox({ agent, status, type: msgType, thread_id: threadId, markAsRead: false, limit: 1_000_000 }, store.cwd);
+        const storeResult = readInbox({ agent, status, includeAll, type: msgType, thread_id: threadId, markAsRead: false, limit: 1_000_000 }, store.cwd);
         for (const msg of storeResult.messages) {
           if (!seenIds.has(msg.id)) {
             seenIds.add(msg.id);
@@ -62,7 +65,7 @@ export function runInboxList(options: InboxListOptions): void {
     }
     // Fallback when no chain found
     if (messages.length === 0 && chain.length === 0) {
-      const result = readInbox({ agent, status, type: msgType, thread_id: threadId, markAsRead: false }, effectiveCwd);
+      const result = readInbox({ agent, status, includeAll, type: msgType, thread_id: threadId, markAsRead: false }, effectiveCwd);
       messages = result.messages;
     }
   }
@@ -187,6 +190,9 @@ export function runInboxSend(to: string, text: string, options: InboxSendOptions
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`✔ Message sent: [${result.shortLabel}] ${result.type} → ${result.to}`);
+      if (result.warning) {
+        console.warn(`⚠ ${result.warning}`);
+      }
     }
   } catch (err) {
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
