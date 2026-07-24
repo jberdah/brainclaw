@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
+import { complete_turn } from '../../src/core/loops/verbs.js';
 import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds,
@@ -118,5 +119,55 @@ describe('reconcileTurn §8', () => {
     const r = reconcileTurn({ turn_id: 'tat_nope', lane: { assignment_id: 'a', status: 'completed', summary: 's' } as LaneResult, cwd });
     assert.equal(r.reconciled, false);
     assert.match(r.reason, /unknown turn/);
+  });
+
+  // ── review-round fixes ──
+
+  it('crash-before-advance recovery: a terminal slot + open loop → reconcile re-attempts advance and CLOSES (Finding 1)', () => {
+    const { turnId, loopId, lane } = setup(cwd, 'approve');
+    // Simulate reconcile #1 crashing AFTER complete_turn (verdict recorded, slot
+    // done) but BEFORE advance: record the accepted verdict directly, leaving the
+    // loop OPEN.
+    complete_turn({ id: loopId, slot_id: 'lsl_r', actor: 'x', outcome: 'done', artifact: { phase: 'findings', type: 'verdict', body: 'accepted: recorded pre-crash' } }, cwd);
+    assert.equal(getLoop(loopId, cwd)!.status, 'open', 'loop still open (advance never ran)');
+    // reconcile #2 must NOT double-record and MUST close the loop.
+    const r = reconcileTurn({ turn_id: turnId, lane, cwd });
+    assert.equal(r.reconciled, true);
+    assert.equal(r.artifacts_added, 0, 'no re-record on a terminal slot');
+    assert.equal(r.auto_closed, true);
+    assert.ok(['closed', 'completed'].includes(getLoop(loopId, cwd)!.status));
+    // Exactly ONE verdict artifact (no duplicate).
+    assert.equal(getLoop(loopId, cwd)!.artifacts.filter((a) => a.type === 'verdict').length, 1);
+  });
+
+  it('request_changes reconciled twice → NO duplicate verdict artifact (Finding 2)', () => {
+    const { turnId, loopId, lane } = setup(cwd, 'request_changes');
+    reconcileTurn({ turn_id: turnId, lane, cwd });
+    const r2 = reconcileTurn({ turn_id: turnId, lane, cwd });
+    assert.equal(r2.reconciled, true);
+    assert.equal(r2.artifacts_added, 0, 'second reconcile records nothing');
+    const verdicts = getLoop(loopId, cwd)!.artifacts.filter((a) => a.type === 'verdict');
+    assert.equal(verdicts.length, 1, 'exactly one changes-requested verdict despite two reconciles');
+  });
+
+  it('oversized review_summary → body truncated, no throw, still closes (Finding 3)', () => {
+    const { turnId, loopId, lane } = setup(cwd, 'approve');
+    const hugeLane = { ...lane, review_summary: 'x'.repeat(9000) };
+    const r = reconcileTurn({ turn_id: turnId, lane: hugeLane, cwd });
+    assert.equal(r.reconciled, true, 'a huge summary must not throw out of reconcileTurn');
+    const verdict = getLoop(loopId, cwd)!.artifacts.find((a) => a.type === 'verdict')!;
+    assert.ok(Buffer.byteLength(verdict.body ?? '', 'utf8') <= 4096, 'verdict body capped to the schema limit');
+    assert.ok((verdict.body ?? '').startsWith('accepted'), 'truncation preserves the accepted prefix → still fires reviewer_green');
+    assert.equal(r.auto_closed, true);
+  });
+
+  it('lane completed + turn-keyed FAILED sentinel → conflict withheld (Finding 5)', () => {
+    const { turnId, runId, assignmentId, loopId, lane } = setup(cwd, 'approve');
+    // Only a failed sentinel (no completed sentinel), but the lane says completed.
+    writeCompletionSignal(cwd, assignmentId, { turn_id: turnId, run_id: runId, nonce: TOKEN, status: 'failed', at: 'f' });
+    const r = reconcileTurn({ turn_id: turnId, lane, cwd });
+    assert.equal(r.reconciled, false);
+    assert.equal(r.conflict, true);
+    assert.equal(getLoop(loopId, cwd)!.status, 'open');
   });
 });

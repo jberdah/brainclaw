@@ -1,5 +1,20 @@
+import { LOOP_ARTIFACT_BODY_MAX_BYTES } from './types.js';
 import type { LaneResult } from '../schema.js';
 import type { TurnReservation } from './attempt-reservation.js';
+
+/**
+ * Cap an artifact body to LOOP_ARTIFACT_BODY_MAX_BYTES (review Finding 3).
+ * `review_summary`/`summary` are worker-controlled and unbounded, but
+ * LoopArtifactSchema hard-rejects a body over the cap — an un-truncated body
+ * would make complete_turn throw and crash reconcileTurn. Byte-aware, drops any
+ * partial trailing multibyte char.
+ */
+function capBody(s: string): string {
+  if (Buffer.byteLength(s, 'utf8') <= LOOP_ARTIFACT_BODY_MAX_BYTES) return s;
+  const marker = '…[truncated]';
+  const room = LOOP_ARTIFACT_BODY_MAX_BYTES - Buffer.byteLength(marker, 'utf8');
+  return Buffer.from(s, 'utf8').subarray(0, room).toString('utf8').replace(/�+$/, '') + marker;
+}
 
 /**
  * Per-loop-kind result reducers (pln#630 §6).
@@ -59,9 +74,9 @@ export const reviewReducer: ResultReducer = (input, attempt) => {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: 'review lane completed without a review_verdict — cannot converge the loop' };
   }
   const summary = (lane.review_summary ?? '').trim();
-  const body = lane.review_verdict === 'approve'
+  const body = capBody(lane.review_verdict === 'approve'
     ? `accepted${summary ? `: ${summary}` : ''}`
-    : `changes-requested${summary ? `: ${summary}` : ''}`;
+    : `changes-requested${summary ? `: ${summary}` : ''}`);
   return {
     artifacts: [{ phase, type: 'verdict', body, produced_by: attempt.agent }],
     slot_outcome: 'done',
@@ -84,7 +99,7 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
   }
   return {
     artifacts: critiques.map((c) => ({
-      phase, type: 'critique', body: c.body, produced_by: attempt.agent,
+      phase, type: 'critique', body: capBody(c.body), produced_by: attempt.agent,
       ...(c.addresses_critique ? { addresses_critique: c.addresses_critique } : {}),
     })),
     slot_outcome: 'done',
@@ -104,7 +119,7 @@ export const defaultReducer: ResultReducer = (input, attempt) => {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: `lane status is ${lane.status}, not completed` };
   }
   return {
-    artifacts: [{ phase, type: 'lane_result', body: lane.summary, produced_by: attempt.agent }],
+    artifacts: [{ phase, type: 'lane_result', body: capBody(lane.summary), produced_by: attempt.agent }],
     slot_outcome: 'done',
   };
 };

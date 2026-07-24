@@ -101,18 +101,22 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     };
   }
 
-  // ── §13 R4 contradiction: a turn-keyed completed AND a turn-keyed failed sentinel
-  // both present → WITHHOLD convergence, journal a conflict (never silently accept). ──
+  // ── §13 R4 contradiction: a turn-keyed FAILED sentinel present alongside a
+  // completed result (the lane or a completed sentinel) → WITHHOLD convergence,
+  // journal a conflict (never silently accept). Compared against the LANE's
+  // completed status too (review Finding 5): a worker that wrote a completed
+  // LANE-RESULT then exited non-zero (turn-keyed failed sentinel) is a conflict,
+  // not a clean close. ──
   try {
     const bodies = readCompletionSignals(cwd ?? process.cwd(), reservation.child_ids.assignment_id);
     const matchedCompleted = bodies.completed?.status === 'completed' && evidenceMatchesAttempt(reservation, bodies.completed);
     const matchedFailed = bodies.failed?.status === 'failed' && evidenceMatchesAttempt(reservation, bodies.failed);
-    if (matchedCompleted && matchedFailed) {
+    if (matchedFailed && (matchedCompleted || lane.status === 'completed')) {
       try {
         createRuntimeEvent({
           agent: actor,
           event_type: 'run_blocked',
-          text: `reconcileTurn: turn ${turn_id} has a completed+failed contradiction — auto-stop WITHHELD (§13 R4), escalating to human`,
+          text: `reconcileTurn: turn ${turn_id} has a completed(lane/sentinel)+failed(sentinel) contradiction — auto-stop WITHHELD (§13 R4), escalating to human`,
           tags: ['loops', 'reconcile', 'conflict', 'turn-attempt'],
           assignment_id: reservation.child_ids.assignment_id,
           run_id: reservation.child_ids.run_id,
@@ -129,58 +133,85 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   const slot = loop.slots.find((s) => s.slot_id === reservation.slot_id);
   if (!slot) return { reconciled: false, reason: `slot ${reservation.slot_id} not in loop ${reservation.loop_id}` };
 
-  // ── Idempotency: a prior reconcile of THIS turn already converged the slot, or
-  // the loop is already terminal → no-op (any trigger may fire us repeatedly). ──
+  // A terminal loop already converged → idempotent no-op (any trigger may fire us).
   if (LOOP_TERMINAL.has(loop.status)) {
     return { reconciled: true, reason: `loop already ${loop.status} (idempotent no-op)`, loop_status: loop.status };
   }
+
+  // ── Idempotency (review Findings 1+2): a TERMINAL slot durably means this turn's
+  // verdict was already recorded — complete_turn sets the slot terminal ATOMICALLY
+  // with its artifact via the crash-atomic WAL, so a terminal slot is the
+  // recorded-marker (each new turn resets its slot to `assigned` first, so a
+  // terminal slot can only be THIS turn's own convergence). Re-running the reducer
+  // /complete_turn would double-record (Finding 2). So SKIP recording when
+  // terminal — but STILL fall through to advance below (Finding 1: a crash between
+  // complete_turn and advance must still close the loop on the next trigger). ──
   const slotTerminal = slot.status === 'done' || slot.status === 'failed' || slot.status === 'cancelled';
-  if (slotTerminal && slot.current_turn_id === turn_id) {
-    return { reconciled: true, reason: 'turn already reconciled (slot terminal)', slot_outcome: slot.status as 'done' | 'failed', loop_status: loop.status };
+  let slot_outcome: 'done' | 'failed';
+  let artifacts_added = 0;
+
+  if (slotTerminal) {
+    slot_outcome = slot.status === 'done' ? 'done' : 'failed';
+  } else {
+    // ── §6 reducer: validated result → loop artifacts + slot outcome. ──
+    const reducerInput: ReducerInput = { lane, phase: reservation.phase, critiques: input.critiques };
+    const reduced = reducerForKind(loop.kind)(reducerInput, reservation);
+    artifacts_added = reduced.artifacts.length;
+    slot_outcome = reduced.slot_outcome;
+
+    // Record artifacts + complete the turn (crash-atomic WAL via complete_turn).
+    // Guarded: a body-cap/schema error becomes a graceful reconciled:false rather
+    // than an unhandled throw out of reconcileTurn (review Finding 3 defense).
+    try {
+      const [primary, ...extras] = reduced.artifacts;
+      for (const a of extras) {
+        try { add_artifact({ id: loop.id, actor, artifact: { phase: a.phase, type: a.type, body: a.body, produced_by: a.produced_by } }, cwd); }
+        catch { /* an extra artifact failing must not abort convergence */ }
+      }
+      complete_turn({
+        id: loop.id,
+        slot_id: slot.slot_id,
+        actor,
+        outcome: reduced.slot_outcome,
+        failure_reason: reduced.failure_reason,
+        ...(primary ? { artifact: { phase: primary.phase, type: primary.type, body: primary.body } } : {}),
+      }, cwd);
+    } catch (err) {
+      return { reconciled: false, reason: `complete_turn failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
-  // ── §6 reducer: validated result → loop artifacts + slot outcome. ──
-  const reducerInput: ReducerInput = { lane, phase: reservation.phase, critiques: input.critiques };
-  const reduced = reducerForKind(loop.kind)(reducerInput, reservation);
-
-  // ── Record artifacts + complete the turn (crash-atomic WAL via complete_turn). ──
-  // For >1 artifact (ideation), pre-add the extras, then complete_turn with the first.
-  const [primary, ...extras] = reduced.artifacts;
-  for (const a of extras) {
-    try { add_artifact({ id: loop.id, actor, artifact: { phase: a.phase, type: a.type, body: a.body, produced_by: a.produced_by } }, cwd); }
-    catch { /* an extra artifact failing must not abort convergence */ }
-  }
-  complete_turn({
-    id: loop.id,
-    slot_id: slot.slot_id,
-    actor,
-    outcome: reduced.slot_outcome,
-    failure_reason: reduced.failure_reason,
-    ...(primary ? { artifact: { phase: primary.phase, type: primary.type, body: primary.body } } : {}),
-  }, cwd);
-
-  // ── Secondary convergence (best-effort): run/assignment/claim. ──
+  // ── Secondary convergence (best-effort + idempotent): run/assignment/claim.
+  // Runs on BOTH paths so a crash that recorded the turn but not the settle still
+  // converges them on replay. ──
   settleRunCompleted(reservation.child_ids.run_id, actor, cwd);
   settleAssignmentAndClaim(reservation.child_ids.assignment_id, reservation.claim_id, actor, cwd);
 
   // ── Deterministic stop only: advance closes the loop on reviewer_green / gate.
-  // A blocked gate (fix cycle continues) is NOT an error — the loop stays open. ──
+  // ALWAYS attempted on a `done` outcome (idempotent) so a crash-before-advance
+  // still closes on the next trigger (Finding 1). Only the phase-advance-gate-blocked
+  // case is expected (fix cycle continues) — any OTHER throw is a real error and is
+  // rethrown, never silently swallowed (Finding 6). ──
   let auto_closed = false;
-  if (reduced.slot_outcome === 'done') {
+  if (slot_outcome === 'done') {
     try {
       auto_closed = advance({ id: loop.id, actor }, cwd).auto_closed;
-    } catch {
-      // phase_advance_blocked / not-yet-satisfied gate → loop stays open, awaiting
-      // the next turn. Convergence of THIS turn still succeeded.
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Benign "cannot advance/close now" outcomes → the loop stays open, awaiting
+      // the next turn (e.g. request_changes on a single-phase loop): the phase gate
+      // is unsatisfied, or there is no successor phase. Anything else is a REAL
+      // error and must propagate, never be silently swallowed (review Finding 6).
+      if (!/phase_advance_blocked|already at last phase|no post-cycle successor/.test(msg)) throw err;
     }
   }
   const loop_status = getLoop(loop.id, cwd)?.status ?? loop.status;
 
   return {
     reconciled: true,
-    reason: `turn ${turn_id} reconciled (${reduced.slot_outcome})`,
-    slot_outcome: reduced.slot_outcome,
-    artifacts_added: reduced.artifacts.length,
+    reason: slotTerminal ? `turn ${turn_id} already recorded; advance re-attempted (${slot_outcome})` : `turn ${turn_id} reconciled (${slot_outcome})`,
+    slot_outcome,
+    artifacts_added,
     auto_closed,
     loop_status,
   };

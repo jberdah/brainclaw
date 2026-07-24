@@ -144,7 +144,13 @@ export function copyArtifactToCanonicalStore(input: CopyArtifactInput): CopyArti
   if (!fs.existsSync(sourceAbsPath)) {
     throw new ArtifactResolverError('source_missing', `copyArtifactToCanonicalStore: source ${sourceAbsPath} missing`);
   }
-  const { sha256, byte_count } = sha256OfFile(sourceAbsPath);
+  // Read the source EXACTLY ONCE (review Finding 4): hash + validate + write the
+  // SAME buffer, so a source mutation between a validate-read and a copy-read can
+  // never let bytes whose hash differs from the reported/validated sha256 become
+  // canonical state.
+  const buf = fs.readFileSync(sourceAbsPath);
+  const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+  const byte_count = buf.length;
   // Validate against the attempt's declared expectations BEFORE any write.
   if (expectedSha256 !== undefined && expectedSha256 !== sha256) {
     throw new ArtifactResolverError('sha256_mismatch', `copyArtifactToCanonicalStore: sha256 ${sha256} != expected ${expectedSha256}`);
@@ -168,10 +174,9 @@ export function copyArtifactToCanonicalStore(input: CopyArtifactInput): CopyArti
 
   const dir = path.dirname(canonicalPath);
   fs.mkdirSync(dir, { recursive: true });
-  // Atomic temp-copy + fsync + rename. The temp name is process/id-scoped so
-  // concurrent copies of distinct artifacts never collide on the temp file.
+  // Atomic temp-copy + fsync + rename of the ALREADY-HASHED buffer. The temp name
+  // is process/id-scoped so concurrent copies of distinct artifacts never collide.
   const tmpPath = path.join(dir, `.${artifactId}.${process.pid}.tmp`);
-  const buf = fs.readFileSync(sourceAbsPath);
   const fd = fs.openSync(tmpPath, 'w');
   try {
     let off = 0;
