@@ -31,6 +31,22 @@ import { acquireLock } from './lock.js';
 
 export type ReservationDecision = 'prepared' | 'committed' | 'aborted';
 
+/**
+ * An artifact the attempt's worker is expected to produce (spec §2 / §13 R1).
+ * Brainclaw generates the canonical target; `worker_path` is worker-relative and
+ * MUST be realpath-containment-validated before any read (invariant #7, wired in
+ * a later PR). `sha256` is filled at harvest and validated before state mutation.
+ */
+export const ExpectedArtifactSchema = z.object({
+  logical_name: z.string().min(1),
+  worker_path: z.string().min(1),
+  loop_artifact_type: z.string().min(1),
+  schema_id: z.string().optional(),
+  completion_policy: z.enum(['required', 'optional']).default('required'),
+  sha256: z.string().optional(),
+});
+export type ExpectedArtifact = z.infer<typeof ExpectedArtifactSchema>;
+
 export const TurnReservationSchema = z.object({
   turn_id: z.string().min(1),
   epoch: z.number().int().nonnegative(),
@@ -47,8 +63,13 @@ export const TurnReservationSchema = z.object({
   }),
   phase: z.string().min(1),
   iteration: z.number().int().nonnegative(),
-  // review-only slice: file result ingress only (no mcp/either yet).
-  completion_mode: z.literal('file'),
+  // pln#630 PR2b-a (§13 R1): widened from z.literal('file'). The EFFECTIVE
+  // resolved policy for this attempt (§5). Default 'file' keeps PR1 records
+  // parsing; mcp/either are wired later.
+  completion_mode: z.enum(['file', 'mcp', 'either']).default('file'),
+  // pln#630 PR2b-a (§13 R1): artifacts this attempt's worker must produce.
+  // Default [] so PR1 on-disk records (which predate the field) still parse.
+  expected_artifacts: z.array(ExpectedArtifactSchema).default([]),
   store_root: z.string().min(1),
   cwd: z.string().min(1),
   lease_deadline: z.string().min(1),
@@ -92,6 +113,10 @@ export interface ReserveInput {
   lease_deadline: string;
   /** Defaults to 0; only bumps if a turn_id is ever re-reserved (never in practice). */
   epoch?: number;
+  /** pln#630 PR2b-a — artifacts the worker must produce (default []). */
+  expected_artifacts?: ExpectedArtifact[];
+  /** pln#630 PR2b-a — effective completion policy for this attempt (default 'file'). */
+  completion_mode?: 'file' | 'mcp' | 'either';
 }
 
 /** Raised when a decision CAS is attempted from an incompatible terminal state. */
@@ -296,7 +321,8 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
         child_ids: deriveChildIds(input.turn_id),
         phase: input.phase,
         iteration: input.iteration,
-        completion_mode: 'file',
+        completion_mode: input.completion_mode ?? 'file',
+        expected_artifacts: input.expected_artifacts ?? [],
         store_root: input.store_root,
         cwd: input.cwd,
         lease_deadline: input.lease_deadline,
@@ -534,6 +560,42 @@ export function launchGrant(turnId: string, cwd?: string): TurnReservation['laun
   return d.decision === 'crossed'
     ? { ...g, status: 'crossed', crossed_at: d.at }
     : { ...g, status: 'revoked', revoked_at: d.at, revoke_reason: d.reason };
+}
+
+/**
+ * The evidence nonce for the CURRENT launch generation (§13 R2). Because
+ * `deriveChildIds` is epoch-invariant, only the consumed launch token uniquely
+ * identifies the generation that actually spawned — so THIS is what the worker
+ * must echo (in LANE-RESULT / signals / artifact metadata) and what the
+ * read-strict acceptance path (PR2b-c) matches on. `undefined` until armed.
+ */
+export function currentNonce(reservation: TurnReservation): string | undefined {
+  // Only a LIVE generation (armed or crossed) has a current nonce. A revoked
+  // grant means the worker never crossed → never spawned, so its token is a
+  // dead generation and must not be reported as current (review PR2b-a #1).
+  const l = reservation.launch;
+  return (l?.status === 'armed' || l?.status === 'crossed') ? l.token : undefined;
+}
+
+/** Derived attempt status (spec §2) projected from the two shipped axes
+ *  (`decision` + `launch.status`) plus an optional run status. Single source
+ *  of truth — the flat `status` enum is NOT stored (§13 R1). */
+export type AttemptStatus =
+  | 'reserved' | 'launching' | 'running' | 'waiting_input'
+  | 'completed' | 'failed' | 'cancelled';
+
+export function attemptStatus(reservation: TurnReservation, runStatus?: string): AttemptStatus {
+  if (reservation.decision === 'aborted') return 'cancelled';
+  const launch = reservation.launch;
+  if (launch?.status === 'revoked') return 'cancelled';
+  if (launch?.status === 'crossed') {
+    if (runStatus === 'completed') return 'completed';
+    if (runStatus === 'failed') return 'failed';
+    if (runStatus === 'waiting_input') return 'waiting_input';
+    return 'running';
+  }
+  // no grant yet, or armed-but-not-crossed
+  return reservation.decision === 'committed' ? 'launching' : 'reserved';
 }
 
 /**

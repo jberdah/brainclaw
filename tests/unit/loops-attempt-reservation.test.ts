@@ -13,8 +13,12 @@ import {
   getReservation,
   listReservations,
   deriveChildIds,
+  attemptStatus,
+  currentNonce,
+  TurnReservationSchema,
   ReservationStateError,
   type ReserveInput,
+  type TurnReservation,
 } from '../../src/core/loops/attempt-reservation.js';
 
 function makeWorkspace(): string {
@@ -39,8 +43,75 @@ function reserveInput(cwd: string, over: Partial<ReserveInput> = {}): ReserveInp
     cwd: over.cwd ?? cwd,
     lease_deadline: over.lease_deadline ?? new Date(Date.now() + 60_000).toISOString(),
     epoch: over.epoch,
+    expected_artifacts: over.expected_artifacts,
+    completion_mode: over.completion_mode,
   };
 }
+
+describe('attempt-reservation — PR2b-a additive foundation (pln#630 §13)', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = makeWorkspace(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  function withLaunch(base: TurnReservation, over: Partial<NonNullable<TurnReservation['launch']>>): TurnReservation {
+    return {
+      ...base,
+      launch: {
+        status: 'armed', token: 'tok_gen1', epoch: 0,
+        lease_deadline: new Date(Date.now() + 60_000).toISOString(),
+        armed_at: new Date().toISOString(),
+        ...over,
+      },
+    };
+  }
+
+  it('expected_artifacts round-trips and defaults to [] when omitted', () => {
+    const withArts = reserve(reserveInput(cwd, {
+      turn_id: 'tat_arts',
+      expected_artifacts: [{ logical_name: 'lane_result', worker_path: 'LANE-RESULT.json', loop_artifact_type: 'verdict', completion_policy: 'required' }],
+    }), cwd);
+    assert.equal(withArts.expected_artifacts.length, 1);
+    assert.equal(withArts.expected_artifacts[0]!.logical_name, 'lane_result');
+
+    const without = reserve(reserveInput(cwd, { turn_id: 'tat_noarts' }), cwd);
+    assert.deepEqual(without.expected_artifacts, []);
+  });
+
+  it('completion_mode defaults to file and accepts the widened enum', () => {
+    assert.equal(reserve(reserveInput(cwd, { turn_id: 'tat_cm1' }), cwd).completion_mode, 'file');
+    assert.equal(reserve(reserveInput(cwd, { turn_id: 'tat_cm2', completion_mode: 'either' }), cwd).completion_mode, 'either');
+  });
+
+  it('a PR1 on-disk record (no expected_artifacts) still parses (default [])', () => {
+    const r = reserve(reserveInput(cwd, { turn_id: 'tat_legacy' }), cwd);
+    const legacy = { ...r } as Record<string, unknown>;
+    delete legacy.expected_artifacts; // simulate a record written before the field existed
+    const parsed = TurnReservationSchema.parse(legacy);
+    assert.deepEqual(parsed.expected_artifacts, []);
+    assert.equal(parsed.completion_mode, 'file');
+  });
+
+  it('attemptStatus projects the two shipped axes (+ optional run status)', () => {
+    const prepared = reserve(reserveInput(cwd, { turn_id: 'tat_st' }), cwd);
+    assert.equal(attemptStatus(prepared), 'reserved');
+    assert.equal(attemptStatus({ ...prepared, decision: 'aborted' }), 'cancelled');
+    const committed: TurnReservation = { ...prepared, decision: 'committed' };
+    assert.equal(attemptStatus(committed), 'launching');
+    assert.equal(attemptStatus(withLaunch(committed, { status: 'armed' })), 'launching');
+    assert.equal(attemptStatus(withLaunch(committed, { status: 'revoked' })), 'cancelled');
+    const crossed = withLaunch(committed, { status: 'crossed' });
+    assert.equal(attemptStatus(crossed), 'running');
+    assert.equal(attemptStatus(crossed, 'completed'), 'completed');
+    assert.equal(attemptStatus(crossed, 'failed'), 'failed');
+    assert.equal(attemptStatus(crossed, 'waiting_input'), 'waiting_input');
+  });
+
+  it('currentNonce is the launch-generation token (undefined until armed)', () => {
+    const prepared = reserve(reserveInput(cwd, { turn_id: 'tat_nonce' }), cwd);
+    assert.equal(currentNonce(prepared), undefined);
+    assert.equal(currentNonce(withLaunch(prepared, { token: 'tok_gen2' })), 'tok_gen2');
+  });
+});
 
 describe('attempt-reservation — child id derivation', () => {
   it('is deterministic and salt-distinct for a given turn_id', () => {

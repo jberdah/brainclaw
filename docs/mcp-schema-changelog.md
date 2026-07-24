@@ -10,6 +10,18 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Added — turn-attempt evidence-correlation fields (pln#630 PR2b-a)**
+- Additive, backward-compatible: `LaneResultSchema` gains optional `turn_id` /
+  `run_id` / `nonce`; `RuntimeEventSchema` gains optional `turn_id` / `nonce`
+  (`run_id` already present); `LoopSlotSchema` gains optional `current_turn_id`;
+  a `turn_reserved` variant joins the loop event journal. All optional/defaulted
+  — legacy records parse unchanged; no tool added/removed/renamed.
+- `LoopSlotSchema.current_turn_id` flows into the zod-derived `LoopSlotInput`
+  embedded in `bclaw_loop`'s published inputSchema, so it DOES move the public
+  MCP surface fingerprint (bumped in the `(current)` section below) and
+  regenerates `mcp-schemas.generated.ts`. Additive optional field — no breaking
+  change to the tool contract.
+
 **Changed — `bclaw_read_inbox` bounded + focused reads (pln#627 Phase A)**
 - Default status filter is now **actionable** (pending + read); acknowledged and
   archived are hidden unless `includeAll=true` or an explicit `status` is passed.
@@ -253,7 +265,12 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:fd8a7e910bf5f751`
+- MCP public surface fingerprint: `sha256:f3d49b28d2d366bb`
+  (updated 2026-07-24 for pln#630 PR2b-a: `LoopSlotSchema` gains an optional
+  `current_turn_id`, which flows through the zod-derived `LoopSlotInput` into
+  `bclaw_loop`'s published inputSchema. Additive optional field; regenerates
+  `mcp-schemas.generated.ts`.)
+  Previous: `sha256:fd8a7e910bf5f751`
   (updated 2026-07-24 for pln#627 Phase A: the `bclaw_read_inbox` input schema
   gains `includeAll`, `full`, and `budget_tokens`. Additive — no tool
   added/removed/renamed; the three new typed properties move the fingerprint.)

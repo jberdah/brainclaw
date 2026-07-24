@@ -129,6 +129,90 @@ export function readHeartbeat(root: string, assignmentId: string, worktreePath?:
 }
 
 /**
+ * pln#630 PR2b-a (§13 R2/R3) — typed completion-sentinel body. A worker on the
+ * turn-attempt path emits this JSON in its `completed`/`failed` sentinel so
+ * reconcile can prove the exact attempt+generation that finished. `nonce` ==
+ * the consumed launch-grant token (the epoch-unique generation id).
+ */
+export interface CompletionSignalBody {
+  turn_id: string;
+  run_id: string;
+  nonce: string;
+  status: 'completed' | 'failed';
+  /** ISO timestamp; '' when a legacy body omitted it. */
+  at: string;
+}
+
+/**
+ * Write a turn-keyed completion/failed sentinel body. Used when brainclaw itself
+ * (wrapper/reconcile) writes the sentinel; the shell `&& completed` fallback
+ * still produces a legacy presence-only marker, which stays a valid life-sign
+ * via signalExists but is NOT accepted as turn-owned evidence (PR2b-c).
+ */
+export function writeCompletionSignal(root: string, assignmentId: string, body: CompletionSignalBody): void {
+  const p = getRuntimeSignalPath(root, assignmentId, body.status);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(body), 'utf-8');
+}
+
+/** Parse ONE turn-keyed sentinel body, or undefined if absent / legacy
+ *  presence-only / non-JSON / missing correlation keys. Never throws. */
+function readOneCompletionSignal(root: string, assignmentId: string, status: 'completed' | 'failed'): CompletionSignalBody | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(getRuntimeSignalPath(root, assignmentId, status), 'utf-8').trim();
+  } catch {
+    return undefined; // sentinel absent
+  }
+  if (!raw) return undefined; // legacy presence-only (empty) marker
+  try {
+    const parsed = JSON.parse(raw) as Partial<CompletionSignalBody>;
+    if (
+      typeof parsed.turn_id === 'string' &&
+      typeof parsed.run_id === 'string' &&
+      typeof parsed.nonce === 'string' &&
+      (parsed.status === 'completed' || parsed.status === 'failed')
+    ) {
+      return {
+        turn_id: parsed.turn_id,
+        run_id: parsed.run_id,
+        nonce: parsed.nonce,
+        status: parsed.status,
+        at: typeof parsed.at === 'string' ? parsed.at : '',
+      };
+    }
+  } catch { /* non-JSON legacy body */ }
+  return undefined;
+}
+
+/**
+ * Read BOTH turn-keyed completion sentinels for an attempt. This is the
+ * authoritative reader for the read-strict acceptance path: it surfaces a
+ * `completed`+`failed` contradiction so the caller can raise a conflict event
+ * and WITHHOLD an irreversible auto-stop (spec §13 R4), rather than silently
+ * collapsing to one. Legacy presence-only markers read as absent here.
+ */
+export function readCompletionSignals(root: string, assignmentId: string): { completed?: CompletionSignalBody; failed?: CompletionSignalBody } {
+  const out: { completed?: CompletionSignalBody; failed?: CompletionSignalBody } = {};
+  const completed = readOneCompletionSignal(root, assignmentId, 'completed');
+  const failed = readOneCompletionSignal(root, assignmentId, 'failed');
+  if (completed) out.completed = completed;
+  if (failed) out.failed = failed;
+  return out;
+}
+
+/**
+ * Convenience single-body reader (`completed` preferred over `failed`). Returns
+ * undefined for absent / legacy presence-only / non-JSON / missing-keys.
+ * CALLERS THAT ACT IRREVERSIBLY must use {@link readCompletionSignals} instead
+ * so a completed+failed contradiction is not hidden (spec §13 R4).
+ */
+export function readCompletionSignal(root: string, assignmentId: string): CompletionSignalBody | undefined {
+  const both = readCompletionSignals(root, assignmentId);
+  return both.completed ?? both.failed;
+}
+
+/**
  * can_c39f0961 — CP850 high-byte table (0x80–0xFF). Windows-native console
  * tools write redirected stdout/stderr in the OEM codepage (cp850 on western
  * locales), which read as UTF-8 produces U+FFFD mojibake in captured logs.
