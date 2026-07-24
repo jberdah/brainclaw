@@ -94,9 +94,16 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   // ── Containment gate (§8 Q6): the reservation must belong to the store we are
   // operating on. Before any mutation / on-behalf convergence, refuse to reconcile
   // a reservation whose store_root resolves to a DIFFERENT project than `cwd` — a
-  // cross-project reconcile must never converge another store's loop/claim. ──
+  // cross-project reconcile must never converge another store's loop/claim.
+  // Case-folded on win32 (review Finding 2) so a `C:\`-vs-`c:\` casing difference
+  // between the reserve-time cwd and the reconcile cwd never false-rejects on the
+  // Windows-primary target. ──
   const operatingRoot = path.resolve(cwd ?? process.cwd());
-  if (path.resolve(reservation.store_root) !== operatingRoot) {
+  const reservationRoot = path.resolve(reservation.store_root);
+  const sameStore = process.platform === 'win32'
+    ? reservationRoot.toLowerCase() === operatingRoot.toLowerCase()
+    : reservationRoot === operatingRoot;
+  if (!sameStore) {
     return { reconciled: false, reason: `containment: reservation store_root ${reservation.store_root} != operating store ${operatingRoot}` };
   }
 
