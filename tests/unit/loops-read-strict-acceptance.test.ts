@@ -92,6 +92,44 @@ describe('read-strict acceptance (pln#630 PR2b-c §13 R3)', () => {
     assert.notEqual(result.current_status, 'completed');
   });
 
+  it('turn-owned run: a completed+failed CONTRADICTION withholds both (§13 R4)', () => {
+    const { runId, assignmentId, token, run } = turnOwnedRun(cwd, 'tat_conflict');
+    writeCompletionSignal(cwd, assignmentId, { turn_id: 'tat_conflict', run_id: runId, nonce: token, status: 'completed', at: 'c' });
+    writeCompletionSignal(cwd, assignmentId, { turn_id: 'tat_conflict', run_id: runId, nonce: token, status: 'failed', at: 'f' });
+    const ev = collectEvidence(run, cwd);
+    assert.equal(ev.turn_keyed_completed, false, 'contradiction must not accept completed');
+    assert.equal(ev.failed_signal, false, 'contradiction must not accept failed');
+    const result = reconcileAgentRun(runId, cwd, { healthCheckGraceMs: 0 });
+    assert.notEqual(result.current_status, 'completed');
+    assert.notEqual(result.current_status, 'failed');
+  });
+
+  it('turn-owned run: a .completed FILE carrying a status:failed BODY is NOT accepted (trust body, not filename — #C2)', () => {
+    const { runId, assignmentId, token, run } = turnOwnedRun(cwd, 'tat_wrongstatus');
+    // Write directly to the completed-named path but with a failed-status body.
+    const p = getRuntimeSignalPath(cwd, assignmentId, 'completed');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ turn_id: 'tat_wrongstatus', run_id: runId, nonce: token, status: 'failed', at: 'x' }), 'utf-8');
+    const ev = collectEvidence(run, cwd);
+    assert.equal(ev.turn_keyed_completed, false);
+    assert.notEqual(reconcileAgentRun(runId, cwd, { healthCheckGraceMs: 0 }).current_status, 'completed');
+  });
+
+  it('turn-owned run: FAILURE is read-strict too — matching turn-keyed failed accepted, bare presence rejected (#B)', () => {
+    // Matching turn-keyed failed body → failed_signal true.
+    const a = turnOwnedRun(cwd, 'tat_failmatch');
+    writeCompletionSignal(cwd, a.assignmentId, { turn_id: 'tat_failmatch', run_id: a.runId, nonce: a.token, status: 'failed', at: 'f' });
+    assert.equal(collectEvidence(a.run, cwd).failed_signal, true);
+
+    // Bare presence-only .failed marker on a healthy turn-owned run → NOT failed.
+    const b = turnOwnedRun(cwd, 'tat_failbare');
+    const p = getRuntimeSignalPath(cwd, b.assignmentId, 'failed');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, '', 'utf-8');
+    const ev = collectEvidence(b.run, cwd);
+    assert.equal(ev.failed_signal, false, 'a stale bare .failed marker must not phantom-fail a turn-owned run');
+  });
+
   it('LEGACY run (no owning reservation): presence sentinel still completes it (unchanged)', () => {
     const run = createAgentRun({ assignment_id: 'asgn_legacy', claim_id: 'clm_x', agent: 'codex', transport: 'manual_command', scope: 'src/x.ts', description: 'legacy run', status: 'running' }, cwd);
     const p = getRuntimeSignalPath(cwd, 'asgn_legacy', 'completed');

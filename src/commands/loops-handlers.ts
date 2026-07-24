@@ -2,6 +2,7 @@ import { ZodError } from 'zod';
 import type { FacadeResponse } from '../core/facade-schema.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
+import { findReservationByRunId } from '../core/loops/attempt-reservation.js';
 import {
   add_artifact,
   advance,
@@ -373,6 +374,10 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
             // (trp_fdf3e590) that converges silent-completion on access.
             if ((slot as { current_turn_id?: string }).current_turn_id) continue;
             for (const run of listAgentRuns(options.cwd, { assignment_id: assignmentId })) {
+              // Belt-and-braces (review PR2b-c #D): skip by ACTUAL ownership too,
+              // not just the slot pointer — if a run is turn-owned but its slot
+              // wasn't stamped (write-ordering), GET must still not mutate it.
+              if (findReservationByRunId(run.id, options.cwd)) continue;
               reconcileAgentRun(run.id, options.cwd);
             }
           }

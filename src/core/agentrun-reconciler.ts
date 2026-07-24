@@ -294,7 +294,30 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
     if (reservation) {
       turn_owned = true;
       const bodies = readCompletionSignals(signalRoot, run.assignment_id);
-      turn_keyed_completed = bodies.completed !== undefined && evidenceMatchesAttempt(reservation, bodies.completed);
+      // Evidence must be turn-keyed AND carry the RIGHT status (a `.completed`
+      // file whose body says status:'failed' is not completion evidence —
+      // read-strict trusts the body, not the filename, review PR2b-c #C2).
+      const matchedCompleted = bodies.completed !== undefined
+        && bodies.completed.status === 'completed'
+        && evidenceMatchesAttempt(reservation, bodies.completed);
+      const matchedFailed = bodies.failed !== undefined
+        && bodies.failed.status === 'failed'
+        && evidenceMatchesAttempt(reservation, bodies.failed);
+      if (matchedCompleted && matchedFailed) {
+        // §13 R4 — a completed+failed contradiction WITHHOLDS both (never a
+        // silent accept). Conflict-event journaling is deferred to
+        // reconcileTurn (PR3); collectEvidence stays side-effect-free.
+        turn_keyed_completed = false;
+        failed_signal = false;
+      } else {
+        turn_keyed_completed = matchedCompleted;
+        // Read-strict governs FAILURE too for a turn-owned run: override the
+        // presence-based failed_signal so a stale/legacy bare `.failed` marker
+        // cannot phantom-FAIL a healthy generation (symmetric to completed,
+        // review PR2b-c #B). A genuine death with no turn-keyed evidence still
+        // fails via the process-dead + stale path below.
+        failed_signal = matchedFailed;
+      }
     }
   } catch { /* defensive — fall back to legacy (non-turn-owned) behavior */ }
 
