@@ -451,6 +451,17 @@ export function listReservations(filter: { decision?: ReservationDecision } = {}
   return out.sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
+/**
+ * Find the turn-attempt reservation that OWNS a given agent_run, if any
+ * (pln#630 PR2b-c). The link is the deterministic `deriveChildIds(turn_id)` —
+ * a reservation owns `run_id` iff `child_ids.run_id === runId`. Used by the
+ * reconciler to decide whether a run is turn-owned (→ read-strict acceptance)
+ * or legacy (→ presence-based acceptance). Returns undefined for legacy runs.
+ */
+export function findReservationByRunId(runId: string, cwd?: string): TurnReservation | undefined {
+  return listReservations({}, cwd).find((r) => r.child_ids.run_id === runId);
+}
+
 /* ============================ launch-grant fence (PR2a, dec#138) ========== */
 
 export interface ArmLaunchInput {

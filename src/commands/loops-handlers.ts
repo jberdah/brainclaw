@@ -365,6 +365,13 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
             const assignmentId = (slot as { assignment_id?: string }).assignment_id;
             if (!assignmentId) continue;
             if (slotStatus === 'done' || slotStatus === 'failed' || slotStatus === 'cancelled') continue;
+            // pln#630 PR2b-c (§13 R6): GET is strictly observational for
+            // TURN-OWNED slots. A slot carrying current_turn_id reconciles only
+            // via the dedicated mutating reconcile path (never on a read), so a
+            // stale/racing read can't phantom-complete its run. Legacy slots
+            // (no current_turn_id) keep the intentional lazy reconcile
+            // (trp_fdf3e590) that converges silent-completion on access.
+            if ((slot as { current_turn_id?: string }).current_turn_id) continue;
             for (const run of listAgentRuns(options.cwd, { assignment_id: assignmentId })) {
               reconcileAgentRun(run.id, options.cwd);
             }
