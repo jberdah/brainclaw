@@ -292,6 +292,9 @@ export const generatedSchemas = {
           "failed",
           "cancelled"
         ]
+      },
+      "current_turn_id": {
+        "type": "string"
       }
     },
     "required": [
