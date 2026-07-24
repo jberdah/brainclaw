@@ -135,7 +135,7 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
 
   // A terminal loop already converged → idempotent no-op (any trigger may fire us).
   if (LOOP_TERMINAL.has(loop.status)) {
-    return { reconciled: true, reason: `loop already ${loop.status} (idempotent no-op)`, loop_status: loop.status };
+    return { reconciled: true, reason: `loop already ${loop.status} (idempotent no-op)`, artifacts_added: 0, loop_status: loop.status };
   }
 
   // ── Idempotency (review Findings 1+2): a TERMINAL slot durably means this turn's
