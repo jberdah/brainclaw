@@ -1121,6 +1121,16 @@ export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
  */
 export const LaneResultSchema = z.object({
   assignment_id: z.string(),
+  /**
+   * pln#630 PR2b-a (§13 R2/R3) — turn-attempt correlation keys. Optional for
+   * backward compat (legacy lanes are assignment-keyed only); a loop-dispatched
+   * lane echoes all three so the read-strict acceptance path can prove WHICH
+   * attempt+generation produced this result. `nonce` == the consumed launch
+   * token (the epoch-unique generation id), NOT a turn_id-bound value.
+   */
+  turn_id: z.string().optional(),
+  run_id: z.string().optional(),
+  nonce: z.string().optional(),
   status: z.enum(['completed', 'blocked', 'failed']),
   summary: z.string(),
   /** Paths or refs the worker produced (commits, files, docs). */
@@ -1156,6 +1166,10 @@ export const RuntimeEventSchema = z.object({
   tags: TagsWithDefaultSchema,
   assignment_id: z.string().optional(),
   run_id: z.string().optional(),
+  // pln#630 PR2b-a (§13 R2/R3) — turn-attempt correlation on runtime signals.
+  // `run_id` already present above; `nonce` == launch-generation token.
+  turn_id: z.string().optional(),
+  nonce: z.string().optional(),
   claim_id: z.string().optional(),
   message_id: z.string().optional(),
   plan_id: z.string().optional(),

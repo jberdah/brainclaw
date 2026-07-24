@@ -167,6 +167,13 @@ export const LoopSlotSchema = z.object({
   claim_id: z.string().optional(),
   phase: z.string().optional(),
   status: z.enum(SLOT_STATUSES),
+  /**
+   * pln#630 PR2b-a (§13 R1) — pointer to the immutable turn-attempt record for
+   * the slot's CURRENT dispatch. Identity/evidence live on the attempt
+   * (`.brainclaw/loops/reservations/<turn_id>.json`), never overwritten on the
+   * reusable slot. Additive; wired onto the dispatch path in a later PR.
+   */
+  current_turn_id: z.string().optional(),
 });
 export type LoopSlot = z.infer<typeof LoopSlotSchema>;
 
@@ -636,6 +643,17 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     assignment_id: z.string().optional(),
     input: z.string().optional(),
     retry_of: z.string().optional(),
+  }),
+  // pln#630 PR2b-a (§13 R1/Q1) — journal breadcrumb that an immutable
+  // turn-attempt record was reserved for this dispatch. The authoritative
+  // record lives in `loops/reservations/<turn_id>.json`; this event lets a
+  // thread reader see the attempt existed without scanning that dir.
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('turn_reserved'),
+    slot_id: z.string().min(1),
+    phase: z.string().min(1),
+    turn_id: z.string().min(1),
   }),
   z.object({
     ...LoopEventBaseShape,
