@@ -37,7 +37,7 @@ import { buildClaimEnvPrefix } from './execution-profile.js';
 import { getActiveSequence } from './sequence.js';
 import { loadState, persistState } from './state.js';
 import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
-import { sanitizeBranchComponent, isBranchMergedByContent, localBranchExists } from './worktree.js';
+import { sanitizeBranchComponent, isBranchMergedByContent, probeLocalBranch, isGitRepo } from './worktree.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment } from './messaging.js';
 import { memoryDir } from './io.js';
@@ -188,7 +188,8 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
   if (!sequence) return null;
 
   const state = loadState(cwd);
-  const claims = listClaims(cwd).filter(c => c.status === 'active');
+  const allClaimsSnapshot = listClaims(cwd);
+  const claims = allClaimsSnapshot.filter(c => c.status === 'active');
   const agents = listAgentIdentities(cwd);
 
   // Index plans by ID for fast lookup
@@ -198,18 +199,33 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
     if (p.short_label) planIndex.set(p.short_label, p);
   }
 
-  // pln#529 — index sequence items by planId so a gated lane can resolve each
-  // predecessor lane's scope (→ deterministic `feat/<scope>` branch) for the
-  // content-aware fork-base decision.
+  // pln#529 — index sequence items by planId (scope_hint fallback for branch
+  // derivation).
   const itemByPlanId = new Map<string, SequenceItem>();
   for (const it of sequence.items) itemByPlanId.set(it.planId, it);
 
-  // Collect plan IDs that are done or dropped (terminal states)
+  // pln#529 (review Finding 1) — GROUND-TRUTH predecessor branch resolution: a
+  // predecessor lane's branch was created by createCoordinatorClaim from its
+  // CLAIM scope (which is stable across the coordinate/assign paths + survives a
+  // later scope_hint edit + persists on release). Re-deriving from live sequence
+  // metadata probes the wrong branch and silently defaults to HEAD. So resolve
+  // the predecessor's scope from its persisted claim (any claim for the plan;
+  // retries reuse the scope), falling back to the sequence item only when no
+  // claim exists.
+  const claimByPlanId = new Map<string, Claim>();
+  for (const c of allClaimsSnapshot) { if (c.plan_id) claimByPlanId.set(c.plan_id, c); }
+  const canonicalPlanId = (id: string): string => planIndex.get(id)?.id ?? id;
+  const scopeForPred = (predId: string): string =>
+    claimByPlanId.get(canonicalPlanId(predId))?.scope ?? itemByPlanId.get(predId)?.scope_hint ?? predId;
+
+  // Collect plan IDs that are done or dropped (terminal → gate-open) and the
+  // dropped subset (excluded from socle-fork: never propagate abandoned code —
+  // review Finding 6).
   const terminalPlanIds = new Set<string>();
+  const droppedPlanIds = new Set<string>();
   for (const p of state.plan_items) {
-    if (p.status === 'done' || p.status === 'dropped') {
-      terminalPlanIds.add(p.id);
-    }
+    if (p.status === 'done' || p.status === 'dropped') terminalPlanIds.add(p.id);
+    if (p.status === 'dropped') droppedPlanIds.add(p.id);
   }
 
   // Collect plan IDs with active claims
@@ -288,7 +304,10 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
     // CLOSED (A); otherwise the lane is ready with its resolved base (HEAD, or a
     // predecessor branch when the socle isn't on HEAD yet — B).
     if (item.hard_after.length > 0) {
-      const base = resolveGatedLaneBase(item.hard_after, itemByPlanId, cwd);
+      // Socle-fork considers DONE predecessors only — a dropped predecessor still
+      // satisfies the gate but its abandoned code must not be propagated (#6).
+      const socleDeps = item.hard_after.filter((id) => !droppedPlanIds.has(canonicalPlanId(id)));
+      const base = resolveGatedLaneBase(socleDeps, scopeForPred, cwd);
       if (base.gateBlocked) {
         blocked.push({
           item,
@@ -925,59 +944,96 @@ export interface WorktreeBaseSelection {
 
 /**
  * pln#529 (dec#122 B+A) — resolve the fork base for a gated lane whose hard_after
- * predecessors are all plan-terminal. "Readiness ≠ code-availability": a done
- * predecessor's code may be committed on its own branch but NOT integrated on
- * HEAD (the standard squash-merge breaks ancestry — trp#926 — so integration is
- * detected by CONTENT via `isBranchMergedByContent`, patch-id + file-content, not
- * ancestry). Per predecessor:
- *   - branch gone            → assume merged + cleaned (code is on HEAD);
- *   - branch present, merged → on HEAD;
- *   - branch present, NOT    → committed-but-unintegrated (must fork from it).
- * Then: 0 unintegrated → `HEAD`; exactly 1 → fork from that branch (B); ≥2 →
- * gateBlocked (A) — the honest v1 limit; integrate them first.
+ * predecessors are all DONE (dropped predecessors are excluded by the caller —
+ * their abandoned code must not be propagated). "Readiness ≠ code-availability":
+ * a done predecessor's code may be committed on its own branch but NOT integrated
+ * on HEAD (the standard squash-merge breaks ancestry — trp#926 — so integration
+ * is detected by CONTENT via `isBranchMergedByContent`, patch-id + file-content,
+ * not ancestry).
+ *
+ * `scopeFor(predId)` MUST return the GROUND-TRUTH scope the predecessor's branch
+ * was created from — its persisted claim scope (review Finding 1). Re-deriving
+ * the branch from live/mutable sequence metadata probes the wrong branch under
+ * the coordinate(assign) path or an edited scope_hint, and the miss silently
+ * defaults to HEAD — the very socle-drop this feature closes.
+ *
+ * `cwd` MUST be the project's MAIN git worktree (HEAD = the integration target);
+ * `analyzeSequence` is the sole production caller and passes the coordinator root.
+ *
+ * Per predecessor (branch = `feat/<sanitized scope>`), by tri-state probe:
+ *   - present + content-merged → verified on HEAD;
+ *   - present + NOT merged     → committed-but-unintegrated (fork candidate);
+ *   - absent (clean not-found) → ASSUMED on HEAD (merged + branch cleaned up) —
+ *     honestly labelled "assumed", never claimed "verified";
+ *   - unknown (git probe FAILED) → unverifiable → fail SAFE (gateBlocked), never
+ *     silently "on HEAD" (review Finding 3).
+ * Then: any unverifiable, or ≥2 fork-candidates → gateBlocked (A); exactly 1
+ * fork-candidate → fork from it (B); else baseRef HEAD (A satisfied).
  */
 export function resolveGatedLaneBase(
   hardAfter: string[],
-  itemByPlanId: Map<string, SequenceItem>,
+  scopeFor: (predId: string) => string,
   cwd: string,
 ): WorktreeBaseSelection {
   if (hardAfter.length === 0) return {};
+  // Non-git project → branch/worktree socle propagation is inapplicable; keep the
+  // legacy HEAD base (the tri-state "unknown" fail-safe is ONLY for a git repo
+  // whose branch probe transiently failed, not for a project that has no git at
+  // all — otherwise every non-git gated lane would wrongly gate-block).
+  if (!isGitRepo(cwd)) {
+    return { baseRef: 'HEAD', resetExistingBranch: true, reason: 'non-git project — socle propagation not applicable; base = HEAD' };
+  }
   const unintegrated: Array<{ planId: string; branch: string }> = [];
+  const unverifiable: Array<{ planId: string; branch: string }> = [];
+  const verifiedOnHead: string[] = [];
+  const assumedOnHead: string[] = [];
   for (const predId of hardAfter) {
-    const predItem = itemByPlanId.get(predId);
-    const predScope = predItem?.scope_hint ?? predId;
-    const branch = `feat/${sanitizeBranchComponent(predScope)}`;
-    if (!localBranchExists(cwd, branch)) continue;            // gone → merged+cleaned (on HEAD)
-    if (isBranchMergedByContent(cwd, branch, 'HEAD')) continue; // present + content-integrated
+    const branch = `feat/${sanitizeBranchComponent(scopeFor(predId))}`;
+    const probe = probeLocalBranch(cwd, branch);
+    if (probe === 'unknown') { unverifiable.push({ planId: predId, branch }); continue; }
+    if (probe === 'absent') { assumedOnHead.push(predId); continue; } // merged + branch GC'd
+    if (isBranchMergedByContent(cwd, branch, 'HEAD')) { verifiedOnHead.push(predId); continue; }
     unintegrated.push({ planId: predId, branch });
   }
-  if (unintegrated.length === 0) {
+
+  // Fail SAFE: a git probe we could not complete must NOT open the gate on a
+  // "HEAD is fine" assumption. Combine with the ≥2-fork-candidate diamond.
+  if (unverifiable.length > 0 || unintegrated.length >= 2) {
+    const parts = [
+      ...unintegrated.map((u) => `${u.planId}→${u.branch} (committed, not on HEAD)`),
+      ...unverifiable.map((u) => `${u.planId}→${u.branch} (integration UNVERIFIABLE — git probe failed)`),
+    ];
     return {
-      baseRef: 'HEAD',
-      resetExistingBranch: true,
-      reason: `hard_after predecessors content-verified on HEAD: ${hardAfter.join(', ')}`,
+      gateBlocked: {
+        reason: `pln#529(A): cannot safely resolve a single fork base for this gated lane — ${parts.join('; ')}. Integrate the un-integrated predecessors onto HEAD (merge/squash), or retry once git is reachable; a single worktree cannot fork from multiple bases without silently dropping a predecessor's code.`,
+        unintegrated: [...unintegrated, ...unverifiable].map((u) => u.planId),
+      },
     };
   }
+
+  const headNote = (verb: string) =>
+    `${verb}${verifiedOnHead.length ? ` content-verified on HEAD: ${verifiedOnHead.join(', ')}` : ''}` +
+    `${assumedOnHead.length ? `${verifiedOnHead.length ? '; ' : ' '}assumed on HEAD (branch absent — merged + cleaned, unverifiable): ${assumedOnHead.join(', ')}` : ''}`;
+
   if (unintegrated.length === 1) {
     const u = unintegrated[0];
     return {
       baseRef: u.branch,
       resetExistingBranch: true,
-      reason: `pln#529(B): predecessor ${u.planId} is committed on ${u.branch} but not yet integrated on HEAD — the dependent lane forks from that branch so it carries the socle code (not a HEAD that lacks it).`,
+      reason: `pln#529(B): predecessor ${u.planId} is committed on ${u.branch} but not yet integrated on HEAD — the dependent lane forks from that branch so it carries the socle code. (${headNote('Other predecessors:')})`,
     };
   }
   return {
-    gateBlocked: {
-      reason: `pln#529(A): ${unintegrated.length} hard_after predecessors are committed on separate branches but not integrated on HEAD (${unintegrated.map((u) => `${u.planId}→${u.branch}`).join(', ')}). Integrate them onto HEAD (merge/squash) before dispatching this lane — a single worktree cannot fork from multiple un-integrated bases without silently dropping some predecessor's code.`,
-      unintegrated: unintegrated.map((u) => u.planId),
-    },
+    baseRef: 'HEAD',
+    resetExistingBranch: true,
+    reason: `pln#529: ${headNote('hard_after predecessors —')}`,
   };
 }
 
 /**
- * @deprecated pln#529 — superseded by `resolveGatedLaneBase` (content-aware).
- * Retained for callers that only have `(item, analysis)`; forwards to the new
- * resolver using the analysis's done set as the predecessor index. Prefer the
+ * @deprecated pln#529 — superseded by `resolveGatedLaneBase` (content + claim
+ * aware). Retained for callers that only have `(item, analysis)`; forwards using
+ * the analysis's done set for scope fallback (no claim access). Prefer the
  * pre-computed `ReadyLane.worktreeBase`.
  */
 export function selectWorktreeBaseForReadyLane(
@@ -991,7 +1047,7 @@ export function selectWorktreeBaseForReadyLane(
   if (!hardAfter.every((planId) => donePlanIds.has(planId))) return {};
   const itemByPlanId = new Map<string, SequenceItem>();
   for (const entry of analysis.done) itemByPlanId.set(entry.planId, entry);
-  return resolveGatedLaneBase(hardAfter, itemByPlanId, cwd);
+  return resolveGatedLaneBase(hardAfter, (predId) => itemByPlanId.get(predId)?.scope_hint ?? predId, cwd);
 }
 
 /**

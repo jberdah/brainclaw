@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 import { resolveGatedLaneBase } from '../../src/core/dispatcher.js';
-import { sanitizeBranchComponent } from '../../src/core/worktree.js';
+import { sanitizeBranchComponent, probeLocalBranch } from '../../src/core/worktree.js';
 import type { SequenceItem } from '../../src/core/schema.js';
 
 // pln#529 (dec#122 B+A) — a gated lane's fork base is resolved by CONTENT, not
@@ -51,18 +51,21 @@ function writeCommitOnBranch(repo: string, branch: string, file: string, content
 const item = (planId: string, scopeHint: string): SequenceItem =>
   ({ planId, scope_hint: scopeHint, hard_after: [], soft_after: [] } as unknown as SequenceItem);
 const branchOf = (scope: string) => `feat/${sanitizeBranchComponent(scope)}`;
+// The scope resolver analyzeSequence builds (claim scope → sequence scope_hint →
+// planId); tests use the sequence-item fallback path.
+const scopeFrom = (idx: Map<string, SequenceItem>) => (id: string) => idx.get(id)?.scope_hint ?? id;
 
 describe('pln#529 resolveGatedLaneBase — content-aware fork base', () => {
   it('no hard_after → empty selection (non-gated lane untouched)', () => {
     const repo = makeRepo();
-    assert.deepEqual(resolveGatedLaneBase([], new Map(), repo), {});
+    assert.deepEqual(resolveGatedLaneBase([], () => "", repo), {});
   });
 
   it('predecessor committed on its branch but NOT on HEAD → fork from that branch (B)', () => {
     const repo = makeRepo();
     writeCommitOnBranch(repo, branchOf('pred-a'), 'a.ts', 'export const a = 1;\n');
     const idx = new Map([['pln_a', item('pln_a', 'pred-a')]]);
-    const base = resolveGatedLaneBase(['pln_a'], idx, repo);
+    const base = resolveGatedLaneBase(['pln_a'], scopeFrom(idx), repo);
     assert.equal(base.baseRef, branchOf('pred-a'), 'forks from the un-integrated predecessor branch');
     assert.equal(base.resetExistingBranch, true);
     assert.match(base.reason!, /not yet integrated on HEAD/);
@@ -77,7 +80,7 @@ describe('pln#529 resolveGatedLaneBase — content-aware fork base', () => {
     git(['add', '.'], repo);
     git(['commit', '-m', 'squash-merge pred-a'], repo);
     const idx = new Map([['pln_a', item('pln_a', 'pred-a')]]);
-    const base = resolveGatedLaneBase(['pln_a'], idx, repo);
+    const base = resolveGatedLaneBase(['pln_a'], scopeFrom(idx), repo);
     assert.equal(base.baseRef, 'HEAD', 'code is on HEAD by content → HEAD is a valid base');
     assert.equal(base.gateBlocked, undefined);
   });
@@ -85,9 +88,38 @@ describe('pln#529 resolveGatedLaneBase — content-aware fork base', () => {
   it('predecessor branch absent (merged + cleaned up) → baseRef HEAD (cannot prove otherwise)', () => {
     const repo = makeRepo();
     const idx = new Map([['pln_ghost', item('pln_ghost', 'ghost')]]);
-    const base = resolveGatedLaneBase(['pln_ghost'], idx, repo);
+    const base = resolveGatedLaneBase(['pln_ghost'], scopeFrom(idx), repo);
     assert.equal(base.baseRef, 'HEAD');
     assert.equal(base.gateBlocked, undefined);
+    // Honest reason (Finding 2): "assumed", never "content-verified", for an absent branch.
+    assert.match(base.reason!, /assumed on HEAD/);
+    assert.doesNotMatch(base.reason!, /content-verified on HEAD: pln_ghost/);
+  });
+
+  it('NON-git project → baseRef HEAD (socle propagation N/A — not a false gate-block)', () => {
+    // The isGitRepo guard: a project with no git is not a "transient failure" —
+    // branch/worktree propagation is simply inapplicable, so keep the legacy HEAD
+    // base instead of blocking every gated lane.
+    const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-nogit-'));
+    cleanup.push(nonRepo);
+    const idx = new Map([['pln_a', item('pln_a', 'pred-a')]]);
+    const base = resolveGatedLaneBase(['pln_a'], scopeFrom(idx), nonRepo);
+    assert.equal(base.baseRef, 'HEAD');
+    assert.equal(base.gateBlocked, undefined);
+    assert.match(base.reason!, /non-git/);
+  });
+
+  it('probeLocalBranch tri-state: present / absent / unknown (the fail-safe signal, Finding 3)', () => {
+    // In a real git repo, `unknown` (git error, distinct from a clean absent) is
+    // what makes resolveGatedLaneBase fail SAFE (gateBlocked) rather than assume
+    // HEAD on a transient failure.
+    const repo = makeRepo();
+    writeCommitOnBranch(repo, 'feat/here', 'x.ts', 'export const x = 1;\n');
+    assert.equal(probeLocalBranch(repo, 'feat/here'), 'present');
+    assert.equal(probeLocalBranch(repo, 'feat/nope'), 'absent', 'clean not-found (empty stderr) → absent');
+    const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-nogit2-'));
+    cleanup.push(nonRepo);
+    assert.equal(probeLocalBranch(nonRepo, 'feat/here'), 'unknown', 'git error (non-empty stderr) → unknown');
   });
 
   it('≥2 predecessors committed on separate un-integrated branches → gate BLOCKED (A)', () => {
@@ -98,11 +130,12 @@ describe('pln#529 resolveGatedLaneBase — content-aware fork base', () => {
       ['pln_a', item('pln_a', 'pred-a')],
       ['pln_b', item('pln_b', 'pred-b')],
     ]);
-    const base = resolveGatedLaneBase(['pln_a', 'pln_b'], idx, repo);
+    const base = resolveGatedLaneBase(['pln_a', 'pln_b'], scopeFrom(idx), repo);
     assert.equal(base.baseRef, undefined, 'no single base — gate must not open');
     assert.ok(base.gateBlocked, 'gate is blocked');
     assert.deepEqual(base.gateBlocked!.unintegrated.sort(), ['pln_a', 'pln_b']);
-    assert.match(base.gateBlocked!.reason, /Integrate them onto HEAD/);
+    assert.match(base.gateBlocked!.reason, /Integrate .*onto HEAD/);
+    assert.match(base.gateBlocked!.reason, /not on HEAD/);
   });
 
   it('mixed: one integrated on HEAD + one un-integrated → forks from the single un-integrated branch', () => {
@@ -117,7 +150,7 @@ describe('pln#529 resolveGatedLaneBase — content-aware fork base', () => {
       ['pln_a', item('pln_a', 'pred-a')],
       ['pln_b', item('pln_b', 'pred-b')],
     ]);
-    const base = resolveGatedLaneBase(['pln_a', 'pln_b'], idx, repo);
+    const base = resolveGatedLaneBase(['pln_a', 'pln_b'], scopeFrom(idx), repo);
     assert.equal(base.baseRef, branchOf('pred-b'), 'only the un-integrated predecessor drives the fork base');
     assert.equal(base.gateBlocked, undefined);
   });
