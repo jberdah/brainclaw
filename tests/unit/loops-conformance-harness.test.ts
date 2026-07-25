@@ -7,10 +7,17 @@ import path from 'node:path';
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
 import { prepareTurnOwnedReviewDispatch } from '../../src/core/review-loop-turn-dispatch.js';
 import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
-import { deriveChildIds, getReservation, launchGrant } from '../../src/core/loops/attempt-reservation.js';
-import { loadAgentRun } from '../../src/core/agentruns.js';
+import {
+  deriveChildIds, getReservation, launchGrant,
+  reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveTurnId,
+} from '../../src/core/loops/attempt-reservation.js';
+import { loadAgentRun, createAgentRun } from '../../src/core/agentruns.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
-import type { LaneResult } from '../../src/core/schema.js';
+import { integrateLaneResults, getLaneResultPath } from '../../src/commands/harvest.js';
+import { saveClaim, loadClaim } from '../../src/core/claims.js';
+import { saveAssignment } from '../../src/core/assignments.js';
+import { nowISO } from '../../src/core/ids.js';
+import type { Assignment, Claim, LaneResult } from '../../src/core/schema.js';
 
 // pln#630 §9 — CONFORMANCE HARNESS. The contract's end-to-end regression proof,
 // driving the REAL primitives (prepareTurnOwnedReviewDispatch → fake-worker
@@ -158,5 +165,52 @@ describe('pln#630 §9 conformance harness — full turn-owned contract (fake exe
       assert.equal(again.artifacts_added, 0, 'no duplicate artifacts on repeated triggers');
     }
     assert.equal(getLoop(loop.id, cwd)!.artifacts.filter((a) => a.type === 'verdict').length, 1);
+  });
+});
+
+/**
+ * pln#630 PR4 — §9 conformance over the REAL harvest path (flag-flip gate). The block above
+ * drives the primitives directly; this proves harvest itself wires them under the flag: a
+ * KEYLESS worker lane (the production shape — the brief never asks the worker to echo
+ * turn_id/run_id/nonce) converges via sentinel-derived evidence, and a turn-owned lane routes
+ * to reconcileTurn INSTEAD OF the legacy closer (exactly-one finalizer). The fuller harvest
+ * matrix (request_changes bump/retain, cap→blocked, report→integrate, idempotent re-integrate,
+ * wrong-nonce reject) lives in loops-pr3a-harvest-reconcile + loops-pr3b-fixcycle.
+ */
+describe('pln#630 §9 conformance — real harvest path (flag-gated)', () => {
+  const A = 'conf-reviewer'; // profile-less ⇒ worker self-commits ⇒ no git / no on-behalf commit
+  let cwd: string;
+  beforeEach(() => { cwd = ws(); process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1'; });
+  afterEach(() => { delete process.env.BRAINCLAW_TURN_OWNED_REVIEW; fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  it('a KEYLESS approve lane converges through integrateLaneResults via sentinel-derived evidence; turn-owned never hits the legacy closer', () => {
+    const loop = openLoop({
+      kind: 'review', title: 'conf-harvest', created_by: 'coord', mode: 'symmetric',
+      phases: [{ name: 'findings' }], stop_condition: { kind: 'reviewer_green' },
+      slots: [{ slot_id: 'lsl_r', role: 'reviewer', agent: A }],
+    }, cwd);
+    const turnId = deriveTurnId(loop.id, 'lsl_r', 0);
+    const { assignment_id, run_id } = deriveChildIds(turnId);
+    reserve({ turn_id: turnId, loop_id: loop.id, slot_id: 'lsl_r', target_slot_generation: 0, loop_version_at_reserve: loop.version, agent: A, claim_id: 'clm_c', phase: 'findings', iteration: 0, store_root: cwd, cwd, lease_deadline: FUTURE() }, cwd);
+    commitReservation(turnId, cwd);
+    armLaunch(turnId, { token: 'gen-0', epoch: 1, lease_deadline: FUTURE() }, cwd);
+    consumeLaunchGrant(turnId, 'gen-0', 1, cwd);
+    createAgentRun({ id: run_id, short_label: run_id, assignment_id, claim_id: 'clm_c', agent: A, transport: 'cli_spawn', scope: `review-loop:${loop.id}`, description: 't', status: 'created', tags: ['turn-owned'] }, cwd);
+    const claim: Claim = { schema_version: 2, id: 'clm_c', agent: A, scope: `review-loop:${loop.id}`, description: 't', created_at: nowISO(), status: 'active' };
+    saveClaim(claim, cwd);
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-conf-wt-'));
+    const asg: Assignment = { schema_version: 2, id: assignment_id, short_label: assignment_id, claim_id: 'clm_c', agent: A, dispatcher_agent: 'coord', scope: `review-loop:${loop.id}`, description: 't', status: 'offered', created_at: nowISO(), updated_at: nowISO(), offered_at: nowISO(), last_heartbeat_at: nowISO(), artifacts: [], retry_count: 0, max_retries: 2, heartbeat_ttl_ms: 1_800_000, acceptance_ttl_ms: 900_000, tags: [], worktree_path: wt };
+    saveAssignment(asg, cwd);
+    // The coordinator wrapper wrote the turn-keyed SENTINEL; the worker wrote a KEYLESS lane.
+    writeCompletionSignal(cwd, assignment_id, { turn_id: turnId, run_id, nonce: 'gen-0', status: 'completed', at: 't' });
+    fs.writeFileSync(getLaneResultPath(wt), JSON.stringify({ assignment_id, status: 'completed', summary: 'reviewed', review_verdict: 'approve', review_summary: 'ok' }));
+
+    integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const converged = getLoop(loop.id, cwd)!;
+    assert.ok(['closed', 'completed'].includes(converged.status), 'harvest converged the keyless approve lane via reconcile');
+    assert.equal(loadAgentRun(run_id, cwd)?.status, 'completed', 'turn-owned run settled');
+    assert.equal(converged.artifacts.filter((a) => a.type === 'verdict').length, 1, 'exactly one finalizer — no legacy double-record');
+    assert.equal(loadClaim('clm_c', cwd)?.status, 'released', 'approve close released the claim');
+    fs.rmSync(wt, { recursive: true, force: true });
   });
 });
