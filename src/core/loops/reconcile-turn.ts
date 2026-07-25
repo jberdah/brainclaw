@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { getReservation, evidenceMatchesAttempt, currentNonce, deriveTurnId, type TurnReservation } from './attempt-reservation.js';
+import { getReservation, evidenceMatchesAttempt, currentNonce, deriveTurnId, launchGrant, type TurnReservation } from './attempt-reservation.js';
 import { getLoop } from './store.js';
 import { complete_turn, add_artifact, advance } from './verbs.js';
 import { reducerForKind, type ReducerInput } from './result-reducers.js';
@@ -350,8 +350,17 @@ function convergeLockedTurn(
         const cur = getLoop(loop.id, cwd);
         if (cur && !LOOP_TERMINAL.has(cur.status)) {
           retainClaim = true;
+          // The bumped round is LIVE only if its reservation exists AND its launch grant is
+          // armed (dispatch in flight, pre-spawn) or crossed (spawned). A REVOKED grant
+          // (reserved_never_launched — crash between arm and consume + the expiry sweep) or an
+          // absent reservation is a STRAND (dec#149 R1): re-emit to self-heal. The re-dispatch's
+          // prepare re-arms a revoked grant at a higher epoch, so this round can actually relaunch.
           const bumpedTurnId = deriveTurnId(loop.id, slot.slot_id, cur.iteration_count);
-          if (!getReservation(bumpedTurnId, cwd)) {
+          const bumpedGrant = launchGrant(bumpedTurnId, cwd);
+          const bumpedLive =
+            getReservation(bumpedTurnId, cwd) !== undefined &&
+            (bumpedGrant?.status === 'armed' || bumpedGrant?.status === 'crossed');
+          if (!bumpedLive) {
             next_turn = mkNextTurn(cur.current_phase, cur.iteration_count);
             try {
               createRuntimeEvent({
