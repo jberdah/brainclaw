@@ -14,7 +14,7 @@ import { readManifest, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift, withCoarse } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
-import { resolveTraversal, aggregateFind, type TraversalMode } from './aggregate.js';
+import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } from './aggregate.js';
 import { defaultMemoryReader } from './memory-reader.js';
 import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
 import { loadConfig } from '../config.js';
@@ -122,6 +122,9 @@ export interface CodeFindResult {
 export interface CodeBriefInput extends CodeBackendContext {
   target: string;
   limit?: number;
+  /** pln#631 — store traversal (same semantics as find): `auto` (default) aggregates
+   *  the workspace when cwd is a multi-project root, else single-store. */
+  traversal?: TraversalMode;
 }
 
 export interface CodeBriefReadEntry {
@@ -129,6 +132,9 @@ export interface CodeBriefReadEntry {
   reason: string;
   score: number;
   related_memory_ids: string[];
+  /** pln#631 — set only on AGGREGATED briefs: the owning project (workspace-relative
+   *  dir, `''` = root). `path` is workspace-root-relative when aggregating. */
+  project?: string;
 }
 
 export interface CodeBriefRelatedMemory {
@@ -374,6 +380,20 @@ export class JsonlBackend implements CodeQueryBackend {
    * and carries a §6.1 lazy-validated freshness badge.
    */
   async brief(input: CodeBriefInput): Promise<CodeBrief> {
+    const cwd = input.cwd ?? process.cwd();
+    const resolved = resolveTraversal(cwd, input.traversal ?? 'auto');
+    if (resolved.workspace) {
+      // pln#631 PR2 — root-aggregated brief across the per-project stores (per-store
+      // HEAD drift resolved against ONE workspace HEAD, like aggregateFind).
+      const currentHead = this.gitHeadReader(resolved.root);
+      const agg = aggregateBrief(input.target, input.limit, resolved, currentHead, this.memoryReader);
+      return {
+        target: agg.target,
+        suggested_files_to_read: agg.suggested_files_to_read,
+        related_memory: agg.related_memory,
+        freshness_badge: agg.freshness_badge,
+      };
+    }
     const ctx = this.queryContext(input);
     const out = runBrief(input.target, input.limit, ctx, this.memoryReader);
     const manifest = readManifest(input.cwd, input.preferredDirName);

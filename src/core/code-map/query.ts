@@ -542,7 +542,7 @@ export interface BriefOutput {
 /** spec §9 — the brief reading list is capped at 12 files. */
 export const BRIEF_FILE_CAP = 12;
 
-interface RankedFile {
+export interface RankedFile {
   path: string;
   file_id: string;
   reason: string;
@@ -791,53 +791,87 @@ function filesMatchingPath(symbolsIndex: SymbolsIndex, target: string): SymbolIn
   return out;
 }
 
-export function brief(
+/** How a brief resolved its target within a store (drives cross-store selection). */
+export type BriefMatchKind = 'exact' | 'path' | 'fuzzy' | 'none';
+
+/** Store-local brief CORE result (pln#631 PR2) — pre-cap, pre-badge, pre-memory. */
+export interface StoreBriefResult {
+  /** Defining symbol entries for the target in this store. */
+  defining: SymbolIndexEntry[];
+  definingPaths: Set<string>;
+  /** How the target resolved here — an aggregation prefers exact/path over fuzzy. */
+  matchKind: BriefMatchKind;
+  /** Confident ranked reading list (NOT capped). */
+  confident: RankedFile[];
+  base: FreshnessStatus;
+  hasIndex: boolean;
+  /** True when rankFiles produced nothing (drives the deriveBadge empty hint). */
+  emptyRanked: boolean;
+  acc: FreshnessAccumulator;
+}
+
+/**
+ * Store-local brief CORE (pln#631 PR2): resolve the target → graph signals →
+ * rankFiles → confident list, with NO cap, NO badge, NO related-memory attach.
+ * Accepts an INJECTED checker + acc so a workspace aggregation can share ONE lazy
+ * budget across stores (memo is cwd-scoped, so sharing is collision-safe). `brief()`
+ * wraps this with a fresh checker/acc + reserve + memory + badge for the unchanged
+ * single-store path; `aggregate.ts` fans it out and merges target-defining stores.
+ */
+export function briefInStore(
   target: string,
-  limit: number | undefined,
   ctx: QueryContext,
-  memoryReader: MemoryReader,
-): BriefOutput {
-  const base = baseStatus(ctx);
+  checker: LazyChecker,
+  acc: FreshnessAccumulator,
+): StoreBriefResult {
   const symbolsIndex = readSymbolsIndex(ctx.cwd, ctx.preferredDirName);
   if (!symbolsIndex) {
     return {
-      target,
-      suggested_files_to_read: [],
-      related_memory: [],
-      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
+      defining: [],
+      definingPaths: new Set(),
+      matchKind: 'none',
+      confident: [],
+      base: 'missing_index',
+      hasIndex: false,
+      emptyRanked: true,
+      acc,
     };
   }
+  const base = baseStatus(ctx);
   const importsIndex = readImportsIndex(ctx.cwd, ctx.preferredDirName);
   const resolutionIndex = readResolutionIndex(ctx.cwd, ctx.preferredDirName);
 
   // Resolve target -> defining symbol entries. A brief orients on a SPECIFIC target,
   // so prefer EXACT name matches when present — otherwise the token index floods the
-  // result with unrelated same-token symbols (e.g. `resolveProjectImports` would pull
-  // in every `resolve*`), burying the real defining file + its graph signals. Fall
-  // back to the fuzzy token set, then to a path match. (find() stays fuzzy by design.)
+  // result with unrelated same-token symbols. Fall back to the fuzzy token set, then
+  // a path match. `matchKind` records which path won so an aggregation can prefer the
+  // stores that actually DEFINE the target over stores that only fuzzy-match a token.
   let defining: SymbolIndexEntry[];
+  let matchKind: BriefMatchKind;
   if (looksLikePathTarget(target)) {
-    // PATH target (pln#593 1b): resolve the exact file; the graph signals (its
-    // imports / dependents / direct tests) then rank below it via rankFiles. Skip
-    // the fuzzy token gather entirely — it floods a path brief with same-token
-    // noise. Degrade to the fuzzy set only if the path resolves to nothing indexed.
     defining = filesMatchingPath(symbolsIndex, target);
-    if (defining.length === 0) defining = gatherSymbolEntries(symbolsIndex, target);
+    if (defining.length > 0) matchKind = 'path';
+    else {
+      defining = gatherSymbolEntries(symbolsIndex, target);
+      matchKind = defining.length > 0 ? 'fuzzy' : 'none';
+    }
   } else {
     defining = gatherSymbolEntries(symbolsIndex, target);
     const exact = defining.filter((e) => e.name.toLowerCase() === target.toLowerCase());
-    if (exact.length > 0) defining = exact;
-    else if (defining.length === 0) defining = filesMatchingPath(symbolsIndex, target);
+    if (exact.length > 0) {
+      defining = exact;
+      matchKind = 'exact';
+    } else if (defining.length > 0) {
+      matchKind = 'fuzzy';
+    } else {
+      defining = filesMatchingPath(symbolsIndex, target);
+      matchKind = defining.length > 0 ? 'path' : 'none';
+    }
   }
 
   const root = resolveRoot(ctx);
   const maxBytes = maxParseBytes(ctx);
-  const checker = makeLazyChecker();
-  const acc = newAccumulator();
 
-  // P1d graph signals. FORWARD: read from defining shards — but only CONFIDENT ones
-  // (validate first; a stale importer shard's edge list is not trusted). REVERSE: from
-  // the resolution index (each importer row is lazy-validated below like any other).
   const definingPaths = new Set(defining.map((e) => e.path));
   const definingByNodeId = new Map(defining.map((e) => [e.node_id, e] as const));
   const confidentDefiningFileIds = new Map<string, string>();
@@ -854,41 +888,30 @@ export function brief(
 
   const ranked = rankFiles(defining, fwd, rev, symbolsIndex, importsIndex, target);
 
-  // §6.1 — lazy validate each suggested file; exclude deletions from the confident
-  // list (still recorded in the badge). P1d: a GRAPH-ONLY row that fails validation
-  // (stale / unchecked / deleted) is SUPPRESSED — no silent stale graph hints (Codex).
+  // §6.1 — lazy validate each suggested file; exclude deletions; suppress a graph-only
+  // row that fails validation (no silent stale graph hints).
   const confident: RankedFile[] = [];
   for (const rf of ranked) {
     const ok = validateEntry(
-      { path: rf.path, file_id: rf.file_id },
-      checker,
-      acc,
-      root,
-      maxBytes,
-      ctx.cwd,
-      ctx.preferredDirName,
+      { path: rf.path, file_id: rf.file_id }, checker, acc, root, maxBytes, ctx.cwd, ctx.preferredDirName,
     );
-    if (acc.missingPaths.has(rf.path)) continue; // deletion: exclude entirely.
-    if (rf.graphDerived && !ok) continue; // graph-only + not confident → suppress.
-    // Non-graph stale/unchecked rows still appear (badge flags them) so the agent
-    // knows the file exists but may be out of date.
+    if (acc.missingPaths.has(rf.path)) continue;
+    if (rf.graphDerived && !ok) continue;
     confident.push(rf);
   }
 
-  const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
-  // pln#601 — reserve source slots so test importers can't crowd out the source
-  // files the agent needs (defining files are the target, never counted as noise).
-  const capped = reserveSourceSlots(confident, cap, definingPaths);
+  return { defining, definingPaths, matchKind, confident, base, hasIndex: true, emptyRanked: ranked.length === 0, acc };
+}
 
-  // Related memory (spec §11): match by the candidate paths + symbol names.
-  const candidatePaths = capped.map((f) => f.path);
-  const symbolNames = [...new Set(defining.map((e) => e.name))];
-  if (symbolNames.length === 0) symbolNames.push(target);
-  const memoryItems = memoryReader(ctx);
-  const related = attachRelatedMemory(memoryItems, candidatePaths, symbolNames);
-
-  // Attach matching memory ids per file (those whose related_paths/text name it).
-  const suggested: BriefReadEntry[] = capped.map((f) => {
+/**
+ * Attach related-memory ids per reading-list entry (spec §11). Shared by the
+ * single-store brief() and the workspace aggregation so both surface memory identically.
+ */
+export function attachMemoryIds(
+  capped: Array<{ path: string; reason: string; score: number }>,
+  related: RelatedMemoryItem[],
+): BriefReadEntry[] {
+  return capped.map((f) => {
     const ids = related
       .filter((m) => {
         const fileNorm = f.path.replace(/\\/g, '/');
@@ -902,12 +925,37 @@ export function brief(
       .map((m) => m.id);
     return { path: f.path, reason: f.reason, score: f.score, related_memory_ids: ids };
   });
+}
 
-  const badge = deriveBadge(base, acc, checker.exhausted, capped.length > 0, ranked.length === 0);
-  return {
-    target,
-    suggested_files_to_read: suggested,
-    related_memory: related,
-    freshness_badge: badge,
-  };
+export function brief(
+  target: string,
+  limit: number | undefined,
+  ctx: QueryContext,
+  memoryReader: MemoryReader,
+): BriefOutput {
+  const checker = makeLazyChecker();
+  const acc = newAccumulator();
+  const r = briefInStore(target, ctx, checker, acc);
+  if (!r.hasIndex) {
+    return {
+      target,
+      suggested_files_to_read: [],
+      related_memory: [],
+      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
+    };
+  }
+
+  const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
+  // pln#601 — reserve source slots so test importers can't crowd out source files.
+  const capped = reserveSourceSlots(r.confident, cap, r.definingPaths);
+
+  // Related memory (spec §11): match by the candidate paths + symbol names.
+  const candidatePaths = capped.map((f) => f.path);
+  const symbolNames = [...new Set(r.defining.map((e) => e.name))];
+  if (symbolNames.length === 0) symbolNames.push(target);
+  const related = attachRelatedMemory(memoryReader(ctx), candidatePaths, symbolNames);
+  const suggested = attachMemoryIds(capped, related);
+
+  const badge = deriveBadge(r.base, acc, checker.exhausted, capped.length > 0, r.emptyRanked);
+  return { target, suggested_files_to_read: suggested, related_memory: related, freshness_badge: badge };
 }
