@@ -486,7 +486,11 @@ export function findReservationByRunId(runId: string, cwd?: string): TurnReserva
  * discriminator. Returns undefined for legacy assignments.
  */
 export function findReservationByAssignmentId(assignmentId: string, cwd?: string): TurnReservation | undefined {
-  return listReservations({}, cwd).find((r) => r.child_ids.assignment_id === assignmentId);
+  // decision:'committed' is load-bearing (review #5): only a COMMITTED reservation ever
+  // coexists with a real LANE-RESULT (dispatch commits before spawn). Filtering here makes
+  // the turn-owned discriminator explicit — a `prepared`/`aborted` reservation must never
+  // route a lane to reconcileTurn (it has no live launch generation to accept evidence for).
+  return listReservations({ decision: 'committed' }, cwd).find((r) => r.child_ids.assignment_id === assignmentId);
 }
 
 /* ============================ launch-grant fence (PR2a, dec#138) ========== */

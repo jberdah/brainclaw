@@ -146,6 +146,7 @@ describe('pln#630 PR3a — harvest → reconcileTurn wiring (integrate path)', (
     // Proves it was reconcileTurn (not the legacy closer): exactly one harvested event, keyed to the run.
     assert.equal(harvestedEvents(cwd, runId).length, 1, 'exactly one loop_artifact_harvested for this run');
     assert.equal(res.integrated[0]!.review_loop?.action, 'closed');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'approve close releases the coordinator claim (review #6a)');
   });
 
   it('T2 flag-on turn-owned REQUEST_CHANGES → verdict recorded, loop stays OPEN, no next_turn, no corruption', () => {
@@ -157,6 +158,10 @@ describe('pln#630 PR3a — harvest → reconcileTurn wiring (integrate path)', (
     assert.ok(loop.artifacts.some((a) => a.type === 'verdict' && (a.body ?? '').startsWith('changes-requested')));
     assert.equal(loadAgentRun(runId, cwd)?.status, 'completed', 'run still settled');
     assert.equal(res.next_turns.length, 0, 'no turn-owned re-dispatch (PR3b deferred)');
+    // review #1/#6b — document the ACTUAL settlement: reconcileTurn settles an accepted
+    // lane (approve OR request_changes) → the claim is released. PR3b must re-establish the
+    // claim/worktree when it wires the symmetric fix-cycle re-dispatch.
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'accepted request_changes lane releases the claim');
   });
 
   it('T3 flag-OFF → LEGACY path even with a full turn-owned fixture: run stays created, zero harvested events', () => {
@@ -193,6 +198,34 @@ describe('pln#630 PR3a — harvest → reconcileTurn wiring (integrate path)', (
     // Claim NOT released — reconcileTurn rejects at the evidence gate BEFORE settling, so the
     // loop stays live for a retry. (Run status is governed by the orthogonal reconciler.)
     assert.equal(loadClaim('clm_x', cwd)?.status, 'active');
+    // review #2 — an unconverged turn-owned lane that carried a verdict must NOT stall
+    // silently: an observable run_blocked event is emitted so a doctor/operator can see it.
+    const unconverged = listRuntimeEvents(cwd).filter(
+      (e) => e.event_type === 'run_blocked' && (e.tags ?? []).includes('unconverged'),
+    );
+    assert.equal(unconverged.length, 1, 'a not-converged turn-owned lane emits one observability event');
+  });
+
+  it('T7 idempotent — re-integrating a turn-owned APPROVE lane twice never double-finalizes (exactly-once)', () => {
+    process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1';
+    const { loopId, wt } = seedTurnOwned(cwd, { verdict: 'approve' });
+    integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    // The lane file is still present; a second integrate must hit reconcile's terminal-loop
+    // idempotent no-op (or be skipped) — either way NO duplicate verdict, loop stays terminal.
+    integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const loop = getLoop(loopId, cwd)!;
+    assert.ok(['closed', 'completed'].includes(loop.status), 'loop remains terminal after re-integrate');
+    assert.equal(loop.artifacts.filter((a) => a.type === 'verdict').length, 1, 'exactly one verdict — no double-finalize');
+  });
+
+  it('T8 report→integrate sequence: report neutralizes (loop open), integrate finalizes via reconcile (loop closed)', () => {
+    process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1';
+    const { loopId, runId, wt } = seedTurnOwned(cwd, { verdict: 'approve' });
+    harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    assert.equal(getLoop(loopId, cwd)!.status, 'open', 'report path leaves the turn-owned loop OPEN (finalization deferred)');
+    integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    assert.ok(['closed', 'completed'].includes(getLoop(loopId, cwd)!.status), 'integrate finalizes via reconcile');
+    assert.equal(harvestedEvents(cwd, runId).length, 1, 'reconcile ran exactly once — on integrate, not report');
   });
 });
 

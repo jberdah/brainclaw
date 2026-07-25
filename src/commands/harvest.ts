@@ -698,14 +698,36 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
           const { reservation, result: rr } = turnOwned;
           entry.review_loop = reconcileToReviewLoopResult(reservation, rr, lane);
           reasons.push(`turn-owned reconcile ${reservation.loop_id}: ${entry.review_loop.action} — ${rr.reason}${rr.conflict ? ' [CONFLICT — held]' : ''}`);
-          // reconcileTurn OWNS run/assignment/claim settling: a terminal converge released
-          // the claim; a non-terminal outcome (verdict recorded / evidence rejected /
-          // superseded) left it intact for retry. So we do NOT run the legacy teardown gate
-          // — just reflect the real claim state. No next_turns push: the request_changes
-          // turn-owned re-dispatch is pln#630 PR3b (deferred, non-corrupting — the loop
-          // stays open awaiting its next turn, identical to the legacy asymmetric path).
+          // Claim/run/assignment settling is OWNED by reconcileTurn, so we do NOT run the
+          // legacy teardown gate — just reflect the resulting claim state. Settlement
+          // semantics (reconcile-turn.ts, review #1): an ACCEPTED lane — approve OR
+          // request_changes, both settle the slot 'done' — completes the assignment AND
+          // releases the claim; only a REJECTED/superseded lane (evidence mismatch/absent,
+          // §13 R4 conflict) leaves the claim intact for a retry. No next_turns push: the
+          // request_changes fix-cycle re-dispatch — AND re-establishing the claim/worktree
+          // that the release above implies — is pln#630 PR3b (deferred; the loop stays open
+          // awaiting its next turn, so nothing is corrupted, only not-yet-autonomous).
           try { entry.claim_released = loadClaim(assignment.claim_id, cwd)?.status === 'released'; }
           catch { entry.claim_released = false; }
+          // review #2 — a turn-owned lane that carries a completed review verdict but whose
+          // evidence was NOT accepted (missing/mismatched nonce) does not converge, and —
+          // unlike the legacy presence-based path — has no fallback close, so the loop would
+          // stall SILENTLY. Emit an observable event so an operator/doctor can see the stall.
+          // (A full timeout→legacy backstop is pln#630 PR4, gated before the flag flips; an
+          // R4 conflict already journals its own event, so it is excluded here.)
+          if (!rr.reconciled && !rr.conflict && lane.review_verdict) {
+            try {
+              createRuntimeEvent({
+                agent: actor,
+                event_type: 'run_blocked',
+                text: `harvest: turn-owned review lane ${lane.assignment_id} carried verdict '${lane.review_verdict}' but reconcile did not converge (${rr.reason}); loop ${reservation.loop_id} left OPEN — needs the completion sentinel or a manual turn`,
+                tags: ['harvest', 'reconcile', 'turn-owned', 'unconverged'],
+                assignment_id: lane.assignment_id,
+                run_id: reservation.child_ids.run_id,
+                status_reason: 'turn_owned_evidence_unaccepted',
+              }, cwd);
+            } catch { /* observability best-effort */ }
+          }
         } else {
           const loopClose = closeReviewLoopFromLaneResult(assignment, lane, actor, cwd);
           if (loopClose) {
