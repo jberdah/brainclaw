@@ -10,16 +10,15 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { reserveSourceSlots, BRIEF_FILE_CAP } from '../../../src/core/code-map/query.js';
+import { reserveSourceSlots, isTestPath, BRIEF_FILE_CAP } from '../../../src/core/code-map/query.js';
 
 // Minimal RankedFile-shaped rows (only path/score matter to the reserve).
 function rf(path: string, score: number) {
   return { path, file_id: 'f'.repeat(64), reason: 'r', score, bestDelta: score, graphDerived: false };
 }
 
-const isTest = (p: string) =>
-  /(?:^|[\\/])(?:tests?|__tests__|specs?|__mocks__)[\\/]/i.test(p) ||
-  /[._-](?:test|spec)\.[cm]?[jt]sx?$/i.test(p);
+// Use the real classifier so the reserve test tracks isTestPath exactly.
+const isTest = (p: string) => isTestPath(p);
 
 describe('pln#601 reserveSourceSlots — brief source reserve', () => {
   it('caps test files at ~1/4 of the list when source would otherwise be crowded out', () => {

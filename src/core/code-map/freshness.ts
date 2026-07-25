@@ -39,9 +39,20 @@ export function coarseFreshness(status: FreshnessStatus): CoarseFreshness {
       return 'partial';
     case 'missing_index':
       return 'missing';
-    default:
-      // stale_changed_files | stale_extractor | stale_grammar | stale_git_head
+    case 'stale_changed_files':
+    case 'stale_extractor':
+    case 'stale_grammar':
+    case 'stale_git_head':
       return 'stale';
+    default: {
+      // Exhaustiveness guard (pln#601 review F4): every FreshnessStatus is mapped
+      // explicitly above. If the enum grows, this `never` assignment fails to
+      // compile — forcing a deliberate classification instead of a new status
+      // silently rolling up to 'stale'.
+      const _exhaustive: never = status;
+      void _exhaustive;
+      return 'stale';
+    }
   }
 }
 

@@ -288,11 +288,30 @@ function normIdent(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
-/** pln#601 — a path that is a test/spec file (its symbols must not outrank the real def). */
-function isTestPath(p: string): boolean {
+/**
+ * pln#601 — a path that is a test/spec file (its symbols must not outrank the real
+ * def, and it should not crowd source out of a brief). Recognizes conventions across
+ * ALL supported languages (JS/TS + py/php/java/go/rust/c#/ruby/c/c++), so the
+ * source-over-test bias actually works for the polyglot langs, not just JS/TS.
+ * Exported for the classification regression tests.
+ */
+export function isTestPath(p: string): boolean {
+  // Directory conventions (all langs): tests/, test/, __tests__/, spec(s)/ (Ruby
+  // RSpec), __mocks__/. NOTE: a source dir literally named `spec/` (e.g. an OpenAPI
+  // `spec/` folder) is an accepted false-positive — RSpec `spec/` is the commoner
+  // meaning now that Ruby is supported, and path alone can't disambiguate.
+  if (/(?:^|[\\/])(?:tests?|__tests__|specs?|__mocks__)[\\/]/i.test(p)) return true;
+  const base = p.replace(/\\/g, '/').split('/').pop() ?? p;
   return (
-    /(?:^|[\\/])(?:tests?|__tests__|specs?|__mocks__)[\\/]/i.test(p) ||
-    /[._-](?:test|spec)\.[cm]?[jt]sx?$/i.test(p)
+    // separator-suffixed: foo.test.ts, foo_test.go, foo-spec.js, foo_spec.rb, foo_test.py
+    /[._-](?:test|spec)\.(?:[cm]?[jt]sx?|py|rb|go|php|java|cs|rs)$/i.test(base) ||
+    // pytest / minitest prefix: test_foo.py, test_foo.rb
+    /^test_.+\.(?:py|rb)$/i.test(base) ||
+    // bare test/spec file: test.ts, spec.rb
+    /^(?:test|spec)\.(?:[cm]?[jt]sx?|py|rb|go)$/i.test(base) ||
+    // xUnit / JUnit PascalCase suffix: FooTest.cs, BarTests.cs, BazTest.java
+    // (case-SENSITIVE capital T so `contest.cs` / `latest.cs` are not false hits)
+    /Tests?\.(?:cs|java)$/.test(base)
   );
 }
 

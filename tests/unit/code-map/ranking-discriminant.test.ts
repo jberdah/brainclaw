@@ -15,7 +15,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { scoreEntry } from '../../../src/core/code-map/query.js';
+import { scoreEntry, isTestPath } from '../../../src/core/code-map/query.js';
 import type { SymbolIndexEntry } from '../../../src/core/code-map/types.js';
 
 function entry(over: Partial<SymbolIndexEntry> & { name: string }): SymbolIndexEntry {
@@ -90,5 +90,50 @@ describe('pln#601 scoreEntry — separator/case-insensitive discriminant', () =>
     const comp = scoreEntry(entry({ name: 'UserCard', subtype: 'component' }), 'UserCard');
     const plain = scoreEntry(entry({ name: 'UserCard' }), 'UserCard');
     assert.ok(comp > plain, `component ${comp} > plain ${plain}`);
+  });
+});
+
+describe('pln#601 isTestPath — polyglot test-file classification (review F1/F3)', () => {
+  it('recognizes directory conventions across languages', () => {
+    for (const p of [
+      'tests/unit/foo.test.ts',
+      'test/foo.py',
+      'src/__tests__/foo.ts',
+      'spec/models/user_spec.rb',
+      'src/__mocks__/handle.ts',
+    ]) {
+      assert.equal(isTestPath(p), true, `${p} is a test path`);
+    }
+  });
+
+  it('recognizes filename conventions for the newly-added languages (F1)', () => {
+    // These used to be missed — the test-penalty was JS/TS-only, so it silently
+    // did nothing for Go/Python/Ruby/C#/Java/Rust projects.
+    for (const p of [
+      'internal/server/handler_test.go', // Go standard
+      'pkg/foo/test_helpers.py', // pytest prefix
+      'app/models/user_test.py', // pytest suffix
+      'lib/parser_spec.rb', // RSpec/minitest
+      'src/Services/OrderTest.cs', // xUnit PascalCase
+      'src/Services/OrderTests.cs',
+      'src/main/UserServiceTest.java', // JUnit
+      'src/lib/parser_test.rs', // Rust convention
+      'src/api/handler.spec.ts', // JS/TS (still works)
+    ]) {
+      assert.equal(isTestPath(p), true, `${p} is a test file`);
+    }
+  });
+
+  it('does NOT misclassify source files that merely contain "test"/"spec" (F2 direction)', () => {
+    for (const p of [
+      'src/contest/engine.ts', // "contest" contains "test"
+      'src/latest.ts',
+      'src/respec.ts',
+      'src/Contest.cs', // lowercase "test" inside → not the PascalCase suffix
+      'src/mytest.ts', // no separator before "test"
+      'src/protocols/handler.go',
+    ]) {
+      assert.equal(isTestPath(p), false, `${p} is a SOURCE file`);
+    }
   });
 });
