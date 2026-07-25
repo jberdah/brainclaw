@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { getReservation, evidenceMatchesAttempt, currentNonce, type TurnReservation } from './attempt-reservation.js';
+import { getReservation, evidenceMatchesAttempt, currentNonce, deriveTurnId, type TurnReservation } from './attempt-reservation.js';
 import { getLoop } from './store.js';
 import { complete_turn, add_artifact, advance } from './verbs.js';
 import { reducerForKind, type ReducerInput } from './result-reducers.js';
@@ -304,6 +304,17 @@ function convergeLockedTurn(
   let auto_closed = false;
   let retainClaim = false;
   let next_turn: ReviewLoopNextTurn | undefined;
+  // Build the fix-cycle re-dispatch descriptor for a given round (shared by the bump arm and
+  // the strand self-heal below so the reviewer brief + slot binding never drift).
+  const mkNextTurn = (phase: string, iteration: number): ReviewLoopNextTurn => ({
+    slot_id: slot.slot_id,
+    role: slot.role ?? 'reviewer',
+    agent: slot.agent ?? '',
+    ...(slot.agent_id ? { agent_id: slot.agent_id } : {}),
+    phase,
+    iteration,
+    task: buildFixCycleTask(lane.review_summary ?? lane.summary ?? '', iteration),
+  });
   if (slot_outcome === 'done') {
     // symmetricRC detection is INDEPENDENT of the bump guard below (safety race 2): a
     // re-reconcile in the pre-redispatch window must NOT fall into the approve/asymmetric
@@ -325,23 +336,38 @@ function convergeLockedTurn(
           auto_closed = true; // iteration cap → blocked/terminal → release the claim below
         } else {
           retainClaim = true; // keep the coordinator claim + worktree for the re-dispatch
-          next_turn = {
-            slot_id: slot.slot_id,
-            role: slot.role ?? 'reviewer',
-            agent: slot.agent ?? '',
-            ...(slot.agent_id ? { agent_id: slot.agent_id } : {}),
-            phase: adv.loop.current_phase,
-            iteration: adv.loop.iteration_count,
-            task: buildFixCycleTask(lane.review_summary ?? lane.summary ?? '', adv.loop.iteration_count),
-          };
+          next_turn = mkNextTurn(adv.loop.current_phase, adv.loop.iteration_count);
         }
       } else {
-        // Already bumped by a prior pass (crash between bump and re-dispatch). Keep the
-        // retained claim if the loop is still open; do NOT re-bump or re-emit (MVP — the
-        // residual retain-then-crash strand is PR4 / dec#149 #2). Never re-advance.
+        // Already bumped by a prior pass. Distinguish a benign re-reconcile (the next round
+        // WAS dispatched) from a genuine STRAND (pln#630 PR4, closes dec#149 #2/F3): the pass
+        // that bumped crashed BEFORE harvest re-dispatched, so the loop sits open with the
+        // claim retained and NO worker in flight. Detect it precisely — is there a reservation
+        // for the bumped round's deterministic turn_id? If NOT → strand → RE-EMIT next_turn to
+        // self-heal (the launch fence dedups, so a benign duplicate is DENIED, never a
+        // double-spawn) and journal a recovery event. If a reservation exists → the next round
+        // is already in flight → just retain, no re-emit (no churn on benign re-reconciles).
         const cur = getLoop(loop.id, cwd);
-        if (cur && !LOOP_TERMINAL.has(cur.status)) retainClaim = true;
-        else auto_closed = true;
+        if (cur && !LOOP_TERMINAL.has(cur.status)) {
+          retainClaim = true;
+          const bumpedTurnId = deriveTurnId(loop.id, slot.slot_id, cur.iteration_count);
+          if (!getReservation(bumpedTurnId, cwd)) {
+            next_turn = mkNextTurn(cur.current_phase, cur.iteration_count);
+            try {
+              createRuntimeEvent({
+                agent: actor,
+                event_type: 'run_blocked',
+                text: `reconcileTurn: fix-cycle round ${cur.iteration_count} of loop ${loop.id} was bumped but never dispatched (turn ${turn_id} strand) — re-emitting next_turn to self-heal`,
+                tags: ['loops', 'reconcile', 'turn-owned', 'strand-recovery'],
+                assignment_id: reservation.child_ids.assignment_id,
+                run_id: reservation.child_ids.run_id,
+                status_reason: 'fix_cycle_strand_reemit',
+              }, cwd);
+            } catch { /* observability best-effort */ }
+          }
+        } else {
+          auto_closed = true;
+        }
       }
     } else {
       // approve OR asymmetric request_changes — unchanged PR3a / legacy-asymmetric behavior.
@@ -368,7 +394,7 @@ function convergeLockedTurn(
   return {
     reconciled: true,
     reason: next_turn
-      ? `turn ${turn_id} → request_changes: bumped to round ${next_turn.iteration}, claim retained for re-dispatch`
+      ? `turn ${turn_id} → request_changes round ${next_turn.iteration}: claim retained, next fix turn emitted for re-dispatch`
       : slotTerminal ? `turn ${turn_id} already recorded; advance re-attempted (${slot_outcome})` : `turn ${turn_id} reconciled (${slot_outcome})`,
     slot_outcome,
     artifacts_added,

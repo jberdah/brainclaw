@@ -164,17 +164,31 @@ describe('pln#630 PR3b — reconcileTurn symmetric fix cycle', () => {
     assert.equal(getLoop(loopId, cwd)!.iteration_count, 0, 'no bump from a superseded turn');
   });
 
-  it('F — the bump guard reads the loop FRESH inside the lock: an already-advanced round does NOT double-bump (review Finding 1)', () => {
+  it('F — fresh-read bump guard: an already-advanced round does NOT double-bump; a never-dispatched round self-heals (Findings 1 + F3)', () => {
     const { loopId, version } = openSymmetricReview(cwd);
     const { turnId, lane } = mintTurn(cwd, loopId, version, 0, 'request_changes');
-    // Simulate a concurrent pass that ALREADY bumped the loop (iteration 0→1). reservation.iteration
-    // is still 0, but the LIVE loop is at 1 — the classic TOCTOU. A stale-snapshot guard would bump
-    // AGAIN (→2), minting a second turn_id → double-spawn. The in-lock re-read must see 1 → else-branch.
+    // Simulate a pass that ALREADY bumped the loop (iteration 0→1) but crashed before dispatching
+    // round 1. reservation.iteration is still 0, the LIVE loop is at 1 — the classic TOCTOU. A
+    // stale-snapshot guard would bump AGAIN (→2), minting a second turn_id → double-spawn.
     advance({ id: loopId, to_phase: 'findings', actor: 'coord' }, cwd);
-    assert.equal(getLoop(loopId, cwd)!.iteration_count, 1, 'precondition: loop pre-bumped to 1');
+    assert.equal(getLoop(loopId, cwd)!.iteration_count, 1, 'precondition: loop pre-bumped to 1, round 1 never dispatched');
     const r = reconcileTurn({ turn_id: turnId, lane, cwd });
-    assert.equal(getLoop(loopId, cwd)!.iteration_count, 1, 'NO second bump — the guard saw the fresh iteration');
-    assert.equal(r.next_turn, undefined, 'no phantom next_turn for an already-advanced round');
+    assert.equal(getLoop(loopId, cwd)!.iteration_count, 1, 'NO second bump — the in-lock re-read saw the fresh iteration');
+    // Round 1 has no reservation (never dispatched) → genuine strand → F3 self-heal re-emits.
+    assert.ok(r.next_turn, 'strand recovery: a bumped-but-never-dispatched round re-emits next_turn (F3)');
+    assert.equal(r.next_turn!.iteration, 1, 're-emits the STUCK round (1), not a new bump');
+  });
+
+  it('F2 — a benign re-reconcile whose next round IS already dispatched does NOT re-emit (no churn)', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const { turnId, lane } = mintTurn(cwd, loopId, version, 0, 'request_changes');
+    reconcileTurn({ turn_id: turnId, lane, cwd }); // bump → iteration 1, emits round-1 next_turn
+    // Round 1 IS dispatched: create its reservation (deriveTurnId(loop,slot,1)). No turn() call —
+    // the reconcile-unit fixtures leave slot.current_turn_id unset, so the superseded guard does
+    // not fire and we exercise the else-retain "reservation exists → no re-emit" branch directly.
+    mintTurn(cwd, loopId, getLoop(loopId, cwd)!.version, 1, 'request_changes');
+    const r = reconcileTurn({ turn_id: turnId, lane, cwd });
+    assert.equal(r.next_turn, undefined, 'round 1 already dispatched → no strand → no re-emit (no churn)');
   });
 
   it('G2 — reconcile on an already-BLOCKED loop releases a leaked claim then no-ops (review Finding 2)', () => {
@@ -187,6 +201,21 @@ describe('pln#630 PR3b — reconcileTurn symmetric fix cycle', () => {
     const r = reconcileTurn({ turn_id: turnId, lane, cwd });
     assert.match(r.reason, /idempotent no-op/);
     assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'the terminal early-return released the leaked claim');
+  });
+
+  it('F3 — after round N+1 is REALLY dispatched (turn() rebinds the slot), re-reconciling round N hits the superseded guard, never the strand re-emit', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const t0 = mintTurn(cwd, loopId, version, 0, 'request_changes');
+    reconcileTurn({ turn_id: t0.turnId, lane: t0.lane, cwd }); // bump → iteration 1
+    // Round 1's real dispatch calls turn(), rebinding slot.current_turn_id to round-1's turnId —
+    // the PRIMARY production stopper. A late re-reconcile of the OLD round-0 turn must hit the
+    // superseded guard BEFORE the else-branch, so it never mistakes a progressing loop for a strand.
+    const t1turnId = deriveTurnId(loopId, 'lsl_r', 1);
+    turn({ id: loopId, slot_id: 'lsl_r', actor: 'coord', turn_id: t1turnId }, cwd);
+    const r = reconcileTurn({ turn_id: t0.turnId, lane: t0.lane, cwd });
+    assert.equal(r.reconciled, false);
+    assert.match(r.reason, /superseded/);
+    assert.equal(r.next_turn, undefined, 'a superseded old turn never re-emits a strand next_turn');
   });
 });
 
