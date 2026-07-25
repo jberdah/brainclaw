@@ -112,4 +112,25 @@ describe('pln#631 PR2 root-aggregated brief (traversal)', () => {
     const paths = brief.suggested_files_to_read.map((f) => f.path);
     assert.ok(!paths.some((p) => p.startsWith('applications/app_a')), 'no aggregation → child files absent');
   });
+
+  it('briefs an imported-but-not-defined name via the importer heuristic (review F1 parity)', async () => {
+    // No store DEFINES `axios`, but a child imports it — a single-store brief surfaces
+    // the importer via rankFiles' specifier heuristic, so the aggregate must too (not []).
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-bagg3-'));
+    cleanup.push(root);
+    makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    writeFile(path.join(root, 'src', 'rootlib.ts'), 'export function ledgerRoot(){return 0;}\n');
+    const appA = path.join(root, 'applications', 'app_a');
+    makeStore(appA, 'app_a');
+    writeFile(path.join(appA, 'src', 'client.ts'), "import axios from 'axios';\nexport function call(){ return axios; }\n");
+
+    const be = new JsonlBackend();
+    await be.refresh({ cwd: root, scope: 'all', cascade: true });
+    const brief = await be.brief({ target: 'axios', cwd: root, traversal: 'auto' });
+    const paths = brief.suggested_files_to_read.map((f) => f.path);
+    assert.ok(
+      paths.includes('applications/app_a/src/client.ts'),
+      `the importer must surface via aggregation, got: ${paths.join(', ')}`,
+    );
+  });
 });

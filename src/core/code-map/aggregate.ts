@@ -359,9 +359,16 @@ export function aggregateBrief(
     return { ref, r, badge };
   });
 
-  // Contribute reading lists only from the stores at the highest match tier present.
+  // Contribute reading lists from the stores at the highest match TIER present (no
+  // fuzzy dilution). But when NO store DEFINES the target (bestTier 0), fall back to
+  // any store with a non-empty reading list — rankFiles' import-specifier heuristic can
+  // surface relevant IMPORTER files even with no defining symbol (review F1: preserves
+  // single-store brief parity for an imported-but-not-locally-defined name like `axios`).
   const bestTier = Math.max(0, ...perStore.map((p) => briefMatchTier(p.r.matchKind)));
-  const contributing = bestTier === 0 ? [] : perStore.filter((p) => briefMatchTier(p.r.matchKind) === bestTier);
+  const contributing =
+    bestTier > 0
+      ? perStore.filter((p) => briefMatchTier(p.r.matchKind) === bestTier)
+      : perStore.filter((p) => p.r.confident.length > 0);
 
   const merged: Array<RankedFile & { project: string }> = [];
   const seen = new Set<string>();
