@@ -5,6 +5,12 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Turn-owned exactly-once review is now the default** (pln#630). Review-loop dispatch and finalization route through the turn-owned attempt state machine instead of the legacy best-effort projection: each review turn gets an immutable attempt record (`turn_id`/`run_id`/`nonce`) behind an atomic launch fence (reserve → arm → consume) so a turn is **spawned at most once** even under concurrent dispatch or crash-recovery, and `reconcileTurn` finalizes it from **read-strict, turn-keyed evidence** (the coordinator's completion sentinel) rather than presence-based markers — closing the double-spawn and false-green windows the legacy path had. The autonomous `request_changes` fix-cycle (bump round + retain the worktree + re-dispatch, cap → `blocked`) and crash-strand self-heal (a bumped-but-never-launched round is detected and re-armed at a fresh epoch, bounded by the dispatch lease) run on this path. Shipped after four adversarially-reviewed PRs (finalization, fix-cycle, strand self-heal + §9 conformance harness, revoked-grant recovery), the exactly-once fence verified sound each round, plus a live end-to-end (real spawn → cmd.exe-written turn-keyed sentinel → harvest → `reconcileTurn` → close-on-approve). **Kill-switch:** set `BRAINCLAW_TURN_OWNED_REVIEW=0` to revert to the legacy closer (byte-identical). Scope is review loops only, and routing is doubly-gated — even enabled, harvest only reconcile-turns a lane that owns a turn reservation, so a legacy-dispatched lane still uses the legacy path. No change to ideation/implementation loops or the MCP tool surface.
+
 ## [1.17.0] — 2026-07-19
 
 Autonomous review-loop fix cycle (the second half of the pln#628 Focus 4B flagship), a Turbopack-compatible per-worktree dependency mode, and a Codex integration refresh (native lifecycle hooks + an MCP config-field fix) after Codex's architecture moved on. Every code change was Codex-reviewed before merge (the fix-cycle and hooks work each went through multiple review rounds); the MCP timeout fix was a doc-verified one-line field rename. No breaking changes — all new behavior is additive and opt-in, defaults unchanged.
