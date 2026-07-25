@@ -149,19 +149,19 @@ describe('pln#630 PR3a — harvest → reconcileTurn wiring (integrate path)', (
     assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'approve close releases the coordinator claim (review #6a)');
   });
 
-  it('T2 flag-on turn-owned REQUEST_CHANGES → verdict recorded, loop stays OPEN, no next_turn, no corruption', () => {
+  it('T2 flag-on turn-owned symmetric REQUEST_CHANGES → verdict recorded, round bumped, claim RETAINED, next_turn emitted (PR3b)', () => {
     process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1';
     const { loopId, runId, wt } = seedTurnOwned(cwd, { verdict: 'request_changes' });
     const res = integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
     const loop = getLoop(loopId, cwd)!;
     assert.ok(!['closed', 'completed', 'cancelled'].includes(loop.status), `loop stays open (${loop.status})`);
     assert.ok(loop.artifacts.some((a) => a.type === 'verdict' && (a.body ?? '').startsWith('changes-requested')));
-    assert.equal(loadAgentRun(runId, cwd)?.status, 'completed', 'run still settled');
-    assert.equal(res.next_turns.length, 0, 'no turn-owned re-dispatch (PR3b deferred)');
-    // review #1/#6b — document the ACTUAL settlement: reconcileTurn settles an accepted
-    // lane (approve OR request_changes) → the claim is released. PR3b must re-establish the
-    // claim/worktree when it wires the symmetric fix-cycle re-dispatch.
-    assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'accepted request_changes lane releases the claim');
+    assert.equal(loadAgentRun(runId, cwd)?.status, 'completed', 'the old turn run is settled');
+    // pln#630 PR3b — the symmetric fix cycle now continues autonomously: the round is bumped,
+    // the coordinator claim/worktree is RETAINED, and a next_turn is handed to harvest.
+    assert.equal(loop.iteration_count, 1, 'iteration bumped 0→1 for the next fix round');
+    assert.equal(res.next_turns.length, 1, 'a fix-cycle re-dispatch turn is emitted');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'active', 'claim RETAINED across the fix cycle (worktree reused)');
   });
 
   it('T3 flag-OFF → LEGACY path even with a full turn-owned fixture: run stays created, zero harvested events', () => {
