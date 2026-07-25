@@ -37,7 +37,7 @@ export const LAZY_BUDGET = {
   maxWallMs: 2500,
 } as const;
 
-interface LazyChecker {
+export interface LazyChecker {
   /** Per-query budget config. */
   readonly budget: { maxFilesChecked: number; maxWallMs: number };
   /** Wall clock start of this query (for max_wall_ms). */
@@ -57,7 +57,7 @@ interface LazyChecker {
  * per-path memoization so a brief() that touches one file from several ranking
  * signals spends a single budget slot.
  */
-function makeLazyChecker(
+export function makeLazyChecker(
   budget: { maxFilesChecked: number; maxWallMs: number } = LAZY_BUDGET,
 ): LazyChecker {
   return {
@@ -81,7 +81,7 @@ function budgetExhausted(checker: LazyChecker): boolean {
 }
 
 /** Reasons attached to the response badge details. */
-interface FreshnessAccumulator {
+export interface FreshnessAccumulator {
   staleChangedPaths: Set<string>;
   missingPaths: Set<string>;
   /** Could not validate this path. Superset that includes `budgetSkippedPaths`. */
@@ -95,7 +95,7 @@ interface FreshnessAccumulator {
   budgetSkippedPaths: Set<string>;
 }
 
-function newAccumulator(): FreshnessAccumulator {
+export function newAccumulator(): FreshnessAccumulator {
   return {
     staleChangedPaths: new Set(),
     missingPaths: new Set(),
@@ -119,7 +119,16 @@ function validateEntry(
   cwd: string | undefined,
   preferredDirName: string | undefined,
 ): boolean {
-  const cached = checker.memo.get(entry.path);
+  // pln#631 — memo key scoped by the store's cwd. Two collision hazards must both be
+  // avoided when a shared checker spans a workspace: keying by PATH collides two
+  // packages' same-named `src/index.ts`; keying by file_id ALONE collides when two
+  // stores share a project_id (the `prj_${basename}` fallback, or a copied
+  // `.brainclaw/config.yaml`) — file_id = sha256(project_id + rel_path), so a shared
+  // id makes the file_id identical too (review F1). Scoping by the store's cwd (unique
+  // per store) is collision-proof either way; single-store keeps cwd constant, so
+  // behavior is identical to before.
+  const memoKey = `${cwd ?? ''} ${entry.file_id}`;
+  const cached = checker.memo.get(memoKey);
   if (cached !== undefined) return cached;
 
   const abs = path.join(projectRoot, entry.path);
@@ -128,19 +137,19 @@ function validateEntry(
     stat = fs.statSync(abs);
   } catch {
     acc.missingPaths.add(entry.path); // §6.1.2 — deletion.
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   const shard = readShard(entry.file_id, cwd, preferredDirName);
   if (!shard) {
     // No backing shard to compare against — treat as unchecked, not confident.
     acc.uncheckedPaths.add(entry.path);
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   // §6.1.3 — cheap gate: mtime + size match => fresh for this read.
   if (stat.mtimeMs === shard.mtime_ms && stat.size === shard.size_bytes) {
-    checker.memo.set(entry.path, true);
+    checker.memo.set(memoKey, true);
     return true;
   }
   // §6.1.4/§6.1.6 — gate tripped: hash only when within budget AND not oversized.
@@ -149,13 +158,13 @@ function validateEntry(
   // `partial`. Keep them separable so the badge reason is accurate.
   if (stat.size > maxParseFileBytes) {
     acc.uncheckedPaths.add(entry.path); // structurally unverifiable, not budget.
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   if (budgetExhausted(checker)) {
     acc.uncheckedPaths.add(entry.path);
     acc.budgetSkippedPaths.add(entry.path);
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   checker.filesChecked++;
@@ -164,15 +173,15 @@ function validateEntry(
     live = fs.readFileSync(abs, 'utf-8');
   } catch {
     acc.uncheckedPaths.add(entry.path);
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   if (hashContent(live) === shard.file_hash) {
-    checker.memo.set(entry.path, true); // §6.1 — identical despite mtime touch.
+    checker.memo.set(memoKey, true); // §6.1 — identical despite mtime touch.
     return true;
   }
   acc.staleChangedPaths.add(entry.path); // §6.1.5 — confirmed content change.
-  checker.memo.set(entry.path, false);
+  checker.memo.set(memoKey, false);
   return false;
 }
 
@@ -183,7 +192,7 @@ function validateEntry(
  * Precedence: an exhausted budget yields `partial`; otherwise any detected
  * change/deletion yields `stale_changed_files`; else the manifest base status.
  */
-function deriveBadge(
+export function deriveBadge(
   base: FreshnessStatus,
   acc: FreshnessAccumulator,
   budgetExhausted: boolean,
@@ -372,35 +381,47 @@ function gatherSymbolEntries(index: SymbolsIndex, query: string): SymbolIndexEnt
   return out;
 }
 
-export function find(query: string, limit: number | undefined, ctx: QueryContext): FindOutput {
-  const base = baseStatus(ctx);
+/** Store-local find CORE result (pln#631) — pre-cap, pre-badge. */
+export interface StoreFindResult {
+  /** Confident matches, score-sorted (NOT capped). */
+  matches: FindMatch[];
+  /** This store's base manifest freshness status. */
+  base: FreshnessStatus;
+  /** False when the store has no symbols index (missing_index). */
+  hasIndex: boolean;
+  /** True when zero candidate symbols were gathered (drives the refresh hint). */
+  emptyCandidates: boolean;
+  /** The per-store lazy-check outcomes (for badge merging by the aggregator). */
+  acc: FreshnessAccumulator;
+}
+
+/**
+ * Store-local find CORE (pln#631): gather → lazy-validate → score → sort, with NO
+ * cap and NO badge. Accepts an INJECTED checker + acc so a workspace aggregation can
+ * share ONE lazy budget across stores (the checker's memo is file_id-keyed, unique
+ * per store, so sharing never collides same-named files across packages). `find()`
+ * wraps this with a fresh checker/acc + cap + badge for the unchanged single-store
+ * path; `aggregate.ts` fans it out across stores with a shared checker.
+ */
+export function findInStore(
+  query: string,
+  ctx: QueryContext,
+  checker: LazyChecker,
+  acc: FreshnessAccumulator,
+): StoreFindResult {
   const index = readSymbolsIndex(ctx.cwd, ctx.preferredDirName);
   if (!index) {
-    return {
-      query,
-      matches: [],
-      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
-    };
+    return { matches: [], base: 'missing_index', hasIndex: false, emptyCandidates: true, acc };
   }
-
+  const base = baseStatus(ctx);
   const root = resolveRoot(ctx);
   const maxBytes = maxParseBytes(ctx);
-  const checker = makeLazyChecker();
-  const acc = newAccumulator();
 
   const candidates = gatherSymbolEntries(index, query);
   const ranked: FindMatch[] = [];
   for (const entry of candidates) {
     // §6.1 — lazy validate before serving as confident.
-    const confident = validateEntry(
-      entry,
-      checker,
-      acc,
-      root,
-      maxBytes,
-      ctx.cwd,
-      ctx.preferredDirName,
-    );
+    const confident = validateEntry(entry, checker, acc, root, maxBytes, ctx.cwd, ctx.preferredDirName);
     if (!confident) continue;
     ranked.push({
       node_id: entry.node_id,
@@ -412,13 +433,25 @@ export function find(query: string, limit: number | undefined, ctx: QueryContext
       score: scoreEntry(entry, query),
     });
   }
-
   ranked.sort(
     (a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.name.localeCompare(b.name),
   );
-  const capped = ranked.slice(0, limit ?? DEFAULT_FIND_LIMIT);
+  return { matches: ranked, base, hasIndex: true, emptyCandidates: candidates.length === 0, acc };
+}
 
-  const badge = deriveBadge(base, acc, checker.exhausted, capped.length > 0, candidates.length === 0);
+export function find(query: string, limit: number | undefined, ctx: QueryContext): FindOutput {
+  const checker = makeLazyChecker();
+  const acc = newAccumulator();
+  const r = findInStore(query, ctx, checker, acc);
+  if (!r.hasIndex) {
+    return {
+      query,
+      matches: [],
+      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
+    };
+  }
+  const capped = r.matches.slice(0, limit ?? DEFAULT_FIND_LIMIT);
+  const badge = deriveBadge(r.base, acc, checker.exhausted, capped.length > 0, r.emptyCandidates);
   return { query, matches: capped, freshness_badge: badge };
 }
 
