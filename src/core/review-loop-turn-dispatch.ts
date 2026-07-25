@@ -46,11 +46,19 @@ export function turnOwnedReviewEnabled(): boolean {
   return process.env.BRAINCLAW_TURN_OWNED_REVIEW === '1';
 }
 
-/** Dispatch lease budget for a turn-owned attempt (reserve + launch grant). Long
- *  enough that reserve→arm→consume→spawn→run-`running` never expires a genuinely
- *  launching worker under the PR2c-lease pre-run reconciler; a live `running` run
- *  is out of that reconciler's scope so this only bounds the pre-spawn window. */
+/** GRANT lease: bounds ONE launch generation's reserve→arm→consume→spawn→run-`running`
+ *  window. Long enough that a genuinely launching worker never expires under the PR2c-lease
+ *  pre-run reconciler; a live `running` run is out of that reconciler's scope. */
 const TURN_OWNED_LEASE_MS = 10 * 60_000;
+/** DISPATCH lease: how long the committed RESERVATION stays re-dispatchable. Strictly LONGER
+ *  than the grant lease (pln#630 dec#149 R1 / review Finding 1): a reserved_never_launched
+ *  round (grant lease expired → the reconciler revokes the grant) then still has a RECOVERY
+ *  WINDOW to re-arm a fresh generation before the reservation itself expires. armLaunch
+ *  enforces this bound, so a re-dispatch past it refuses arm and stays correctly stranded —
+ *  no phantom-spawn-after-lease. Decoupling the two is what makes R1 recovery actually reachable
+ *  (with a single shared lease, the grant is revoked exactly when the dispatch lease is already
+ *  expired, so re-arm was always denied). */
+const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
 
 /**
  * The outcome of preparing a turn-owned attempt (dec#144). `legacy` = fail-open
@@ -111,7 +119,11 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
 
   const turnId = deriveTurnId(loopId, slotId, iteration);
   const { assignment_id: assignmentId, run_id: runId } = deriveChildIds(turnId);
-  const lease = new Date(Date.now() + TURN_OWNED_LEASE_MS).toISOString();
+  // Decoupled leases (dec#149 R1): the reservation dispatch lease is longer than each grant's
+  // lease, giving a revoked (reserved_never_launched) round a window to re-arm. reserve() adopts
+  // on a re-dispatch, so the ORIGINAL (longer) dispatch lease governs re-arm eligibility.
+  const dispatchLease = new Date(Date.now() + TURN_OWNED_DISPATCH_LEASE_MS).toISOString();
+  const grantLease = new Date(Date.now() + TURN_OWNED_LEASE_MS).toISOString();
 
   // ── Phase 1: claim identity. Fail-OPEN allowed ONLY here (nothing reserved yet). ──
   try {
@@ -128,7 +140,7 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
       iteration,
       store_root: cwd,
       cwd,
-      lease_deadline: lease,
+      lease_deadline: dispatchLease,
     }, cwd);
   } catch (err) {
     if (err instanceof ReservationStateError && err.code === 'reservation_exists') {
@@ -163,7 +175,7 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
     if (!grant || grant.status === 'revoked') {
       const priorEpoch = grant?.epoch ?? -1; // fresh → epoch 0 (unchanged); revoked → epoch+1
       try {
-        armLaunch(turnId, { epoch: priorEpoch + 1, lease_deadline: lease }, cwd);
+        armLaunch(turnId, { epoch: priorEpoch + 1, lease_deadline: grantLease }, cwd);
       } catch (err) {
         if (!(err instanceof LaunchFenceError && err.code === 'already_armed')) {
           // dispatch_lease_expired / lease_invalid / not_committed / epoch_mismatch → do-not-spawn.

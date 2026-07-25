@@ -12,7 +12,8 @@ import {
   revokeLaunchGrant, launchGrant,
 } from '../../src/core/loops/attempt-reservation.js';
 import { prepareTurnOwnedReviewDispatch as prepareViaDispatch } from '../../src/core/review-loop-turn-dispatch.js';
-import { createAgentRun } from '../../src/core/agentruns.js';
+import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
+import { reconcileAgentRun } from '../../src/core/agentrun-reconciler.js';
 import { saveClaim, loadClaim } from '../../src/core/claims.js';
 import { saveAssignment } from '../../src/core/assignments.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
@@ -274,5 +275,28 @@ describe('pln#630 PR3b — fix-cycle re-dispatch is exactly-once (fence denies t
     const second = prepareViaDispatch(common);
     const kinds = [first.kind, second.kind].sort();
     assert.deepEqual(kinds, ['denied', 'won'], 'exactly one dispatch WON the launch fence, the other was DENIED');
+  });
+
+  it('R1c — the WIRED reconciler revokes an expired armed grant, and the (longer) dispatch lease lets it re-arm: strand is production-reachable AND recoverable (dec#149 R1 / review F1+F2)', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const turnId = deriveTurnId(loopId, 'lsl_r', 0);
+    const { assignment_id, run_id } = deriveChildIds(turnId);
+    // Decoupled leases: LONG dispatch lease (recovery window) + SHORT grant lease.
+    const dispatchLease = new Date(Date.now() + 30 * 60_000).toISOString();
+    const grantLease = new Date(Date.now() + 10 * 60_000).toISOString();
+    reserve({ turn_id: turnId, loop_id: loopId, slot_id: 'lsl_r', target_slot_generation: 0, loop_version_at_reserve: version, agent: AGENT, claim_id: 'clm_x', phase: 'findings', iteration: 0, store_root: cwd, cwd, lease_deadline: dispatchLease }, cwd);
+    commitReservation(turnId, cwd);
+    armLaunch(turnId, { token: 'gen-0', epoch: 0, lease_deadline: grantLease }, cwd);
+    createAgentRun({ id: run_id, short_label: run_id, assignment_id, claim_id: 'clm_x', agent: AGENT, transport: 'cli_spawn', scope: `review-loop:${loopId}`, description: 't', status: 'created', tags: ['turn-owned'] }, cwd);
+    // Worker crashed before consume. The WIRED lazy reconciler, at a time PAST the grant lease
+    // but WITHIN the dispatch lease, must REVOKE the grant (F2) + cancel the run — NOT leave it armed.
+    reconcileAgentRun(run_id, cwd, { nowMs: Date.now() + 15 * 60_000, actor: 'reconciler' });
+    assert.equal(launchGrant(turnId, cwd)?.status, 'revoked', 'wired reconciler revoked the expired armed grant (F2)');
+    assert.equal(loadAgentRun(run_id, cwd)?.status, 'cancelled', 'run cancelled reserved_never_launched');
+    // Recovery: the reservation adopts, sees the revoked grant, re-arms at epoch+1 within the
+    // still-open dispatch lease → WON (with a single shared lease this was always denied — F1).
+    const prep = prepareViaDispatch({ loopId, slotId: 'lsl_r', agent: AGENT, phase: 'findings', task: 'fix', description: 'fix', scope: `review-loop:${loopId}`, claimId: 'clm_x', dispatcherAgent: 'coord', isReviewer: true, cwd });
+    assert.equal(prep.kind, 'won', 'the revoked round re-arms + wins within the longer dispatch lease');
+    assert.equal(launchGrant(turnId, cwd)?.status, 'crossed', 'the re-armed grant was consumed (single spawn)');
   });
 });
