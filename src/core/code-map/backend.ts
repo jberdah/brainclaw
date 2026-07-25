@@ -14,6 +14,7 @@ import { readManifest, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift, withCoarse } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
+import { resolveTraversal, aggregateFind, type TraversalMode } from './aggregate.js';
 import { defaultMemoryReader } from './memory-reader.js';
 import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
 import { loadConfig } from '../config.js';
@@ -90,6 +91,12 @@ export interface CodeRefreshResult {
 export interface CodeFindInput extends CodeBackendContext {
   query: string;
   limit?: number;
+  /**
+   * pln#631 — store traversal. `auto` (default) aggregates the whole workspace when
+   * cwd is a multi-project root, else single-store; `project` forces single-store;
+   * `workspace` requests aggregation (root cwd only in PR1).
+   */
+  traversal?: TraversalMode;
 }
 
 export interface CodeFindMatch {
@@ -100,6 +107,10 @@ export interface CodeFindMatch {
   kind: string;
   subtype: string | null;
   score: number;
+  /** pln#631 — set only on AGGREGATED results: the owning project (workspace-relative
+   *  dir, `''` = root) + its id. `path` is workspace-root-relative when aggregating. */
+  project?: string;
+  project_id?: string;
 }
 
 export interface CodeFindResult {
@@ -331,6 +342,21 @@ export class JsonlBackend implements CodeQueryBackend {
    * as confident (§6.1); the response badge reflects any detected drift.
    */
   async find(input: CodeFindInput): Promise<CodeFindResult> {
+    const cwd = input.cwd ?? process.cwd();
+    const resolved = resolveTraversal(cwd, input.traversal ?? 'auto');
+    if (resolved.workspace) {
+      // pln#631 — root-aggregated find across the workspace's per-project stores.
+      // git-HEAD drift is collapsed to ONE probe at the workspace root (one working
+      // tree; the cascade refreshes all stores against the same HEAD), applied via
+      // the root manifest so a whole-tree HEAD move still surfaces on the aggregate.
+      const agg = aggregateFind(input.query, input.limit, resolved);
+      const rootManifest = readManifest(cwd, input.preferredDirName);
+      return {
+        query: agg.query,
+        matches: agg.matches,
+        freshness_badge: this.withHeadDrift(agg.freshness_badge, rootManifest, cwd),
+      };
+    }
     const ctx = this.queryContext(input);
     const out = runFind(input.query, input.limit, ctx);
     const manifest = readManifest(input.cwd, input.preferredDirName);
