@@ -173,7 +173,8 @@ export const BclawLoopCloseSchema = z.object({
 export const BclawLoopVerifySchema = z.object({
   intent: z.literal('verify'),
   loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
-  expected_version: z.number().int().nonnegative().optional(),
+  // No expected_version: runVerify is idempotent by (loop, iteration) via its own
+  // two-lock re-check, not optimistic-concurrency CAS (review F3).
   ...CallerEnvelopeFields,
 });
 

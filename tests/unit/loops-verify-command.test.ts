@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openLoop } from '../../src/core/loops/index.js';
-import { getLoop } from '../../src/core/loops/store.js';
+import { getLoop, writeThreadFile } from '../../src/core/loops/store.js';
 import { hasPassingVerifyReportInIteration } from '../../src/core/loops/iteration-engine.js';
 import {
   runVerify,
@@ -127,6 +127,41 @@ describe('pln#632 verify-command runner', () => {
     const bad = defaultVerifyRunner({ command: [process.execPath, '-e', 'process.exit(3)'], cwd, timeout_ms: 30000 });
     assert.equal(bad.passed, false);
     assert.equal(bad.exit_code, 3);
+  });
+
+  it('stamps the report with the SNAPSHOT iteration if the loop advances during the spawn (review F1)', () => {
+    const cwd = ws();
+    const loop = openImpl(cwd, ['echo', 'ok']);
+    // The runner runs BETWEEN the two lock scopes — simulate a concurrent advance that
+    // bumps the loop from iteration 0 → 1 during the out-of-lock spawn window.
+    const advancingRunner: VerifyRunner = () => {
+      const t = getLoop(loop.id, cwd)!;
+      writeThreadFile({ ...t, iteration_count: 1 }, cwd);
+      return GREEN;
+    };
+    runVerify({ loop_id: loop.id, actor: 'agt_i', runner: advancingRunner }, cwd);
+    const thread = getLoop(loop.id, cwd)!;
+    const reports = thread.artifacts.filter((a) => a.type === 'verify_report');
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0]!.iteration, 0, 'report attributed to the SNAPSHOT iteration (0), not the advanced (1)');
+    assert.equal(hasPassingVerifyReportInIteration(thread, 1), false, 'iteration 1 is NOT falsely green');
+    assert.equal(hasPassingVerifyReportInIteration(thread, 0), true, 'iteration 0 (the verified one) is green');
+  });
+
+  it('byte-fits an oversized multibyte report so a GREEN suite still records (review F2)', () => {
+    const cwd = ws();
+    const loop = openImpl(cwd, ['echo', 'ok']);
+    // 1024 multibyte chars per tail → raw > 4 KiB, and each JSON-escapes to 6 bytes:
+    // without byte-fitting, add_artifact's 4096-byte body cap would reject a green report.
+    const big = '✓'.repeat(1024);
+    const res = runVerify(
+      { loop_id: loop.id, actor: 'agt_i', runner: runnerReturning({ exit_code: 0, passed: true, timed_out: false, duration_ms: 5, stdout_tail: big, stderr_tail: big }) },
+      cwd,
+    );
+    assert.equal(res.report?.passed, true);
+    const thread = getLoop(loop.id, cwd)!;
+    assert.equal(thread.artifacts.filter((a) => a.type === 'verify_report').length, 1, 'the green report was recorded, not dropped');
+    assert.ok(hasPassingVerifyReportInIteration(thread, thread.iteration_count), 'command_green satisfied despite oversized tails');
   });
 
   it('defaultVerifyRunner: a missing command → passed:false with the error (no crash)', () => {

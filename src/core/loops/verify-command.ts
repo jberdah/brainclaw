@@ -28,7 +28,12 @@ import { getLoop } from './store.js';
 import { withLoopLock } from './lock.js';
 import { add_artifact } from './verbs.js';
 import { artifactsInIteration } from './iteration-engine.js';
-import { VERIFY_DEFAULT_TIMEOUT_MS, type LoopThread, type VerifyReportBody } from './types.js';
+import {
+  VERIFY_DEFAULT_TIMEOUT_MS,
+  LOOP_ARTIFACT_BODY_MAX_BYTES,
+  type LoopThread,
+  type VerifyReportBody,
+} from './types.js';
 
 export interface VerifyCommandConfig {
   command: string[];
@@ -116,8 +121,29 @@ export function resolveVerifyCommand(thread: LoopThread, cwd: string | undefined
   };
 }
 
+/**
+ * pln#632 (review F2) — ensure the SERIALIZED body fits add_artifact's 4 KiB byte limit.
+ * Each tail is ≤1024 CHARS (schema-valid), but multibyte / ANSI output can make the
+ * JSON body exceed LOOP_ARTIFACT_BODY_MAX_BYTES *bytes* (a control char JSON-escapes to
+ * 6 bytes), which would make add_artifact throw and drop a green suite's report. Shrink
+ * the tails (halving) until the serialized body fits; last resort drops the tails.
+ */
+function fitBody(report: VerifyReportBody): VerifyReportBody {
+  const size = (r: VerifyReportBody): number => Buffer.byteLength(JSON.stringify(r), 'utf8');
+  if (size(report) <= LOOP_ARTIFACT_BODY_MAX_BYTES) return report;
+  for (let keep = 512; keep >= 1; keep = Math.floor(keep / 2)) {
+    const r: VerifyReportBody = {
+      ...report,
+      stdout_tail: report.stdout_tail ? report.stdout_tail.slice(-keep) : undefined,
+      stderr_tail: report.stderr_tail ? report.stderr_tail.slice(-keep) : undefined,
+    };
+    if (size(r) <= LOOP_ARTIFACT_BODY_MAX_BYTES) return r;
+  }
+  return { ...report, stdout_tail: undefined, stderr_tail: undefined };
+}
+
 export function buildVerifyReportBody(config: VerifyCommandConfig, result: VerifyRunResult): VerifyReportBody {
-  return {
+  return fitBody({
     command: config.command.join(' '),
     exit_code: result.exit_code,
     passed: result.passed,
@@ -126,7 +152,7 @@ export function buildVerifyReportBody(config: VerifyCommandConfig, result: Verif
     timed_out: result.timed_out,
     stdout_tail: result.stdout_tail || undefined,
     stderr_tail: result.stderr_tail || undefined,
-  };
+  });
 }
 
 export interface RunVerifyInput {
@@ -167,7 +193,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
   const snapshot = withLoopLock<
     | { state: 'unconfigured'; thread: LoopThread }
     | { state: 'deduped'; thread: LoopThread }
-    | { state: 'run'; thread: LoopThread; config: VerifyCommandConfig; iteration: number }
+    | { state: 'run'; thread: LoopThread; config: VerifyCommandConfig; iteration: number; phase: string }
   >({
     cwd,
     intent: 'verify',
@@ -180,7 +206,10 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
       if (resolved.kind === 'unconfigured') return { state: 'unconfigured', thread };
       const iteration = thread.iteration_count;
       if (hasVerifyReportForIteration(thread, iteration)) return { state: 'deduped', thread };
-      return { state: 'run', thread, config: resolved.config, iteration };
+      // Snapshot the iteration + phase we are about to verify. The command tests THIS
+      // iteration's working tree; the report must be attributed to it even if a
+      // concurrent advance bumps the loop's iteration while we spawn (review F1).
+      return { state: 'run', thread, config: resolved.config, iteration, phase: thread.current_phase };
     },
   });
 
@@ -188,10 +217,10 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
   if (snapshot.state === 'deduped') return { thread: snapshot.thread, deduped: true };
 
   // --- OUT OF LOCK: run the command (may take minutes). ---
-  const { config, iteration } = snapshot;
+  const { config, iteration, phase } = snapshot;
   const report = buildVerifyReportBody(config, runner(config));
 
-  // --- Lock scope 2: re-check idempotency, then append via add_artifact. ---
+  // --- Lock scope 2: re-check idempotency (by SNAPSHOT iteration), then append. ---
   return withLoopLock<RunVerifyResult>({
     cwd,
     intent: 'verify',
@@ -200,8 +229,10 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
     work: () => {
       const thread = getLoop(input.loop_id, cwd);
       if (!thread) throw new Error(`loop ${input.loop_id} not found`);
-      // A concurrent verify for the SAME iteration won the append while we spawned.
-      if (thread.iteration_count === iteration && hasVerifyReportForIteration(thread, iteration)) {
+      // Dedup on the SNAPSHOT iteration — a report for the iteration we verified already
+      // landed (a concurrent verify won). Checking the snapshot (not the current)
+      // iteration is what makes this correct after a concurrent advance (review F1).
+      if (hasVerifyReportForIteration(thread, iteration)) {
         return { thread, report, deduped: true };
       }
       const updated = add_artifact(
@@ -209,7 +240,11 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
           id: input.loop_id,
           actor: input.actor,
           artifact: {
-            phase: thread.current_phase,
+            // Stamp the SNAPSHOT phase + iteration so the report is attributed to the
+            // iteration whose code it actually tested — never a later iteration a
+            // concurrent advance moved the loop to (which would be a FALSE green).
+            phase,
+            iteration,
             type: 'verify_report',
             body: JSON.stringify(report),
             produced_by: 'engine',

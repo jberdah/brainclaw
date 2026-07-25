@@ -174,7 +174,7 @@ function currentLoopVersion(loopId: string, cwd?: string): number {
   return getLoop(loopId, cwd)?.version ?? 0;
 }
 
-type LoopMutationRequest = Exclude<ValidRequest, { intent: 'open' | 'get' | 'list' }>;
+type LoopMutationRequest = Exclude<ValidRequest, { intent: 'open' | 'get' | 'list' | 'verify' }>;
 
 /**
  * Slot-bound intents must not let a cached idempotent response leak to a
