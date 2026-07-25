@@ -394,7 +394,7 @@ function convergeLockedTurn(
   return {
     reconciled: true,
     reason: next_turn
-      ? `turn ${turn_id} → request_changes: bumped to round ${next_turn.iteration}, claim retained for re-dispatch`
+      ? `turn ${turn_id} → request_changes round ${next_turn.iteration}: claim retained, next fix turn emitted for re-dispatch`
       : slotTerminal ? `turn ${turn_id} already recorded; advance re-attempted (${slot_outcome})` : `turn ${turn_id} reconciled (${slot_outcome})`,
     slot_outcome,
     artifacts_added,

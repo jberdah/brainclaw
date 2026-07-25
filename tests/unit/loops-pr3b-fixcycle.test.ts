@@ -202,6 +202,21 @@ describe('pln#630 PR3b — reconcileTurn symmetric fix cycle', () => {
     assert.match(r.reason, /idempotent no-op/);
     assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'the terminal early-return released the leaked claim');
   });
+
+  it('F3 — after round N+1 is REALLY dispatched (turn() rebinds the slot), re-reconciling round N hits the superseded guard, never the strand re-emit', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const t0 = mintTurn(cwd, loopId, version, 0, 'request_changes');
+    reconcileTurn({ turn_id: t0.turnId, lane: t0.lane, cwd }); // bump → iteration 1
+    // Round 1's real dispatch calls turn(), rebinding slot.current_turn_id to round-1's turnId —
+    // the PRIMARY production stopper. A late re-reconcile of the OLD round-0 turn must hit the
+    // superseded guard BEFORE the else-branch, so it never mistakes a progressing loop for a strand.
+    const t1turnId = deriveTurnId(loopId, 'lsl_r', 1);
+    turn({ id: loopId, slot_id: 'lsl_r', actor: 'coord', turn_id: t1turnId }, cwd);
+    const r = reconcileTurn({ turn_id: t0.turnId, lane: t0.lane, cwd });
+    assert.equal(r.reconciled, false);
+    assert.match(r.reason, /superseded/);
+    assert.equal(r.next_turn, undefined, 'a superseded old turn never re-emits a strand next_turn');
+  });
 });
 
 describe('pln#630 PR3b — fix-cycle re-dispatch is exactly-once (fence denies the duplicate)', () => {
