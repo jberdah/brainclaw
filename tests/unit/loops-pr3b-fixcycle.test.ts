@@ -9,6 +9,7 @@ import { turn, advance } from '../../src/core/loops/verbs.js';
 import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveTurnId, deriveChildIds,
+  revokeLaunchGrant, launchGrant,
 } from '../../src/core/loops/attempt-reservation.js';
 import { prepareTurnOwnedReviewDispatch as prepareViaDispatch } from '../../src/core/review-loop-turn-dispatch.js';
 import { createAgentRun } from '../../src/core/agentruns.js';
@@ -216,6 +217,42 @@ describe('pln#630 PR3b — reconcileTurn symmetric fix cycle', () => {
     assert.equal(r.reconciled, false);
     assert.match(r.reason, /superseded/);
     assert.equal(r.next_turn, undefined, 'a superseded old turn never re-emits a strand next_turn');
+  });
+
+  it('R1a — a bumped round whose grant was REVOKED (reserved_never_launched) is a STRAND → reconcile re-emits (dec#149 R1)', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const t0 = mintTurn(cwd, loopId, version, 0, 'request_changes');
+    reconcileTurn({ turn_id: t0.turnId, lane: t0.lane, cwd }); // bump → iteration 1
+    // Round 1 was reserved+committed+armed by a pass that CRASHED before consume; the expiry
+    // sweep then revoked its grant. Reservation EXISTS, grant REVOKED — the sibling strand the
+    // PR4 detector missed (getReservation was truthy → "in flight"), leaving the loop stuck.
+    const t1 = deriveTurnId(loopId, 'lsl_r', 1);
+    const loopV = getLoop(loopId, cwd)!.version;
+    reserve({ turn_id: t1, loop_id: loopId, slot_id: 'lsl_r', target_slot_generation: 1, loop_version_at_reserve: loopV, agent: AGENT, claim_id: 'clm_x', phase: 'findings', iteration: 1, store_root: cwd, cwd, lease_deadline: FUTURE() }, cwd);
+    commitReservation(t1, cwd);
+    armLaunch(t1, { token: 'gen-1', epoch: 1, lease_deadline: FUTURE() }, cwd);
+    revokeLaunchGrant(t1, 1, 'reserved_never_launched', cwd);
+    assert.equal(launchGrant(t1, cwd)?.status, 'revoked', 'precondition: round-1 grant revoked');
+    const r = reconcileTurn({ turn_id: t0.turnId, lane: t0.lane, cwd });
+    assert.ok(r.next_turn, 'revoked-grant strand now re-emits next_turn (was silently stuck pre-R1)');
+    assert.equal(r.next_turn!.iteration, 1, 're-emits the stuck round 1');
+  });
+
+  it('R1b — prepareTurnOwnedReviewDispatch RE-ARMS a revoked grant at a higher epoch → re-dispatchable (dec#149 R1)', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const turnId = deriveTurnId(loopId, 'lsl_r', 0);
+    reserve({ turn_id: turnId, loop_id: loopId, slot_id: 'lsl_r', target_slot_generation: 0, loop_version_at_reserve: version, agent: AGENT, claim_id: 'clm_x', phase: 'findings', iteration: 0, store_root: cwd, cwd, lease_deadline: FUTURE() }, cwd);
+    commitReservation(turnId, cwd);
+    armLaunch(turnId, { token: 'gen-0', epoch: 0, lease_deadline: FUTURE() }, cwd);
+    revokeLaunchGrant(turnId, 0, 'reserved_never_launched', cwd);
+    assert.equal(launchGrant(turnId, cwd)?.status, 'revoked', 'precondition: grant revoked');
+    // A re-dispatch adopts the committed reservation, sees the revoked grant, RE-ARMS at epoch+1.
+    const prep = prepareViaDispatch({
+      loopId, slotId: 'lsl_r', agent: AGENT, phase: 'findings', task: 'fix', description: 'fix',
+      scope: `review-loop:${loopId}`, claimId: 'clm_x', dispatcherAgent: 'coord', isReviewer: true, cwd,
+    });
+    assert.equal(prep.kind, 'won', 'a revoked round re-arms + wins the fence → re-dispatchable');
+    assert.equal(launchGrant(turnId, cwd)?.status, 'crossed', 'the re-armed grant was consumed (single spawn authority)');
   });
 });
 

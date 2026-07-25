@@ -152,22 +152,28 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
   try {
     commitReservation(turnId, cwd);
 
-    // Arm-or-adopt the launch grant. Only arm when none exists; a concurrent
-    // arm surfaces as `already_armed` → adopt the incumbent grant.
+    // Arm-or-adopt the launch grant. Arm when none exists OR when a prior generation was
+    // REVOKED (reserved_never_launched — a crash between arm and consume, then the expiry
+    // sweep): re-arm a FRESH generation at a strictly-higher epoch so a revoked round becomes
+    // re-dispatchable (pln#630 dec#149 R1 strand recovery). armLaunch permits re-arming a
+    // revoked grant and still enforces the dispatch lease, so a lease-expired reservation
+    // refuses arm and stays correctly stranded (never a phantom-spawn-after-lease). A
+    // concurrent arm surfaces as `already_armed` → adopt the incumbent grant.
     let grant = launchGrant(turnId, cwd);
-    if (!grant) {
+    if (!grant || grant.status === 'revoked') {
+      const priorEpoch = grant?.epoch ?? -1; // fresh → epoch 0 (unchanged); revoked → epoch+1
       try {
-        armLaunch(turnId, { epoch: 0, lease_deadline: lease }, cwd);
+        armLaunch(turnId, { epoch: priorEpoch + 1, lease_deadline: lease }, cwd);
       } catch (err) {
         if (!(err instanceof LaunchFenceError && err.code === 'already_armed')) {
-          // dispatch_lease_expired / lease_invalid / not_committed → do-not-spawn.
+          // dispatch_lease_expired / lease_invalid / not_committed / epoch_mismatch → do-not-spawn.
           return { kind: 'denied', reason: `arm_refused: ${err instanceof Error ? err.message : String(err)}` };
         }
       }
       grant = launchGrant(turnId, cwd);
     }
-    // A crossed grant = launch_attempted_unknown (worker already invoked, never
-    // re-spawn); revoked = never-launch; absent = arm failed → all do-not-spawn.
+    // A crossed grant = launch_attempted_unknown (worker already invoked, never re-spawn);
+    // still-revoked = re-arm refused (lease expired) → never-launch; absent → all do-not-spawn.
     if (!grant || grant.status !== 'armed') {
       return { kind: 'denied', reason: `launch_denied: grant is ${grant?.status ?? 'absent'} (not armed)` };
     }
