@@ -24,6 +24,7 @@ import { loadClaim, releaseClaimsCascade, logCascadeReleaseResult } from '../cor
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
 import { commitWorktreeOnBehalf, worktreesBaseDir, resolveGitToplevel } from '../core/worktree.js';
 import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult, type ReviewLoopNextTurn } from '../core/review-loop-close.js';
+import { closeIdeationLoopFromLaneResult } from '../core/ideation-loop-close.js';
 import { dispatchReviewLoopTurn } from '../core/review-loop-turn-dispatch.js';
 
 export interface HarvestOptions {
@@ -359,7 +360,12 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // (no re-dispatch, no claim retention). `harvest --integrate` owns the cycle.
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
-      if (laneAssignment) closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
+      if (laneAssignment) {
+        closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
+        // pln#521 P2-bis — the ideation analog: a critic lane records its critique +
+        // advances the ideation loop. Returns undefined for non-ideate scopes (no-op here).
+        closeIdeationLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+      }
     } catch { /* never block harvest on loop-close */ }
 
     const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
@@ -606,6 +612,12 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         // path, so it MAY cycle (it can re-dispatch AND retain the claim). No-op
         // for non-review lanes / lanes without a verdict; never throws.
         const loopClose = closeReviewLoopFromLaneResult(assignment, lane, actor, cwd);
+        // pln#521 P2-bis — the ideation analog on the --integrate path: record the
+        // critique + advance the ideation loop (undefined for non-ideate scopes).
+        const ideationClose = closeIdeationLoopFromLaneResult(assignment, lane, actor, cwd);
+        if (ideationClose) {
+          reasons.push(`ideate-loop ${ideationClose.loop_id}: ${ideationClose.action} — ${ideationClose.reason}`);
+        }
         if (loopClose) {
           entry.review_loop = loopClose;
           reasons.push(`review-loop ${loopClose.loop_id}: ${loopClose.action} — ${loopClose.reason}`);
