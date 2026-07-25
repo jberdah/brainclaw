@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
-import { turn } from '../../src/core/loops/verbs.js';
+import { turn, advance } from '../../src/core/loops/verbs.js';
 import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveTurnId, deriveChildIds,
@@ -162,6 +162,31 @@ describe('pln#630 PR3b — reconcileTurn symmetric fix cycle', () => {
     assert.equal(r.reconciled, false);
     assert.match(r.reason, /superseded/);
     assert.equal(getLoop(loopId, cwd)!.iteration_count, 0, 'no bump from a superseded turn');
+  });
+
+  it('F — the bump guard reads the loop FRESH inside the lock: an already-advanced round does NOT double-bump (review Finding 1)', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const { turnId, lane } = mintTurn(cwd, loopId, version, 0, 'request_changes');
+    // Simulate a concurrent pass that ALREADY bumped the loop (iteration 0→1). reservation.iteration
+    // is still 0, but the LIVE loop is at 1 — the classic TOCTOU. A stale-snapshot guard would bump
+    // AGAIN (→2), minting a second turn_id → double-spawn. The in-lock re-read must see 1 → else-branch.
+    advance({ id: loopId, to_phase: 'findings', actor: 'coord' }, cwd);
+    assert.equal(getLoop(loopId, cwd)!.iteration_count, 1, 'precondition: loop pre-bumped to 1');
+    const r = reconcileTurn({ turn_id: turnId, lane, cwd });
+    assert.equal(getLoop(loopId, cwd)!.iteration_count, 1, 'NO second bump — the guard saw the fresh iteration');
+    assert.equal(r.next_turn, undefined, 'no phantom next_turn for an already-advanced round');
+  });
+
+  it('G2 — reconcile on an already-BLOCKED loop releases a leaked claim then no-ops (review Finding 2)', () => {
+    const { loopId, version } = openSymmetricReview(cwd, 1);
+    const { turnId, lane } = mintTurn(cwd, loopId, version, 0, 'request_changes');
+    reconcileTurn({ turn_id: turnId, lane, cwd }); // cap:1 → blocked, claim released
+    assert.equal(getLoop(loopId, cwd)!.status, 'blocked');
+    // Simulate the crash-before-release leak: a claim left active on the terminal (blocked) loop.
+    saveClaim({ schema_version: 2, id: 'clm_x', agent: AGENT, scope: `review-loop:${loopId}`, description: 't', created_at: nowISO(), status: 'active' }, cwd);
+    const r = reconcileTurn({ turn_id: turnId, lane, cwd });
+    assert.match(r.reason, /idempotent no-op/);
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'the terminal early-return released the leaked claim');
   });
 });
 

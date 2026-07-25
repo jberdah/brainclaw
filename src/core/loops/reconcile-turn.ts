@@ -10,6 +10,7 @@ import { loadClaim, releaseClaim } from '../claims.js';
 import { createRuntimeEvent } from '../events.js';
 import { readCompletionSignals } from '../runtime-signals.js';
 import { buildFixCycleTask, type ReviewLoopNextTurn } from '../review-loop-close.js';
+import { withLoopLock, LockTimeoutError, LockLostError } from './lock.js';
 import type { LaneResult } from '../schema.js';
 
 /**
@@ -167,6 +168,42 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     }
   } catch { /* signal read best-effort — absence of sentinels is not a contradiction */ }
 
+  // pln#630 PR3b (adversarial review Finding 1) — the guard-read + advance + release compound
+  // MUST be atomic + serialized. Without a lock two concurrent reconciles of the same turn each
+  // pass the iteration-equality bump guard on a STALE snapshot and each advance from a fresh
+  // read → i→i+1 and i+1→i+2 → two turn_ids → the launch fence spawns BOTH rounds. Run the
+  // mutation under the loop lock (re-reading the loop INSIDE), mirroring the legacy closer's
+  // BLOCKING-3 fix. Lock contention → reconciled:false (a later trigger retries); a REAL error
+  // still propagates (Finding 6), never silently swallowed.
+  try {
+    return withLoopLock<ReconcileTurnResult>({
+      cwd,
+      intent: 'reconcile-turn',
+      agentId: actor,
+      scope: { kind: 'loop', loopId: reservation.loop_id },
+      work: () => convergeLockedTurn(reservation, input, actor, cwd),
+    });
+  } catch (err) {
+    if (err instanceof LockTimeoutError || err instanceof LockLostError) {
+      return { reconciled: false, reason: `reconcile deferred (${err.name}); a later trigger retries` };
+    }
+    throw err;
+  }
+}
+
+/**
+ * The locked convergence body of reconcileTurn (pln#630 PR3b). Runs INSIDE withLoopLock so the
+ * iteration-equality bump guard and the advance observe ONE serialized snapshot — the loop is
+ * re-read here as the fresh in-lock read. Logic is otherwise identical to the pre-lock inline
+ * version (plus the terminal-early-return claim release, review Finding 2).
+ */
+function convergeLockedTurn(
+  reservation: TurnReservation,
+  input: ReconcileTurnInput,
+  actor: string,
+  cwd: string | undefined,
+): ReconcileTurnResult {
+  const { turn_id, lane } = input;
   const loop = getLoop(reservation.loop_id, cwd);
   if (!loop) return { reconciled: false, reason: `loop ${reservation.loop_id} not found` };
 
@@ -186,8 +223,12 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     return { reconciled: false, reason: `turn ${turn_id} superseded by current turn ${slot.current_turn_id} on slot ${slot.slot_id}` };
   }
 
-  // A terminal loop already converged → idempotent no-op (any trigger may fire us).
+  // A terminal loop already converged → idempotent no-op (any trigger may fire us). Still
+  // release the claim (review Finding 2): a cap-blocked loop that crashed AFTER the block
+  // transition but BEFORE its own deferred release would otherwise leak the retained claim
+  // until the staleness sweep — releaseCoordinatorClaim is idempotent (no-op if not active).
   if (LOOP_TERMINAL.has(loop.status)) {
+    releaseCoordinatorClaim(loadAssignment(reservation.child_ids.assignment_id, cwd)?.claim_id ?? reservation.claim_id, cwd);
     return { reconciled: true, reason: `loop already ${loop.status} (idempotent no-op)`, artifacts_added: 0, loop_status: loop.status };
   }
 
