@@ -155,11 +155,23 @@ function storeMeta(cwd: string): { projectId: string; gitHead: string | null } {
   return { projectId: `prj_${path.basename(path.resolve(cwd))}`, gitHead };
 }
 
-/** Build the root + nested-child StoreRefs for a workspace, flagging the caller-local one. */
+/** True when `localCwd` is `storeCwd` or lives under it (case-folded on win32). */
+function storeContains(storeCwd: string, localCwd: string): boolean {
+  const norm = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const rel = path.relative(norm(storeCwd), norm(localCwd));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Build the root + nested-child StoreRefs for a workspace, flagging the caller-local one.
+ * Locality is by CONTAINMENT, not exact equality (review): the caller usually stands in a
+ * `src/…` subdir of its package, not exactly at the package root — the DEEPEST store whose
+ * cwd contains `localCwd` is the caller's own package. Case-insensitive on win32.
+ */
 function buildWorkspaceStores(root: string, localCwd: string): StoreRef[] {
   const rootMeta = storeMeta(root);
-  return [
-    { cwd: root, relPath: '', projectId: rootMeta.projectId, gitHead: rootMeta.gitHead, isLocal: root === localCwd },
+  const stores: StoreRef[] = [
+    { cwd: root, relPath: '', projectId: rootMeta.projectId, gitHead: rootMeta.gitHead, isLocal: false },
     ...listNestedProjects(root).map((childAbs) => {
       const meta = storeMeta(childAbs);
       return {
@@ -167,10 +179,19 @@ function buildWorkspaceStores(root: string, localCwd: string): StoreRef[] {
         relPath: path.relative(root, childAbs).replace(/\\/g, '/'),
         projectId: meta.projectId,
         gitHead: meta.gitHead,
-        isLocal: childAbs === localCwd,
+        isLocal: false,
       };
     }),
   ];
+  // The caller-local store = the DEEPEST (longest cwd) store containing localCwd.
+  let localStore: StoreRef | undefined;
+  for (const s of stores) {
+    if (storeContains(s.cwd, localCwd) && (!localStore || s.cwd.length > localStore.cwd.length)) {
+      localStore = s;
+    }
+  }
+  if (localStore) localStore.isLocal = true;
+  return stores;
 }
 
 /**

@@ -225,4 +225,16 @@ describe('pln#631 root-aggregated find (traversal)', () => {
     assert.equal(hits[0]!.project, 'applications/app_a', 'the caller-local hit ranks first');
     assert.equal(hits[0]!.local, true, 'the local hit is flagged local');
   });
+
+  it('locality works from a SUBDIR of the caller package, not just the package root (review fix)', async () => {
+    const { appA, be } = await buildWorkspace();
+    // The common case: the agent stands in a src/ subdir, NOT exactly at the package root.
+    // Locality is by containment, so the caller's package must still win the tiebreak.
+    const subdir = path.join(appA, 'src');
+    const shared = await be.find({ query: 'sharedPulse', cwd: subdir, traversal: 'workspace' });
+    const hits = shared.matches.filter((m) => m.name === 'sharedPulse');
+    assert.ok(hits.length >= 2, 'both packages present from a subdir');
+    assert.equal(hits[0]!.project, 'applications/app_a', 'caller package ranks first from a src/ subdir');
+    assert.equal(hits[0]!.local, true, 'the local flag is set from a subdir (containment, not ===)');
+  });
 });
