@@ -23,7 +23,7 @@
  */
 import type { Assignment, LaneResult } from './schema.js';
 import { getLoop } from './loops/store.js';
-import { complete_turn, advance } from './loops/verbs.js';
+import { complete_turn, advance, evaluatePhaseAdvanceGate } from './loops/verbs.js';
 import { withLoopLock } from './loops/lock.js';
 import { LOOP_ARTIFACT_BODY_MAX_BYTES, type LoopSlot, type LoopThread } from './loops/types.js';
 
@@ -54,8 +54,12 @@ export interface IdeationLoopCloseResult {
  * assignment. Legacy unbound slots fall back to agent / single-active.
  */
 function resolveCriticSlot(loop: LoopThread, assignment: Pick<Assignment, 'id' | 'agent'>): LoopSlot | undefined {
+  // role === 'critic' is LOAD-BEARING (review F-A): a coordinate-opened ideation loop
+  // also has an unbound `champion` slot that lane-harvest never completes; without this
+  // filter the single-active fallback below would select the CHAMPION after the critics
+  // finish, corrupting the loop. Mirrors resolveReviewerSlot's role filter.
   const active = loop.slots.filter(
-    (s) => s.status !== 'done' && s.status !== 'cancelled' && s.status !== 'failed',
+    (s) => s.role === 'critic' && s.status !== 'done' && s.status !== 'cancelled' && s.status !== 'failed',
   );
   if (active.length === 0) return undefined;
   if (assignment.id) {
@@ -96,8 +100,40 @@ export function closeIdeationLoopFromLaneResult(
         const loop = getLoop(loopId, cwd);
         if (!loop) return noop('loop not found');
         if (LOOP_TERMINAL.has(loop.status)) return noop(`loop already ${loop.status}`, loop.status);
+        // Advance, treating ONLY phase_advance_blocked as the expected gate-not-met case;
+        // re-throw any OTHER advance error to the outer catch so a real failure becomes a
+        // noop carrying the actual message, NEVER a misreported success (review F-C).
+        const tryAdvance = (recorded: boolean): IdeationLoopCloseResult => {
+          try {
+            const advanced = advance({ id: loopId, actor }, cwd);
+            return {
+              loop_id: loopId,
+              action: advanced.auto_closed ? 'closed' : 'advanced',
+              reason: `critique gate met → phase "${advanced.loop.current_phase}"`,
+              loop_status: advanced.loop.status,
+            };
+          } catch (err) {
+            if (err instanceof Error && /phase_advance_blocked/.test(err.message)) {
+              return recorded
+                ? { loop_id: loopId, action: 'critique_recorded', reason: 'critique recorded; gate not yet met (more critics needed)', loop_status: getLoop(loopId, cwd)?.status }
+                : noop('no active critic slot; critique gate not yet met (idempotent)', getLoop(loopId, cwd)?.status);
+            }
+            throw err; // a REAL advance error → outer catch → noop with the message
+          }
+        };
+
         const slot = resolveCriticSlot(loop, assignment);
-        if (!slot) return noop('no active critic slot to converge (already processed)', loop.status);
+        if (!slot) {
+          // No active critic slot: either already processed, OR a prior pass recorded the
+          // critique(s) and crashed BEFORE advancing → the loop is stuck at a satisfied
+          // critique gate. RESUME only in that precise case (review F-B) — the current
+          // phase's gate must be a critique gate that now evaluates MET — so we never
+          // over-advance a loop that already moved on to revision/synthesis.
+          const gate = loop.phases.find((p) => p.name === loop.current_phase)?.advance_gate;
+          const stuckAtCritiqueGate =
+            gate?.kind === 'min_artifacts_by_type' && gate.type === 'critique' && evaluatePhaseAdvanceGate(loop, gate).advance;
+          return stuckAtCritiqueGate ? tryAdvance(false) : noop('no active critic slot; nothing to resume', loop.status);
+        }
 
         // A critic's LANE-RESULT carries free-form summary/notes (no structured
         // critiques[] field) → ONE critique artifact. A bare lane with no critique
@@ -118,26 +154,7 @@ export function closeIdeationLoopFromLaneResult(
           { id: loopId, slot_id: slot.slot_id, actor, outcome: 'done', artifact: { phase: loop.current_phase, type: 'critique', body: capCritique(critique) } },
           cwd,
         );
-
-        // Attempt advance. The critique-phase gate (min_artifacts_by_type critique n:3)
-        // only opens once enough critiques accumulate; below that advance() throws
-        // phase_advance_blocked — EXPECTED (more critics still needed), NOT an error.
-        try {
-          const advanced = advance({ id: loopId, actor }, cwd);
-          return {
-            loop_id: loopId,
-            action: advanced.auto_closed ? 'closed' : 'advanced',
-            reason: `critique recorded → phase "${advanced.loop.current_phase}"`,
-            loop_status: advanced.loop.status,
-          };
-        } catch {
-          return {
-            loop_id: loopId,
-            action: 'critique_recorded',
-            reason: 'critique recorded; critique gate not yet met (more critics needed)',
-            loop_status: getLoop(loopId, cwd)?.status,
-          };
-        }
+        return tryAdvance(true);
       },
     });
   } catch (err) {
