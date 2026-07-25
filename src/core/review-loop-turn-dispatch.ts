@@ -42,7 +42,7 @@ import type { LoopSlot } from './loops/types.js';
  * enabling this before PR3 would stall successful turns). Flag-off is a
  * byte-identical no-op: the legacy dispatch below runs unchanged.
  */
-function turnOwnedReviewEnabled(): boolean {
+export function turnOwnedReviewEnabled(): boolean {
   return process.env.BRAINCLAW_TURN_OWNED_REVIEW === '1';
 }
 

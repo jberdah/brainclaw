@@ -476,6 +476,23 @@ export function findReservationByRunId(runId: string, cwd?: string): TurnReserva
   return listReservations({}, cwd).find((r) => r.child_ids.run_id === runId);
 }
 
+/**
+ * Find the turn-attempt reservation that OWNS a given assignment, if any
+ * (pln#630 PR3a). Mirror of {@link findReservationByRunId} keyed on the
+ * deterministic `child_ids.assignment_id`. The harvest path uses this to decide
+ * whether a completed LANE-RESULT is turn-owned — the lane always carries its
+ * `assignment_id`, whereas a real reviewer lane does NOT echo run_id/turn_id/nonce
+ * (the review brief never asks for them), so assignment_id is the reliable
+ * discriminator. Returns undefined for legacy assignments.
+ */
+export function findReservationByAssignmentId(assignmentId: string, cwd?: string): TurnReservation | undefined {
+  // decision:'committed' is load-bearing (review #5): only a COMMITTED reservation ever
+  // coexists with a real LANE-RESULT (dispatch commits before spawn). Filtering here makes
+  // the turn-owned discriminator explicit — a `prepared`/`aborted` reservation must never
+  // route a lane to reconcileTurn (it has no live launch generation to accept evidence for).
+  return listReservations({ decision: 'committed' }, cwd).find((r) => r.child_ids.assignment_id === assignmentId);
+}
+
 /* ============================ launch-grant fence (PR2a, dec#138) ========== */
 
 export interface ArmLaunchInput {
