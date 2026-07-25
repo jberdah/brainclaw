@@ -3,6 +3,7 @@ import type { FacadeResponse } from '../core/facade-schema.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
 import { findReservationByRunId } from '../core/loops/attempt-reservation.js';
+import { runVerify } from '../core/loops/verify-command.js';
 import {
   add_artifact,
   advance,
@@ -317,6 +318,7 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
               linked: req.linked,
               stop_condition: req.stop_condition,
               mode: req.mode,
+              verify: req.verify,
               created_by: agentId,
             },
             options.cwd,
@@ -665,6 +667,39 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
             summarizeLoop(loop),
           );
         });
+      }
+
+      case 'verify': {
+        // pln#632 — run the loop's opener-configured verify command + record a
+        // deterministic verify_report. runVerify manages its OWN two lock scopes (the
+        // spawn runs OUT of the lock), so it is NOT wrapped in withLockedLoopMutation.
+        const existing = getLoop(req.loop_id, options.cwd);
+        if (!existing) {
+          return errorResponse('verify', 'not_found', `unknown loop_id ${req.loop_id}`, Date.now() - startMs);
+        }
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
+        const result = runVerify({ loop_id: req.loop_id, actor }, options.cwd);
+        const newEvents = findNewLoopEvents(result.thread.id, beforeEvents, options.cwd);
+        const summary = result.unconfigured
+          ? `verify: loop has no protocol.verify — falling back to an agent-narrated verify_report`
+          : result.deduped
+            ? `verify: a verify_report already exists for iteration ${result.thread.iteration_count} (idempotent)`
+            : `${result.report?.passed ? '✔ verify green' : result.report?.timed_out ? '✖ verify RED (timeout)' : '✖ verify red'}: ${result.report?.command ?? ''}`;
+        return successResponse(
+          'verify',
+          {
+            loop: result.thread,
+            verify_report: result.report ?? null,
+            deduped: result.deduped,
+            unconfigured: result.unconfigured ?? false,
+            next_expected: computeNextExpected(result.thread),
+          },
+          [loopArtifactEntry(result.thread.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', result.thread.id), ...loopEventSideEffects(newEvents)],
+          [],
+          Date.now() - startMs,
+          summary,
+        );
       }
     }
   } catch (err: unknown) {

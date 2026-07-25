@@ -48,6 +48,14 @@ export const BclawLoopOpenSchema = z.object({
   linked: LoopLinksSchema.optional(),
   stop_condition: StopConditionSchema.optional(),
   mode: z.enum(REVIEW_MODES).optional(),
+  /** pln#632 — engine-run verify command (opener-provided). Argv array, run shell:false;
+   *  set once at open, drives the deterministic command_green gate via bclaw_loop(verify). */
+  verify: z
+    .object({
+      command: z.array(z.string().min(1)).min(1),
+      timeout_ms: z.number().int().positive().optional(),
+    })
+    .optional(),
   // Opt-in acknowledgement that the caller will drive dispatch manually.
   // Absent (or false) → handler rejects with a pointer to bclaw_coordinate,
   // because a loop opened without a follow-up turn/claim/inbox never runs.
@@ -157,6 +165,19 @@ export const BclawLoopCloseSchema = z.object({
 });
 
 /**
+ * pln#632 — `bclaw_loop(intent='verify')`: run the loop's opener-configured verify
+ * command (tests/build/lint) and record a deterministic `verify_report` for the current
+ * iteration. Does NOT advance. No command in the request — provenance is the loop's
+ * `protocol.verify`, never the caller (the determinism guarantee).
+ */
+export const BclawLoopVerifySchema = z.object({
+  intent: z.literal('verify'),
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  expected_version: z.number().int().nonnegative().optional(),
+  ...CallerEnvelopeFields,
+});
+
+/**
  * pln#508 step 2 — `bclaw_loop(intent='request_input')`.
  *
  * A slot pauses on an operator question. The handler generates a fresh
@@ -227,6 +248,7 @@ export const BclawLoopRequestSchema = z.discriminatedUnion('intent', [
   BclawLoopPauseSchema,
   BclawLoopResumeSchema,
   BclawLoopCloseSchema,
+  BclawLoopVerifySchema,
   BclawLoopRequestInputSchema,
   BclawLoopProvideInputSchema,
 ]);
@@ -245,6 +267,7 @@ export const BCLAW_LOOP_INTENTS = [
   'pause',
   'resume',
   'close',
+  'verify',
   'request_input',
   'provide_input',
 ] as const;
