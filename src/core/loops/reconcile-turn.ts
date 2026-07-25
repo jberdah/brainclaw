@@ -210,6 +210,21 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     } catch (err) {
       return { reconciled: false, reason: `complete_turn failed: ${err instanceof Error ? err.message : String(err)}` };
     }
+    // ── pln#521 P4 — observability: the turn's artifact was harvested + integrated
+    // into the loop. Best-effort (never aborts a successful convergence). ──
+    try {
+      createRuntimeEvent({
+        agent: actor,
+        event_type: 'loop_artifact_harvested',
+        text: `reconcileTurn: harvested turn ${turn_id} on slot ${slot.slot_id} → loop ${loop.id} (${slot_outcome}, ${artifacts_added} artifact(s), phase ${reservation.phase})`,
+        tags: ['loops', 'reconcile', 'harvest', 'turn-attempt'],
+        assignment_id: reservation.child_ids.assignment_id,
+        run_id: reservation.child_ids.run_id,
+        status_reason: `harvested_${slot_outcome}`,
+      }, cwd);
+    } catch {
+      /* observability best-effort — a telemetry failure must not undo the harvest */
+    }
   }
 
   // ── Secondary convergence (best-effort + idempotent): run/assignment/claim.

@@ -11,6 +11,7 @@ import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds,
 } from '../../src/core/loops/attempt-reservation.js';
 import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
+import { listRuntimeEvents } from '../../src/core/events.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
 import type { LaneResult } from '../../src/core/schema.js';
 
@@ -62,7 +63,7 @@ describe('reconcileTurn §8', () => {
   afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
 
   it('approve → records an accepted verdict, completes the run, auto-closes the loop (reviewer_green)', () => {
-    const { turnId, runId, loopId, lane } = setup(cwd, 'approve');
+    const { turnId, runId, assignmentId, loopId, lane } = setup(cwd, 'approve');
     const r = reconcileTurn({ turn_id: turnId, lane, cwd });
     assert.equal(r.reconciled, true);
     assert.equal(r.slot_outcome, 'done');
@@ -71,6 +72,11 @@ describe('reconcileTurn §8', () => {
     assert.ok(['closed', 'completed'].includes(loop.status), `loop is terminal (${loop.status})`);
     assert.ok(loop.artifacts.some((a) => a.type === 'verdict' && /^accepted/.test((a.body ?? '').toLowerCase())));
     assert.equal(loadAgentRun(runId, cwd)?.status, 'completed', 'turn-owned run settled to completed');
+    // pln#521 P4 — a loop_artifact_harvested observability event was emitted for the harvest.
+    const harvested = listRuntimeEvents(cwd).filter((e) => e.event_type === 'loop_artifact_harvested');
+    assert.equal(harvested.length, 1, 'exactly one loop_artifact_harvested event');
+    assert.equal(harvested[0]!.run_id, runId, 'event carries the turn-owned run_id');
+    assert.equal(harvested[0]!.assignment_id, assignmentId, 'event carries the assignment_id');
   });
 
   it('request_changes → records a changes-requested verdict, loop stays OPEN (fix cycle continues)', () => {
