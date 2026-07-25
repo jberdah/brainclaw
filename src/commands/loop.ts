@@ -165,12 +165,12 @@ function buildRequest(
   }
 }
 
-export function runLoopCommand(
+export async function runLoopCommand(
   subcommand: LoopSubcommand,
   args: LoopCommandArgs,
   options: LoopCommandOptions = {},
   cwd?: string,
-): LoopCommandResult {
+): Promise<LoopCommandResult> {
   if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
@@ -178,7 +178,7 @@ export function runLoopCommand(
 
   const loopId = requireLoopId(args, options);
   const request = buildRequest(subcommand, loopId, options);
-  const handled = handleBclawLoop({ args: request, cwd });
+  const handled = await handleBclawLoop({ args: request, cwd });
   if (handled.response.status !== 'ok') {
     const message = handled.response.error ?? handled.summary;
     fail(`bclaw_loop.${String(request.intent)} rejected the call: ${message}`, 2, options);

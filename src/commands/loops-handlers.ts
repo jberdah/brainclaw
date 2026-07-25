@@ -4,6 +4,7 @@ import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
 import { findReservationByRunId } from '../core/loops/attempt-reservation.js';
 import { runVerify } from '../core/loops/verify-command.js';
+import { runImplBind } from '../core/loops/impl-bind.js';
 import {
   add_artifact,
   advance,
@@ -45,6 +46,12 @@ export interface HandleBclawLoopOptions {
    * Defaults to "bclaw_loop" to make origin traceable in the event journal.
    */
   defaultActor?: string;
+  /**
+   * MCP connection session id. Forwarded to spawning intents (bind) so the
+   * dispatched assignments/claims/runs correlate to the coordinator's session,
+   * matching bclaw_dispatch / bclaw_coordinate.
+   */
+  sessionId?: string;
 }
 
 export interface HandleBclawLoopResult {
@@ -174,7 +181,7 @@ function currentLoopVersion(loopId: string, cwd?: string): number {
   return getLoop(loopId, cwd)?.version ?? 0;
 }
 
-type LoopMutationRequest = Exclude<ValidRequest, { intent: 'open' | 'get' | 'list' | 'verify' }>;
+type LoopMutationRequest = Exclude<ValidRequest, { intent: 'open' | 'get' | 'list' | 'verify' | 'bind' }>;
 
 /**
  * Slot-bound intents must not let a cached idempotent response leak to a
@@ -271,7 +278,7 @@ function trySweepLoopTimeouts(loop_id: string, cwd: string | undefined): void {
   } catch { /* best-effort: never block facade on sweep errors */ }
 }
 
-export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoopResult {
+export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<HandleBclawLoopResult> {
   const startMs = Date.now();
   const defaultActor = options.defaultActor ?? 'bclaw_loop';
   const inferredIntent = inferIntent(options.args);
@@ -699,6 +706,63 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
           [],
           Date.now() - startMs,
           summary,
+        );
+      }
+      case 'bind': {
+        // pln#632 impl-loop bind — dispatch the loop's linked sequence + advance
+        // bind→execute. runImplBind awaits the async spawn (the advance takes its own
+        // lock via the verb), so it is NOT wrapped in withLockedLoopMutation — it mirrors
+        // coordinate(open_loop)'s async-handler-spawns pattern, not a synchronous verb.
+        const existing = getLoop(req.loop_id, options.cwd);
+        if (!existing) {
+          return errorResponse('bind', 'not_found', `unknown loop_id ${req.loop_id}`, Date.now() - startMs);
+        }
+        if (existing.kind !== 'implementation') {
+          return errorResponse(
+            'bind',
+            'validation_error',
+            `bind is only valid for implementation loops (loop ${req.loop_id} is kind='${existing.kind}'); review/ideation loops dispatch via bclaw_coordinate`,
+            Date.now() - startMs,
+          );
+        }
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
+        const bind = await runImplBind(
+          {
+            loop_id: req.loop_id,
+            dispatcherAgent: actor,
+            dispatcherAgentId: agentId,
+            sessionId: options.sessionId,
+            dryRun: req.dry_run,
+            lanes: req.lanes,
+            autoExecute: req.auto_execute,
+            model: req.model,
+            maxAssignments: req.max_assignments,
+          },
+          options.cwd,
+        );
+        const loop = getLoop(req.loop_id, options.cwd)!;
+        const newEvents = findNewLoopEvents(loop.id, beforeEvents, options.cwd);
+        const sideEffects =
+          bind.action === 'bound'
+            ? [sideEffectUpdate('loop', loop.id), ...loopEventSideEffects(newEvents)]
+            : [...loopEventSideEffects(newEvents)];
+        return successResponse(
+          'bind',
+          {
+            loop,
+            sequence_id: bind.sequence_id,
+            action: bind.action,
+            advanced_to: bind.advanced_to ?? null,
+            auto_closed: bind.auto_closed ?? false,
+            dispatched: bind.messages_sent,
+            dispatch: bind.dispatch,
+            next_expected: computeNextExpected(loop),
+          },
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          sideEffects,
+          bind.dispatch?.warnings ?? [],
+          Date.now() - startMs,
+          bind.reason,
         );
       }
     }
