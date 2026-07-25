@@ -35,15 +35,22 @@ import {
 import type { LoopSlot } from './loops/types.js';
 
 /**
- * pln#630 PR2c-b — opt-in flag gating the turn-owned (exactly-once) review
- * dispatch path. DEFAULT OFF; must stay off through PR2c-b + PR3 and be flipped
- * only in PR4 after the §9 conformance harness proves it (a turn-owned run that
- * genuinely completes stays `created` until reconcileTurn/PR3 finalizes it — so
- * enabling this before PR3 would stall successful turns). Flag-off is a
- * byte-identical no-op: the legacy dispatch below runs unchanged.
+ * pln#630 — gate for the turn-owned (exactly-once) review dispatch path.
+ *
+ * NOW DEFAULT ON (the shipped default): the finalization (PR3a), autonomous fix-cycle (PR3b),
+ * strand self-heal (PR4), and revoked-grant recovery (R1) are all merged; the §9 conformance
+ * harness + a live end-to-end (real spawn → turn-keyed sentinel → harvest → reconcileTurn →
+ * close-on-approve) validated the path. `BRAINCLAW_TURN_OWNED_REVIEW=0` is the explicit
+ * KILL-SWITCH that reverts to the legacy closer (byte-identical) if a problem surfaces in prod.
+ * Note the routing is doubly-gated: even ON, harvest only reconcile-turns a lane that OWNS a
+ * turn reservation — a legacy-dispatched lane (no reservation) still uses the legacy path.
  */
 export function turnOwnedReviewEnabled(): boolean {
-  return process.env.BRAINCLAW_TURN_OWNED_REVIEW === '1';
+  // Normalized kill-switch (review Finding 4): any of 0/false/off/no (case/space-insensitive)
+  // disables — so an operator reaching for it under pressure can't mis-set it. Anything else
+  // (including unset) keeps the shipped default ON.
+  const v = (process.env.BRAINCLAW_TURN_OWNED_REVIEW ?? '').trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(v);
 }
 
 /** GRANT lease: bounds ONE launch generation's reserve→arm→consume→spawn→run-`running`
@@ -350,9 +357,9 @@ export async function dispatchReviewLoopTurn(
     let turnEcho: TurnEcho | undefined;
     let runLegacyProjection = true;
 
-    // pln#630 PR2c-b — turn-owned (exactly-once) dispatch, flag-gated (default off)
-    // + FAIL-CLOSED after reserve. Flag-off → runLegacyProjection stays true and
-    // this branch is a byte-identical no-op (the legacy projection below runs).
+    // pln#630 — turn-owned (exactly-once) dispatch, now the DEFAULT + FAIL-CLOSED after
+    // reserve. Kill-switch off (BRAINCLAW_TURN_OWNED_REVIEW=0) → runLegacyProjection stays
+    // true and this branch is a byte-identical no-op (the legacy projection below runs).
     if (turnOwnedReviewEnabled()) {
       const prep = prepareTurnOwnedReviewDispatch({
         loopId,
