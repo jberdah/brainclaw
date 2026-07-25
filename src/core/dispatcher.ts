@@ -34,7 +34,7 @@
  * @module
  */
 import { buildClaimEnvPrefix } from './execution-profile.js';
-import { getActiveSequence } from './sequence.js';
+import { getActiveSequence, listSequences } from './sequence.js';
 import { loadState, persistState } from './state.js';
 import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
 import { sanitizeBranchComponent, isBranchMergedByContent, probeLocalBranch, isGitRepo } from './worktree.js';
@@ -181,10 +181,18 @@ function buildEnvPrefix(claimId: string): string {
 // ── Lane Analysis ───────────────────────────────────────────
 
 /**
- * Analyze the active sequence and categorize each item as ready, active, blocked, or done.
+ * Analyze a sequence and categorize each item as ready, active, blocked, or done.
+ *
+ * `sequenceId` (pln#632 impl-loop bind) targets a SPECIFIC sequence by id instead of
+ * the project's active one — so an implementation loop can dispatch its own linked
+ * sequence without hijacking the global active-sequence pointer. Omitted → the active
+ * sequence (byte-identical to the historical behaviour; the resolver is non-throwing,
+ * so an unknown id yields `null` exactly like "no active sequence").
  */
-export function analyzeSequence(cwd: string): DispatchAnalysis | null {
-  const sequence = getActiveSequence(cwd);
+export function analyzeSequence(cwd: string, sequenceId?: string): DispatchAnalysis | null {
+  const sequence = sequenceId
+    ? listSequences(cwd).find((s) => s.id === sequenceId)
+    : getActiveSequence(cwd);
   if (!sequence) return null;
 
   const state = loadState(cwd);
@@ -889,6 +897,13 @@ export interface DispatchOptions {
   agents?: string[];
   /** Only dispatch items in specific lanes */
   lanes?: string[];
+  /**
+   * pln#632 impl-loop bind — dispatch a SPECIFIC sequence by id instead of the
+   * project's active one. Lets an implementation loop drive its own linked
+   * sequence without mutating the global active-sequence pointer. Omitted →
+   * the active sequence (unchanged behaviour).
+   */
+  sequenceId?: string;
   /** Max assignments to make in one dispatch (default: all ready) */
   maxAssignments?: number;
   /** Dry run — analyze but don't send messages */
@@ -1057,7 +1072,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
   // Run assignment sweeper before dispatch to detect stuck/expired work
   try { sweepAssignments(cwd, { actor: options.dispatcherAgent }); } catch { /* best-effort */ }
 
-  const analysis = analyzeSequence(cwd);
+  const analysis = analyzeSequence(cwd, options.sequenceId);
   if (!analysis) return null;
 
   const result: DispatchResult = { delivery_plan: [], messages_sent: [], commands: [], skipped: [], warnings: [] };

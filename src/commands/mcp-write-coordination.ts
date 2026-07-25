@@ -2039,7 +2039,7 @@ export async function handleBclawLoop(args: Record<string, unknown>, ctx: McpWri
   }
   const { handleBclawLoop: runLoopIntent } = await import('./loops-handlers.js');
   const targetCwd = resolveProjectCwd(args?.project as string | undefined, cwd);
-  const result = runLoopIntent({ args: args as unknown, cwd: targetCwd });
+  const result = await runLoopIntent({ args: args as unknown, cwd: targetCwd });
   return {
     response: toolResponse({
       content: [{ type: 'text', text: result.summary }],
