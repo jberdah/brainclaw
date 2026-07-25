@@ -111,6 +111,8 @@ export interface CodeFindMatch {
    *  dir, `''` = root) + its id. `path` is workspace-root-relative when aggregating. */
   project?: string;
   project_id?: string;
+  /** pln#631 PR4 — true when the hit is in the caller's OWN package (locality tiebreak). */
+  local?: boolean;
 }
 
 export interface CodeFindResult {
@@ -138,6 +140,8 @@ export interface CodeBriefReadEntry {
   /** pln#631 PR3 — true when this row is a cross-package importer (a sibling package
    *  importing the defining package's public name), not an intra-package graph row. */
   cross_package?: boolean;
+  /** pln#631 PR4 — true when this row is in the caller's OWN package (locality tiebreak). */
+  local?: boolean;
 }
 
 export interface CodeBriefRelatedMemory {
