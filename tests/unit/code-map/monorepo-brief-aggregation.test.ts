@@ -113,6 +113,40 @@ describe('pln#631 PR2 root-aggregated brief (traversal)', () => {
     assert.ok(!paths.some((p) => p.startsWith('applications/app_a')), 'no aggregation → child files absent');
   });
 
+  it('surfaces a cross-package importer (sibling importing the defining package) — PR3', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-xpkg-'));
+    cleanup.push(root);
+    makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    writeFile(path.join(root, 'src', 'rootlib.ts'), 'export function ledgerRoot(){return 0;}\n');
+    // Defining package @mono/core exports coreRegistry.
+    const core = path.join(root, 'packages', 'core');
+    makeStore(core, 'core');
+    writeFile(path.join(core, 'package.json'), JSON.stringify({ name: '@mono/core' }));
+    writeFile(path.join(core, 'src', 'registry.ts'), 'export function coreRegistry(){return 1;}\n');
+    // Sibling @mono/api imports coreRegistry from @mono/core (cross-package).
+    const api = path.join(root, 'packages', 'api');
+    makeStore(api, 'api');
+    writeFile(path.join(api, 'package.json'), JSON.stringify({ name: '@mono/api' }));
+    writeFile(path.join(api, 'src', 'server.ts'), "import { coreRegistry } from '@mono/core';\nexport function boot(){ return coreRegistry(); }\n");
+
+    const be = new JsonlBackend();
+    await be.refresh({ cwd: root, scope: 'all', cascade: true });
+    const brief = await be.brief({ target: 'coreRegistry', cwd: root, traversal: 'auto' });
+
+    // The defining file is present...
+    assert.ok(
+      brief.suggested_files_to_read.some((f) => f.path === 'packages/core/src/registry.ts'),
+      'defining file surfaces',
+    );
+    // ...and the sibling importer surfaces as a cross_package row, name-level.
+    const cross = brief.suggested_files_to_read.find((f) => f.path === 'packages/api/src/server.ts');
+    assert.ok(cross, `cross-package importer must surface: ${brief.suggested_files_to_read.map((f) => f.path).join(', ')}`);
+    assert.equal(cross!.cross_package, true, 'flagged cross_package');
+    assert.equal(cross!.project, 'packages/api');
+    assert.match(cross!.reason, /cross-package/);
+    assert.match(cross!.reason, /coreRegistry/, 'name-level: reason cites the imported symbol');
+  });
+
   it('briefs an imported-but-not-defined name via the importer heuristic (review F1 parity)', async () => {
     // No store DEFINES `axios`, but a child imports it — a single-store brief surfaces
     // the importer via rankFiles' specifier heuristic, so the aggregate must too (not []).
