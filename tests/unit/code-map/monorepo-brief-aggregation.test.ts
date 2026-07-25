@@ -147,6 +147,62 @@ describe('pln#631 PR2 root-aggregated brief (traversal)', () => {
     assert.match(cross!.reason, /coreRegistry/, 'name-level: reason cites the imported symbol');
   });
 
+  it('suppresses a DELETED cross-package importer (no silent stale graph hint) — review F1', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-xpkg-del-'));
+    cleanup.push(root);
+    makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    writeFile(path.join(root, 'src', 'rootlib.ts'), 'export function ledgerRoot(){return 0;}\n');
+    const core = path.join(root, 'packages', 'core');
+    makeStore(core, 'core');
+    writeFile(path.join(core, 'package.json'), JSON.stringify({ name: '@mono/core' }));
+    writeFile(path.join(core, 'src', 'registry.ts'), 'export function coreRegistry(){return 1;}\n');
+    const api = path.join(root, 'packages', 'api');
+    makeStore(api, 'api');
+    writeFile(path.join(api, 'package.json'), JSON.stringify({ name: '@mono/api' }));
+    writeFile(path.join(api, 'src', 'server.ts'), "import { coreRegistry } from '@mono/core';\nexport function boot(){ return coreRegistry(); }\n");
+
+    const be = new JsonlBackend();
+    await be.refresh({ cwd: root, scope: 'all', cascade: true });
+    // Delete the importer WITHOUT re-refreshing: its index row is now stale (points at a
+    // deleted file). The cross-package row must be lazy-validated + suppressed, not served.
+    fs.rmSync(path.join(api, 'src', 'server.ts'));
+
+    const brief = await be.brief({ target: 'coreRegistry', cwd: root, traversal: 'auto' });
+    assert.ok(
+      !brief.suggested_files_to_read.some((f) => f.path === 'packages/api/src/server.ts'),
+      'a deleted cross-package importer must be suppressed (no silent stale graph hint)',
+    );
+    // The defining file (still on disk) is still surfaced.
+    assert.ok(brief.suggested_files_to_read.some((f) => f.path === 'packages/core/src/registry.ts'));
+  });
+
+  it('scores a cross-package importer by its BEST precision across specifiers — review F2', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-xpkg-prec-'));
+    cleanup.push(root);
+    makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    writeFile(path.join(root, 'src', 'rootlib.ts'), 'export function ledgerRoot(){return 0;}\n');
+    const core = path.join(root, 'packages', 'core');
+    makeStore(core, 'core');
+    writeFile(path.join(core, 'package.json'), JSON.stringify({ name: '@mono/core' }));
+    writeFile(path.join(core, 'src', 'registry.ts'), 'export function coreRegistry(){return 1;}\n');
+    const api = path.join(root, 'packages', 'api');
+    makeStore(api, 'api');
+    writeFile(path.join(api, 'package.json'), JSON.stringify({ name: '@mono/api' }));
+    // Imports the package under TWO specifiers: a bare subpath (package-level, no target
+    // symbol) AND the root name with the target symbol (name-level). Best precision wins.
+    writeFile(
+      path.join(api, 'src', 'multi.ts'),
+      "import { helper } from '@mono/core/utils';\nimport { coreRegistry } from '@mono/core';\nexport function go(){ return helper() + coreRegistry(); }\n",
+    );
+
+    const be = new JsonlBackend();
+    await be.refresh({ cwd: root, scope: 'all', cascade: true });
+    const brief = await be.brief({ target: 'coreRegistry', cwd: root, traversal: 'auto' });
+    const row = brief.suggested_files_to_read.find((f) => f.path === 'packages/api/src/multi.ts');
+    assert.ok(row?.cross_package, 'cross-package importer surfaces');
+    assert.match(row!.reason, /coreRegistry/, 'name-level precision won despite a package-level specifier also present');
+  });
+
   it('briefs an imported-but-not-defined name via the importer heuristic (review F1 parity)', async () => {
     // No store DEFINES `axios`, but a child imports it — a single-store brief surfaces
     // the importer via rankFiles' specifier heuristic, so the aggregate must too (not []).

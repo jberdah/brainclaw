@@ -36,6 +36,7 @@ import {
   reserveSourceSlots,
   attachRelatedMemory,
   attachMemoryIds,
+  validateStoreEntry,
   BRIEF_FILE_CAP,
   LAZY_BUDGET,
   type FindMatch,
@@ -44,6 +45,7 @@ import {
   type BriefReadEntry,
   type RelatedMemoryItem,
   type MemoryReader,
+  type LazyChecker,
 } from './query.js';
 import type { FreshnessBadge, FreshnessStatus } from './types.js';
 
@@ -364,6 +366,7 @@ function crossPackageReverseDeps(
   contributing: StoreRef[],
   allStores: StoreRef[],
   symbolNames: Set<string>,
+  checker: LazyChecker,
 ): MergedBriefRow[] {
   const targetPkgNames = new Map<string, StoreRef>(); // package name -> defining store B
   for (const ref of contributing) {
@@ -371,41 +374,64 @@ function crossPackageReverseDeps(
     if (name) targetPkgNames.set(name, ref);
   }
   if (targetPkgNames.size === 0) return [];
+  const matchesTarget = (spec: string): boolean => {
+    for (const nameB of targetPkgNames.keys()) {
+      if (spec === nameB || spec.startsWith(`${nameB}/`)) return true;
+    }
+    return false;
+  };
 
+  // Aggregate per IMPORTER FILE across ALL matching specifiers first (review F2): a file
+  // importing the target package under two specifiers — one name-level, one bare — must
+  // be scored by its BEST precision, not by whichever specifier `Object.entries` happens
+  // to yield first. Keyed by store cwd + path (never project_id).
   const contributingCwds = new Set(contributing.map((r) => r.cwd));
-  const rows: MergedBriefRow[] = [];
-  const seen = new Set<string>();
+  interface Agg { cwd: string; relPath: string; path: string; file_id: string; namedHits: Set<string>; specs: Set<string>; }
+  const byImporter = new Map<string, Agg>();
   for (const a of allStores) {
     if (contributingCwds.has(a.cwd)) continue; // intra-package deps already covered
     const imports = readImportsIndex(a.cwd);
     if (!imports) continue;
     for (const [spec, importers] of Object.entries(imports.entries)) {
-      let matchesTarget = false;
-      for (const nameB of targetPkgNames.keys()) {
-        if (spec === nameB || spec.startsWith(`${nameB}/`)) { matchesTarget = true; break; }
-      }
-      if (!matchesTarget) continue;
+      if (!matchesTarget(spec)) continue;
       for (const imp of importers) {
         const key = `${a.cwd}::${imp.path}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const namedHits = imp.imported.filter((n) => symbolNames.has(n));
-        const nameLevel = namedHits.length > 0;
-        const score = nameLevel ? 5 : 3; // name-level ranks with reverse-deps; package-level below
-        rows.push({
-          path: a.relPath ? `${a.relPath}/${imp.path}` : imp.path,
-          file_id: imp.file_id,
-          reason: nameLevel
-            ? `cross-package: imports ${namedHits.join(', ')} from ${spec}`
-            : `cross-package: imports ${spec}`,
-          score,
-          bestDelta: score,
-          graphDerived: true,
-          project: a.relPath,
-          cross_package: true,
-        });
+        let agg = byImporter.get(key);
+        if (!agg) {
+          agg = { cwd: a.cwd, relPath: a.relPath, path: imp.path, file_id: imp.file_id, namedHits: new Set(), specs: new Set() };
+          byImporter.set(key, agg);
+        }
+        agg.specs.add(spec);
+        for (const n of imp.imported) if (symbolNames.has(n)) agg.namedHits.add(n);
       }
     }
+  }
+
+  // Emit one row per importer — but LAZY-VALIDATE it against its store first (review F1):
+  // a cross-package row is graph-derived, so a deleted/stale importer must be SUPPRESSED
+  // just like an intra-package graph row (no silent stale graph hints). Shares the one
+  // budget; a throwaway acc (row-drop only — the sibling store's manifest freshness
+  // already rides the merged badge via its per-store briefInStore).
+  const rows: MergedBriefRow[] = [];
+  const acc = newAccumulator();
+  for (const agg of byImporter.values()) {
+    const ok = validateStoreEntry({ path: agg.path, file_id: agg.file_id }, checker, acc, agg.cwd, undefined);
+    if (!ok) continue; // deleted / stale / budget-skipped → suppress (graph-derived)
+    const nameLevel = agg.namedHits.size > 0;
+    const score = nameLevel ? 5 : 3; // name-level ranks with reverse-deps; package-level below
+    const shortestSpec = [...agg.specs].sort((x, y) => x.length - y.length)[0] ?? '';
+    rows.push({
+      path: agg.relPath ? `${agg.relPath}/${agg.path}` : agg.path,
+      file_id: agg.file_id,
+      reason: nameLevel
+        ? `cross-package: imports ${[...agg.namedHits].sort().join(', ')} from ${shortestSpec}`
+        : `cross-package: imports ${shortestSpec}`,
+      score,
+      bestDelta: score,
+      graphDerived: true,
+      project: agg.relPath,
+      cross_package: true,
+    });
   }
   return rows;
 }
@@ -472,7 +498,7 @@ export function aggregateBrief(
     // crossPackageReverseDeps dedups internally, and its rows come from NON-contributing
     // stores (distinct workspace-relative paths from the intra-package rows above), so a
     // direct append cannot collide.
-    merged.push(...crossPackageReverseDeps(contributing.map((p) => p.ref), resolved.stores, symbolNames));
+    merged.push(...crossPackageReverseDeps(contributing.map((p) => p.ref), resolved.stores, symbolNames, checker));
   }
 
   merged.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
