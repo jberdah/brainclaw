@@ -46,7 +46,11 @@ import type { LoopSlot } from './loops/types.js';
  * turn reservation — a legacy-dispatched lane (no reservation) still uses the legacy path.
  */
 export function turnOwnedReviewEnabled(): boolean {
-  return process.env.BRAINCLAW_TURN_OWNED_REVIEW !== '0';
+  // Normalized kill-switch (review Finding 4): any of 0/false/off/no (case/space-insensitive)
+  // disables — so an operator reaching for it under pressure can't mis-set it. Anything else
+  // (including unset) keeps the shipped default ON.
+  const v = (process.env.BRAINCLAW_TURN_OWNED_REVIEW ?? '').trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(v);
 }
 
 /** GRANT lease: bounds ONE launch generation's reserve→arm→consume→spawn→run-`running`

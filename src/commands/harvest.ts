@@ -47,18 +47,40 @@ import { readCompletionSignals } from '../core/runtime-signals.js';
  * that already supplies keyed lanes is honored (lane.* wins); a stale generation's
  * sentinel carries the old token → still rejected, preserving the anti-stale guarantee.
  */
+/**
+ * The turn-owned FINALIZATION discriminator (pln#630, review Finding 1). A lane finalizes via
+ * the exactly-once reconcileTurn ONLY if a committed reservation OWNS it AND turn-keyed evidence
+ * (the nonce) is available — from the lane or the coordinator's completion SENTINEL. Without the
+ * nonce, reconcileTurn's read-strict gate can NEVER converge: this is reachable in production
+ * when a turn-owned dispatch WON the fence but did not ack-wrap-spawn (inbox_only / IDE-only
+ * reviewer, command_ready_manual, capacity cap, BRAINCLAW_NO_SPAWN, worktree-creation failure) —
+ * it minted a reservation but no sentinel will ever be written. Returning undefined there routes
+ * the lane to the LEGACY presence-based closer so the loop still converges instead of stalling
+ * forever. This is SAFE: the exactly-once SPAWN guarantee is enforced at DISPATCH by the launch
+ * fence (already run), so using legacy FINALIZATION for a sentinel-less lane reintroduces no
+ * double-spawn; and a sentinel that lands after a legacy close makes a later reconcile a
+ * terminal-loop idempotent no-op.
+ */
+function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): { reservation: TurnReservation; nonce: string } | undefined {
+  const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
+  if (!reservation) return undefined; // legacy lane (no reservation)
+  const nonce = lane.nonce ?? readCompletionSignals(cwd, reservation.child_ids.assignment_id).completed?.nonce;
+  if (!nonce) return undefined; // reservation but NO turn-keyed evidence → legacy finalization
+  return { reservation, nonce };
+}
+
 function reconcileTurnOwnedReviewLane(
   lane: LaneResult,
   cwd: string,
 ): { reservation: TurnReservation; result: ReconcileTurnResult } | undefined {
-  const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
-  if (!reservation) return undefined; // legacy lane — caller runs the legacy path
-  const signals = readCompletionSignals(cwd, reservation.child_ids.assignment_id);
+  const ev = turnOwnedLaneEvidence(lane, cwd);
+  if (!ev) return undefined; // legacy lane OR no turn-keyed evidence — caller runs the legacy path
+  const { reservation, nonce } = ev;
   const enrichedLane: LaneResult = {
     ...lane,
     turn_id: lane.turn_id ?? reservation.turn_id,
     run_id: lane.run_id ?? reservation.child_ids.run_id,
-    nonce: lane.nonce ?? signals.completed?.nonce,
+    nonce,
   };
   const result = reconcileTurn({ turn_id: reservation.turn_id, lane: enrichedLane, cwd });
   return { reservation, result };
@@ -418,14 +440,14 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
       if (laneAssignment) {
-        // pln#630 PR3a — a TURN-OWNED review lane is finalized ONLY by reconcileTurn on the
-        // `--integrate` path (which owns claim/worktree teardown). The report path must NOT
-        // pre-empt it with a legacy close: a legacy close terminalizes the loop, and a later
-        // reconcile then hits the already-terminal early-return (reconcile-turn.ts) BEFORE
-        // settling the run — stranding the turn-owned run at `created` permanently. So skip
-        // the legacy review-close for a reserved (turn-owned) lane. Flag-off / legacy lane →
-        // false → unchanged legacy close. Ideation stays legacy (turn-owned is review-only).
-        const laneIsTurnOwned = turnOwnedReviewEnabled() && !!findReservationByAssignmentId(lane.assignment_id, cwd);
+        // pln#630 PR3a — a TURN-OWNED review lane (reservation + turn-keyed evidence) is finalized
+        // ONLY by reconcileTurn on the `--integrate` path (which owns claim/worktree teardown). The
+        // report path must NOT pre-empt it with a legacy close (which would terminalize the loop and
+        // strand the turn-owned run). So skip the legacy review-close for such a lane. Kill-switch
+        // (=0), a legacy lane (no reservation), OR a reservation WITHOUT evidence (review Finding 1:
+        // an inbox_only/non-ack-wrapped dispatch that never wrote a sentinel) → false → the lane
+        // takes the unchanged legacy close so it still converges. Ideation stays legacy (review-only).
+        const laneIsTurnOwned = turnOwnedReviewEnabled() && !!turnOwnedLaneEvidence(lane, cwd);
         if (!laneIsTurnOwned) {
           closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
         }
@@ -689,8 +711,9 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
 
         // pln#630 PR3a — a TURN-OWNED review lane finalizes via the exactly-once
         // reconcileTurn, which REPLACES the legacy closer + teardown gate for this lane
-        // (exactly-one finalizer per lane). Flag-off, or a legacy (non-reserved) lane →
-        // `turnOwned` is undefined and the unchanged legacy `else` block runs (byte-identical).
+        // (exactly-one finalizer per lane). Kill-switch (=0), a legacy (non-reserved) lane, OR a
+        // reservation with NO turn-keyed evidence (review Finding 1) → `turnOwned` is undefined
+        // and the unchanged legacy `else` block runs so the loop still converges.
         const turnOwned = turnOwnedReviewEnabled()
           ? reconcileTurnOwnedReviewLane(lane, cwd)
           : undefined;
@@ -717,12 +740,13 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
           // awaiting its next turn, so nothing is corrupted, only not-yet-autonomous).
           try { entry.claim_released = loadClaim(assignment.claim_id, cwd)?.status === 'released'; }
           catch { entry.claim_released = false; }
-          // review #2 — a turn-owned lane that carries a completed review verdict but whose
-          // evidence was NOT accepted (missing/mismatched nonce) does not converge, and —
-          // unlike the legacy presence-based path — has no fallback close, so the loop would
-          // stall SILENTLY. Emit an observable event so an operator/doctor can see the stall.
-          // (A full timeout→legacy backstop is pln#630 PR4, gated before the flag flips; an
-          // R4 conflict already journals its own event, so it is excluded here.)
+          // A turn-owned lane that reached here HAS turn-keyed evidence (turnOwnedLaneEvidence
+          // gated on a present nonce — the missing-sentinel/non-spawn case already fell back to
+          // legacy, review Finding 1). So a non-convergence here means the evidence MISMATCHED
+          // the live attempt (stale/superseded generation) — which must NOT fall back to legacy
+          // (that would converge on evidence for a DIFFERENT generation). Emit an observable
+          // event so an operator/doctor sees the (correctly) withheld convergence. (An R4
+          // conflict already journals its own event, so it is excluded here.)
           if (!rr.reconciled && !rr.conflict && lane.review_verdict) {
             try {
               createRuntimeEvent({

@@ -185,6 +185,18 @@ describe('pln#630 PR3a — harvest → reconcileTurn wiring (integrate path)', (
     assert.equal(harvestedEvents(cwd, runId).length, 1, 'default-on ⇒ reconcileTurn finalized (harvested event present)');
   });
 
+  it('review Finding 1 — a turn-owned reservation with NO sentinel (inbox/manual reviewer, no ack-wrapper) falls back to LEGACY and still converges (no stall)', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW; // default ON
+    // A won turn-owned dispatch that never ack-wrap-spawned: reservation exists, NO completion
+    // sentinel, keyless worker lane → no turn-keyed evidence. Must NOT stall on read-strict.
+    const { loopId, runId, wt } = seedTurnOwned(cwd, { verdict: 'approve', writeSentinel: false });
+    integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const loop = getLoop(loopId, cwd)!;
+    assert.ok(['closed', 'completed'].includes(loop.status), 'no sentinel ⇒ LEGACY closer converges (not a silent stall)');
+    assert.ok(loop.artifacts.some((a) => a.type === 'verdict'), 'verdict recorded via the legacy path');
+    assert.equal(harvestedEvents(cwd, runId).length, 0, 'reconcileTurn did NOT run (no evidence) ⇒ no harvested event');
+  });
+
   it('T4 flag-on but NON-turn-owned lane (no reservation) → legacy path, zero harvested events', () => {
     process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1';
     const { loopId, wt } = seedLegacy(cwd, 'approve');
