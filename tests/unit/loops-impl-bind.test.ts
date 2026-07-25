@@ -8,6 +8,7 @@ import { analyzeSequence } from '../../src/core/dispatcher.js';
 import { runImplBind } from '../../src/core/loops/impl-bind.js';
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
+import { pause } from '../../src/core/loops/verbs.js';
 import { saveSequence, getActiveSequence } from '../../src/core/sequence.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
 import { persistState } from '../../src/core/state.js';
@@ -121,8 +122,11 @@ describe('pln#632 runImplBind', () => {
     assert.equal(res.action, 'bound');
     assert.equal(res.advanced_to, 'execute');
     assert.equal(res.sequence_id, seqId);
-    assert.equal(typeof res.messages_sent, 'number');
     assert.ok(res.dispatch, 'a dispatch result is attached');
+    // Strong assertion (review Finding 4): a real assignment was actually delivered — a
+    // regression that dispatched nothing must fail here, not slip past a typeof check.
+    assert.ok(res.messages_sent >= 1, `bind delivered at least one assignment (got ${res.messages_sent})`);
+    assert.equal(res.dispatch!.messages_sent.length, res.messages_sent, 'reported count matches the dispatch result');
     const loop = getLoop(loopId, cwd)!;
     assert.equal(loop.current_phase, 'execute', 'bind advanced the loop into the execute↔verify cycle');
     // The KEY isolation guarantee: dispatching the loop's sequence never mutated the
@@ -138,6 +142,25 @@ describe('pln#632 runImplBind', () => {
     assert.equal(second.action, 'noop');
     assert.match(second.reason, /already bound|not 'bind'/);
     assert.equal(getLoop(loopId, cwd)!.current_phase, 'execute', 'still in execute, not cycled');
+  });
+
+  it('rejects a PAUSED loop WITHOUT dispatching (review Finding 1 — no spawn on a held loop)', async () => {
+    const seqId = seedReadySequence(cwd);
+    const loopId = openImplLoop(cwd, [seqId]);
+    pause({ id: loopId, actor: 'coord', reason: 'operator hold' }, cwd);
+    const paused = getLoop(loopId, cwd)!;
+    assert.equal(paused.status, 'paused');
+    assert.equal(paused.current_phase, 'bind', 'pause keeps the loop in the bind phase (the trap)');
+    // Must throw BEFORE any dispatch — a paused loop still sitting in `bind` must not spawn.
+    await assert.rejects(
+      () => runImplBind({ loop_id: loopId, dispatcherAgent: 'coord', autoExecute: false }, cwd),
+      /requires an open loop/,
+    );
+    // Proof no side effect fired: no active sequence, loop untouched, still paused in bind.
+    assert.equal(getActiveSequence(cwd), undefined);
+    const after = getLoop(loopId, cwd)!;
+    assert.equal(after.status, 'paused');
+    assert.equal(after.current_phase, 'bind');
   });
 
   it('rejects an implementation loop with NO linked sequence', async () => {

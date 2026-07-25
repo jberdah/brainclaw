@@ -18,11 +18,16 @@ import { dispatch, type DispatchResult } from '../dispatcher.js';
 import { listSequences } from '../sequence.js';
 import { getLoop } from './store.js';
 import { advance } from './verbs.js';
+import { withLoopLock } from './lock.js';
 
 export interface RunImplBindInput {
   loop_id: string;
   /** Coordinator identity recorded on the dispatch + the advance. */
   dispatcherAgent: string;
+  /** Coordinator registered agent id — recorded on the dispatched assignments/claims. */
+  dispatcherAgentId?: string;
+  /** MCP session id — correlates the spawned work to the coordinator's session. */
+  sessionId?: string;
   /** Preview only: analyze + report what WOULD dispatch, no spawn, no advance. */
   dryRun?: boolean;
   /** Restrict dispatch to specific lanes (forwarded to dispatch). */
@@ -66,6 +71,16 @@ export async function runImplBind(input: RunImplBindInput, cwd?: string): Promis
       `bind is only valid for implementation loops (loop ${loop_id} is kind='${loop.kind}'); review/ideation loops dispatch via bclaw_coordinate`,
     );
   }
+  // bind SPAWNS real workers via dispatch() — never do that on a loop that is not open.
+  // A paused loop keeps current_phase='bind' (pause only flips status), and open→close
+  // leaves the phase at 'bind' too, so the phase-idempotency check below is NOT sufficient
+  // to stop a spawn on a held/terminal loop (review Finding 1). Gate on status FIRST, so
+  // no dispatch fires and we don't spawn then throw at the advance.
+  if (loop.status !== 'open') {
+    throw new Error(
+      `bind requires an open loop; loop ${loop_id} is ${loop.status} (resume a paused loop, or reopen a terminal one, before binding)`,
+    );
+  }
 
   const sequenceId = loop.linked?.sequence_ids?.[0];
   // Idempotency: `bind` is the loop's FIRST phase. A loop already past it was bound before.
@@ -94,6 +109,8 @@ export async function runImplBind(input: RunImplBindInput, cwd?: string): Promis
     {
       sequenceId,
       dispatcherAgent,
+      dispatcherAgentId: input.dispatcherAgentId,
+      sessionId: input.sessionId,
       dryRun: input.dryRun,
       lanes: input.lanes,
       autoExecute: input.autoExecute,
@@ -129,16 +146,45 @@ export async function runImplBind(input: RunImplBindInput, cwd?: string): Promis
   }
 
   // Real bind: advance bind → execute so the loop enters the execute↔verify cycle. The
-  // implementation protocol's `bind` phase carries no advance_gate, so this is unconditional.
-  const advanced = advance({ id: loop_id, actor: dispatcherAgent }, cwd);
+  // implementation protocol's `bind` phase carries no advance_gate, so the advance is
+  // unconditional FROM bind — but the phase-check and the advance must be ATOMIC or two
+  // racing binds each advance once and push the loop bind→execute→verify with no execute
+  // work done (review Finding 2). advance() does not self-lock (its callers — the facade's
+  // withLockedLoopMutation and the ideation closer — provide the lock), so we take the loop
+  // lock here and re-check the phase under it: only the bind that still sees 'bind' advances.
+  const advanced = withLoopLock<{ phase: string; auto_closed: boolean } | null>({
+    cwd,
+    intent: 'impl-bind-advance',
+    agentId: dispatcherAgent,
+    scope: { kind: 'loop', loopId: loop_id },
+    work: () => {
+      const fresh = getLoop(loop_id, cwd);
+      // Raced: a concurrent bind (or a pause/close) moved the loop out of an open 'bind'
+      // state → do NOT advance again. Idempotent by construction.
+      if (!fresh || fresh.status !== 'open' || fresh.current_phase !== 'bind') return null;
+      const a = advance({ id: loop_id, actor: dispatcherAgent }, cwd);
+      return { phase: a.loop.current_phase, auto_closed: a.auto_closed };
+    },
+  });
+
+  if (!advanced) {
+    return {
+      loop_id,
+      sequence_id: sequenceId,
+      action: 'noop',
+      dispatch: result,
+      messages_sent,
+      reason: `dispatched ${messages_sent} assignment(s); phase already advanced out of 'bind' under a concurrent bind (idempotent — not re-advanced)`,
+    };
+  }
   return {
     loop_id,
     sequence_id: sequenceId,
     action: 'bound',
-    advanced_to: advanced.loop.current_phase,
+    advanced_to: advanced.phase,
     auto_closed: advanced.auto_closed,
     dispatch: result,
     messages_sent,
-    reason: `dispatched ${messages_sent} assignment(s) on sequence ${sequenceId}; advanced bind → ${advanced.loop.current_phase}`,
+    reason: `dispatched ${messages_sent} assignment(s) on sequence ${sequenceId}; advanced bind → ${advanced.phase}`,
   };
 }

@@ -2031,7 +2031,9 @@ export async function handleBclawLoop(args: Record<string, unknown>, ctx: McpWri
   }
   // pln#562 step 4 — dispatching a turn hands work to another agent; gate
   // it at the same trust bar as the other dispatch surfaces.
-  if (args?.intent === 'turn' && args?.dispatch === true) {
+  // pln#632 — `bind` also SPAWNS real workers (it dispatches the loop's linked
+  // sequence), so it is gated at the same 'trusted' bar as turn-dispatch / coordinate.
+  if ((args?.intent === 'turn' && args?.dispatch === true) || args?.intent === 'bind') {
     const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
     if (resolved.error) {
       return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -2039,7 +2041,7 @@ export async function handleBclawLoop(args: Record<string, unknown>, ctx: McpWri
   }
   const { handleBclawLoop: runLoopIntent } = await import('./loops-handlers.js');
   const targetCwd = resolveProjectCwd(args?.project as string | undefined, cwd);
-  const result = await runLoopIntent({ args: args as unknown, cwd: targetCwd });
+  const result = await runLoopIntent({ args: args as unknown, cwd: targetCwd, sessionId: connectionSessionId });
   return {
     response: toolResponse({
       content: [{ type: 'text', text: result.summary }],

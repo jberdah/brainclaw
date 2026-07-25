@@ -46,6 +46,12 @@ export interface HandleBclawLoopOptions {
    * Defaults to "bclaw_loop" to make origin traceable in the event journal.
    */
   defaultActor?: string;
+  /**
+   * MCP connection session id. Forwarded to spawning intents (bind) so the
+   * dispatched assignments/claims/runs correlate to the coordinator's session,
+   * matching bclaw_dispatch / bclaw_coordinate.
+   */
+  sessionId?: string;
 }
 
 export interface HandleBclawLoopResult {
@@ -724,6 +730,8 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
           {
             loop_id: req.loop_id,
             dispatcherAgent: actor,
+            dispatcherAgentId: agentId,
+            sessionId: options.sessionId,
             dryRun: req.dry_run,
             lanes: req.lanes,
             autoExecute: req.auto_execute,
