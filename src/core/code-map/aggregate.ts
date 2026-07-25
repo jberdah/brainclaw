@@ -101,12 +101,33 @@ export interface AggregatedFindMatch extends FindMatch {
   /** Workspace-relative package dir (`''` = root project). Undefined single-store. */
   project?: string;
   project_id?: string;
+  /** pln#631 PR4 — true when this hit is in the caller's OWN package (locality tiebreak:
+   *  a same-package hit ranks above an equal-scored hit from another package). */
+  local?: boolean;
 }
 
 export interface AggregatedFindOutput {
   query: string;
   matches: AggregatedFindMatch[];
   freshness_badge: FreshnessBadge;
+}
+
+/**
+ * Walk UP from a child cwd and return the NEAREST ancestor that is a multi-project
+ * workspace root. Preferred over "outermost .brainclaw" (which can over-reach to an
+ * unrelated ancestor project, or a stray ~/tmp/.brainclaw): the immediate enclosing
+ * multi-project root is the child's actual workspace. Bounded ancestor walk.
+ */
+function findEnclosingWorkspaceRoot(startDir: string): string | undefined {
+  let dir = path.dirname(path.resolve(startDir)); // the child itself is not its own workspace root
+  const fsRoot = path.parse(dir).root;
+  for (let i = 0; i < 64; i++) {
+    if (isWorkspaceRoot(dir)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir || dir === fsRoot) break;
+    dir = parent;
+  }
+  return undefined;
 }
 
 /** True when cwd is a multi-project workspace root (the SAME gate the cascade uses). */
@@ -134,33 +155,47 @@ function storeMeta(cwd: string): { projectId: string; gitHead: string | null } {
   return { projectId: `prj_${path.basename(path.resolve(cwd))}`, gitHead };
 }
 
+/** Build the root + nested-child StoreRefs for a workspace, flagging the caller-local one. */
+function buildWorkspaceStores(root: string, localCwd: string): StoreRef[] {
+  const rootMeta = storeMeta(root);
+  return [
+    { cwd: root, relPath: '', projectId: rootMeta.projectId, gitHead: rootMeta.gitHead, isLocal: root === localCwd },
+    ...listNestedProjects(root).map((childAbs) => {
+      const meta = storeMeta(childAbs);
+      return {
+        cwd: childAbs,
+        relPath: path.relative(root, childAbs).replace(/\\/g, '/'),
+        projectId: meta.projectId,
+        gitHead: meta.gitHead,
+        isLocal: childAbs === localCwd,
+      };
+    }),
+  ];
+}
+
 /**
- * Resolve which stores a find/brief should read. `auto` (default) aggregates the
- * whole workspace ONLY when the caller's cwd is itself a multi-project root;
- * otherwise it is single-store (unchanged behavior, and a child cwd stays local).
- * `project` forces single-store. `workspace` requests aggregation but, in PR1, still
- * only fires at a root cwd — resolving a *child* cwd UP to its workspace root is a
- * follow-up (see pln#631), so it degrades to single-store rather than guess.
+ * Resolve which stores a find/brief should read.
+ *  - `auto` (default): aggregate the whole workspace ONLY when cwd is itself a
+ *    multi-project root; otherwise single-store (a child cwd stays local, unchanged).
+ *  - `project`: force single-store.
+ *  - `workspace`: aggregate the whole workspace. At a root, same as auto. From a CHILD
+ *    cwd (pln#631 PR4), walk UP to the workspace root and aggregate from there, keeping
+ *    the caller's package flagged `isLocal` for the locality tiebreak — so an agent
+ *    inside `packages/api` can search the whole monorepo, with its own package's hits
+ *    ranked first. Degrades to single-store only when no multi-project root is found.
  */
 export function resolveTraversal(cwd: string, mode: TraversalMode): ResolvedTraversal {
   const abs = path.resolve(cwd);
-  const wantWorkspace = mode === 'workspace' || mode === 'auto';
-  if (wantWorkspace && isWorkspaceRoot(abs)) {
-    const rootMeta = storeMeta(abs);
-    const stores: StoreRef[] = [
-      { cwd: abs, relPath: '', projectId: rootMeta.projectId, gitHead: rootMeta.gitHead, isLocal: true },
-      ...listNestedProjects(abs).map((childAbs) => {
-        const meta = storeMeta(childAbs);
-        return {
-          cwd: childAbs,
-          relPath: path.relative(abs, childAbs).replace(/\\/g, '/'),
-          projectId: meta.projectId,
-          gitHead: meta.gitHead,
-          isLocal: false,
-        };
-      }),
-    ];
-    return { workspace: true, root: abs, stores };
+  if ((mode === 'auto' || mode === 'workspace') && isWorkspaceRoot(abs)) {
+    return { workspace: true, root: abs, stores: buildWorkspaceStores(abs, abs) };
+  }
+  if (mode === 'workspace') {
+    // Explicit workspace request from a non-root cwd: find the NEAREST enclosing
+    // multi-project root and aggregate from there (auto never does this).
+    const wsRoot = findEnclosingWorkspaceRoot(abs);
+    if (wsRoot) {
+      return { workspace: true, root: wsRoot, stores: buildWorkspaceStores(wsRoot, abs) };
+    }
   }
   const meta = storeMeta(abs);
   return {
@@ -304,12 +339,18 @@ export function aggregateFind(
         path: ref.relPath ? `${ref.relPath}/${m.path}` : m.path,
         project: ref.relPath,
         project_id: ref.projectId,
+        ...(ref.isLocal ? { local: true } : {}),
       });
     }
   }
 
+  // Sort by score, then LOCALITY (caller's own package first — PR4 tiebreak), then path.
   merged.sort(
-    (a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.name.localeCompare(b.name),
+    (a, b) =>
+      b.score - a.score ||
+      (b.local ? 1 : 0) - (a.local ? 1 : 0) ||
+      a.path.localeCompare(b.path) ||
+      a.name.localeCompare(b.name),
   );
   const capped = merged.slice(0, limit ?? DEFAULT_FIND_LIMIT);
   return { query, matches: capped, freshness_badge: mergeBadges(perStore) };
@@ -324,6 +365,8 @@ export interface AggregatedBriefReadEntry extends BriefReadEntry {
   /** pln#631 PR3 — true when this row is a CROSS-PACKAGE importer (a sibling package
    *  importing the defining package's public name), not an intra-package graph row. */
   cross_package?: boolean;
+  /** pln#631 PR4 — true when this row is in the caller's OWN package (locality tiebreak). */
+  local?: boolean;
 }
 
 export interface AggregatedBriefOutput {
@@ -339,7 +382,7 @@ function briefMatchTier(k: BriefMatchKind): number {
 }
 
 /** A merged brief reading-list row (workspace-relative path + owning project). */
-type MergedBriefRow = RankedFile & { project: string; cross_package?: boolean };
+type MergedBriefRow = RankedFile & { project: string; cross_package?: boolean; local?: boolean };
 
 /** Read a store's package.json `name` (the specifier siblings import it as), or null. */
 function packageNameOf(cwd: string): string | null {
@@ -386,7 +429,7 @@ function crossPackageReverseDeps(
   // be scored by its BEST precision, not by whichever specifier `Object.entries` happens
   // to yield first. Keyed by store cwd + path (never project_id).
   const contributingCwds = new Set(contributing.map((r) => r.cwd));
-  interface Agg { cwd: string; relPath: string; path: string; file_id: string; namedHits: Set<string>; specs: Set<string>; }
+  interface Agg { cwd: string; relPath: string; path: string; file_id: string; local: boolean; namedHits: Set<string>; specs: Set<string>; }
   const byImporter = new Map<string, Agg>();
   for (const a of allStores) {
     if (contributingCwds.has(a.cwd)) continue; // intra-package deps already covered
@@ -398,7 +441,7 @@ function crossPackageReverseDeps(
         const key = `${a.cwd}::${imp.path}`;
         let agg = byImporter.get(key);
         if (!agg) {
-          agg = { cwd: a.cwd, relPath: a.relPath, path: imp.path, file_id: imp.file_id, namedHits: new Set(), specs: new Set() };
+          agg = { cwd: a.cwd, relPath: a.relPath, path: imp.path, file_id: imp.file_id, local: a.isLocal, namedHits: new Set(), specs: new Set() };
           byImporter.set(key, agg);
         }
         agg.specs.add(spec);
@@ -431,6 +474,7 @@ function crossPackageReverseDeps(
       graphDerived: true,
       project: agg.relPath,
       cross_package: true,
+      ...(agg.local ? { local: true } : {}),
     });
   }
   return rows;
@@ -485,7 +529,12 @@ export function aggregateBrief(
       const key = `${p.ref.cwd}::${rf.path}`; // store-scoped dedup (never project_id)
       if (seen.has(key)) continue;
       seen.add(key);
-      merged.push({ ...rf, path: p.ref.relPath ? `${p.ref.relPath}/${rf.path}` : rf.path, project: p.ref.relPath });
+      merged.push({
+        ...rf,
+        path: p.ref.relPath ? `${p.ref.relPath}/${rf.path}` : rf.path,
+        project: p.ref.relPath,
+        ...(p.ref.isLocal ? { local: true } : {}),
+      });
     }
   }
 
@@ -501,7 +550,9 @@ export function aggregateBrief(
     merged.push(...crossPackageReverseDeps(contributing.map((p) => p.ref), resolved.stores, symbolNames, checker));
   }
 
-  merged.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  merged.sort(
+    (a, b) => b.score - a.score || (b.local ? 1 : 0) - (a.local ? 1 : 0) || a.path.localeCompare(b.path),
+  );
 
   const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
   const capped = reserveSourceSlots(merged, cap, mergedDefiningPaths) as MergedBriefRow[];
@@ -517,6 +568,7 @@ export function aggregateBrief(
     ...s,
     project: capped[i]!.project,
     ...(capped[i]!.cross_package ? { cross_package: true } : {}),
+    ...(capped[i]!.local ? { local: true } : {}),
   }));
 
   return { target, suggested_files_to_read: suggested, related_memory: related, freshness_badge: mergeBadges(perStore.map((p) => ({ ref: p.ref, badge: p.badge, hasIndex: p.r.hasIndex }))) };
