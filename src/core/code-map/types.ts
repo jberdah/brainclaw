@@ -395,9 +395,23 @@ export const CodeLockSchema = z.object({
 });
 export type CodeLock = z.infer<typeof CodeLockSchema>;
 
+/**
+ * spec §9 (pln#601) — the COARSE, surface-uniform rollup of the detailed 7-value
+ * {@link FreshnessStatus}. find/brief/status/work each expose their own precise
+ * status, but an agent wants one consistent top-line signal to decide "trust this
+ * or refresh first" without memorizing which `stale_*` variant applies. `coarse`
+ * collapses the detail: every `stale_*` → `stale`, `missing_index` → `missing`,
+ * `partial`/`fresh` unchanged. Derived (never independently authored) via
+ * `coarseFreshness()` so it can never contradict `status`.
+ */
+export const CoarseFreshnessSchema = z.enum(['fresh', 'stale', 'partial', 'missing']);
+export type CoarseFreshness = z.infer<typeof CoarseFreshnessSchema>;
+
 /** Freshness badge attached to every agent-facing read response (spec §9). */
 export const FreshnessBadgeSchema = z.object({
   status: FreshnessStatusSchema,
+  /** pln#601 — coarse rollup of `status`, uniform across all read surfaces. */
+  coarse: CoarseFreshnessSchema.optional(),
   details: z.record(z.string(), z.unknown()).default({}),
 });
 export type FreshnessBadge = z.infer<typeof FreshnessBadgeSchema>;
