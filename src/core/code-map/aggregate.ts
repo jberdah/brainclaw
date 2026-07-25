@@ -25,18 +25,36 @@ import path from 'node:path';
 import { loadConfig } from '../config.js';
 import { listNestedProjects } from './cascade.js';
 import { readManifest } from './store.js';
-import { coarseFreshness } from './freshness.js';
+import { coarseFreshness, applyGitHeadDrift } from './freshness.js';
 import {
   findInStore,
   makeLazyChecker,
   newAccumulator,
   deriveBadge,
+  LAZY_BUDGET,
   type FindMatch,
 } from './query.js';
 import type { FreshnessBadge, FreshnessStatus } from './types.js';
 
 /** Same default cap as the single-store find (query.ts DEFAULT_FIND_LIMIT). */
 const DEFAULT_FIND_LIMIT = 20;
+
+/**
+ * pln#631 (review F2) — an aggregated find shares ONE lazy budget across N stores.
+ * A flat 32-file budget starves alphabetically-later stores (their drifted candidates
+ * get dropped once earlier stores spend it). Scale the budget with the store count so
+ * later stores keep headroom, capped so an interactive read stays bounded even on a
+ * large monorepo. Fully fresh stores cost nothing (the mtime/size gate short-circuits
+ * before the budget), so this only raises the ceiling for genuinely-drifted trees.
+ */
+const AGG_MAX_FILES_CAP = 256;
+const AGG_MAX_WALL_CAP_MS = 10_000;
+function aggregateBudget(storeCount: number): { maxFilesChecked: number; maxWallMs: number } {
+  return {
+    maxFilesChecked: Math.min(LAZY_BUDGET.maxFilesChecked * Math.max(1, storeCount), AGG_MAX_FILES_CAP),
+    maxWallMs: Math.min(LAZY_BUDGET.maxWallMs * Math.max(1, storeCount), AGG_MAX_WALL_CAP_MS),
+  };
+}
 
 /** How a read fans out across a multi-project workspace. */
 export type TraversalMode = 'auto' | 'project' | 'workspace';
@@ -49,6 +67,9 @@ export interface StoreRef {
   relPath: string;
   /** Project id (manifest, else config, else a cwd-basename fallback). */
   projectId: string;
+  /** The commit this store's index was built against (manifest git.head), if any.
+   *  Used for per-store HEAD-drift detection against the one current workspace HEAD. */
+  gitHead: string | null;
   /** True for the project owning the caller's cwd (locality; unused in PR1). */
   isLocal: boolean;
 }
@@ -86,16 +107,18 @@ function isWorkspaceRoot(cwd: string): boolean {
   return mode === 'multi-project' && listNestedProjects(cwd).length > 0;
 }
 
-function projectIdOf(cwd: string): string {
+/** Read a store's identity + built-against commit in ONE manifest read. */
+function storeMeta(cwd: string): { projectId: string; gitHead: string | null } {
   const m = readManifest(cwd);
-  if (m?.project_id) return m.project_id;
+  const gitHead = m?.git?.head ?? null;
+  if (m?.project_id) return { projectId: m.project_id, gitHead };
   try {
     const id = loadConfig(cwd).project_id;
-    if (id) return id;
+    if (id) return { projectId: id, gitHead };
   } catch {
     /* no config — fall through to a cwd-derived default */
   }
-  return `prj_${path.basename(path.resolve(cwd))}`;
+  return { projectId: `prj_${path.basename(path.resolve(cwd))}`, gitHead };
 }
 
 /**
@@ -110,21 +133,27 @@ export function resolveTraversal(cwd: string, mode: TraversalMode): ResolvedTrav
   const abs = path.resolve(cwd);
   const wantWorkspace = mode === 'workspace' || mode === 'auto';
   if (wantWorkspace && isWorkspaceRoot(abs)) {
+    const rootMeta = storeMeta(abs);
     const stores: StoreRef[] = [
-      { cwd: abs, relPath: '', projectId: projectIdOf(abs), isLocal: true },
-      ...listNestedProjects(abs).map((childAbs) => ({
-        cwd: childAbs,
-        relPath: path.relative(abs, childAbs).replace(/\\/g, '/'),
-        projectId: projectIdOf(childAbs),
-        isLocal: false,
-      })),
+      { cwd: abs, relPath: '', projectId: rootMeta.projectId, gitHead: rootMeta.gitHead, isLocal: true },
+      ...listNestedProjects(abs).map((childAbs) => {
+        const meta = storeMeta(childAbs);
+        return {
+          cwd: childAbs,
+          relPath: path.relative(abs, childAbs).replace(/\\/g, '/'),
+          projectId: meta.projectId,
+          gitHead: meta.gitHead,
+          isLocal: false,
+        };
+      }),
     ];
     return { workspace: true, root: abs, stores };
   }
+  const meta = storeMeta(abs);
   return {
     workspace: false,
     root: abs,
-    stores: [{ cwd: abs, relPath: '', projectId: projectIdOf(abs), isLocal: true }],
+    stores: [{ cwd: abs, relPath: '', projectId: meta.projectId, gitHead: meta.gitHead, isLocal: true }],
   };
 }
 
@@ -230,8 +259,11 @@ export function aggregateFind(
   query: string,
   limit: number | undefined,
   resolved: ResolvedTraversal,
+  currentHead: string | null,
 ): AggregatedFindOutput {
-  const checker = makeLazyChecker(); // ONE shared budget across every store
+  // ONE shared budget across every store, scaled by store count (review F2) so
+  // alphabetically-later stores aren't starved by earlier dirty trees.
+  const checker = makeLazyChecker(aggregateBudget(resolved.stores.length));
   const perStore: PerStoreBadge[] = [];
   const merged: AggregatedFindMatch[] = [];
   const seen = new Set<string>(); // (project_id, node_id)
@@ -239,10 +271,19 @@ export function aggregateFind(
   for (const ref of resolved.stores) {
     const acc = newAccumulator();
     const r = findInStore(query, { cwd: ref.cwd }, checker, acc);
-    const badge = deriveBadge(r.base, acc, checker.exhausted, r.matches.length > 0, r.emptyCandidates);
+    // Per-store badge: drive `partial` from THIS store's own budget-skips (review F2),
+    // NOT the shared checker.exhausted flag — else an early store spending the budget
+    // would mislabel every fully-fresh later store as `partial` in per_project. Then
+    // apply per-store HEAD drift against the one workspace HEAD (review F3) so a child
+    // whose index lags the working tree is flagged even under an otherwise-fresh root.
+    let badge = deriveBadge(r.base, acc, false, r.matches.length > 0, r.emptyCandidates);
+    badge = applyGitHeadDrift(badge, ref.gitHead, currentHead);
     perStore.push({ ref, badge, hasIndex: r.hasIndex });
     for (const m of r.matches) {
-      const key = `${ref.projectId} ${m.node_id}`;
+      // Dedup key scoped by store cwd (unique per store), NEVER project_id — two stores
+      // can share a project_id (review F1), which would false-merge/drop a distinct symbol.
+      // Cross-store never merges (different packages = different symbols).
+      const key = `${ref.cwd} ${m.node_id}`;
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push({

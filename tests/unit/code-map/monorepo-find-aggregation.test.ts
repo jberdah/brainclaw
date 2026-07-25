@@ -143,4 +143,56 @@ describe('pln#631 root-aggregated find (traversal)', () => {
     assert.equal(atChild.workspace, false);
     assert.equal(atChild.stores.length, 1);
   });
+
+  it('two child stores sharing a project_id do NOT drop each other’s matches (review F1)', async () => {
+    // Copied-config scenario: pkgs/a and pkgs/b carry the SAME project_id, each with a
+    // src/util.ts defining dupHelper at the same line → identical node_id/file_id. The
+    // dedup + shared memo must be scoped by STORE (cwd), not project_id, or b's match is
+    // silently dropped / served with a's freshness verdict.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-aggdup-'));
+    cleanup.push(root);
+    makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    writeFile(path.join(root, 'src', 'rootlib.ts'), 'export function ledgerRoot(){return 0;}\n');
+    const a = path.join(root, 'pkgs', 'a');
+    makeStore(a, 'a', { projectId: 'prj_dup' });
+    writeFile(path.join(a, 'src', 'util.ts'), 'export function dupHelper(){return 1;}\n');
+    const b = path.join(root, 'pkgs', 'b');
+    makeStore(b, 'b', { projectId: 'prj_dup' });
+    writeFile(path.join(b, 'src', 'util.ts'), 'export function dupHelper(){return 2;}\n');
+
+    const be = new JsonlBackend();
+    await be.refresh({ cwd: root, scope: 'all', cascade: true });
+    const res = await be.find({ query: 'dupHelper', cwd: root, traversal: 'auto' });
+    const hits = res.matches.filter((m) => m.name === 'dupHelper');
+    assert.equal(hits.length, 2, 'both packages’ dupHelper surface despite the shared project_id');
+    assert.deepEqual(
+      hits.map((h) => h.path).sort(),
+      ['pkgs/a/src/util.ts', 'pkgs/b/src/util.ts'],
+      'each is disambiguated by its workspace-relative path',
+    );
+  });
+
+  it('flags a child whose index HEAD lags the workspace HEAD (review F3)', async () => {
+    const { root, appB } = await buildWorkspace();
+    // Patch app_b's manifest to a STALE commit; the root/app_a stay null (no drift).
+    const mpath = path.join(appB, '.brainclaw', 'code', 'manifest.json');
+    const m = JSON.parse(fs.readFileSync(mpath, 'utf-8')) as { git?: Record<string, unknown> };
+    m.git = { ...(m.git ?? {}), head: 'OLDSHA000' };
+    fs.writeFileSync(mpath, JSON.stringify(m));
+
+    // Query with an injected reader returning a DIFFERENT current HEAD.
+    const be2 = new JsonlBackend({ gitHeadReader: () => 'NEWSHA111' });
+    const res = await be2.find({ query: 'craterBeta', cwd: root, traversal: 'auto' });
+    assert.equal(res.freshness_badge.coarse, 'stale', 'a lagging child drags the coarse rollup to stale');
+    assert.equal(
+      (res.freshness_badge.details.per_project as Record<string, string>)['core_services/app_b'],
+      'stale_git_head',
+      'the lagging child is flagged stale_git_head in per_project',
+    );
+    // The fresh children are NOT falsely flagged (null manifest head → no drift).
+    assert.notEqual(
+      (res.freshness_badge.details.per_project as Record<string, string>)['applications/app_a'],
+      'stale_git_head',
+    );
+  });
 });

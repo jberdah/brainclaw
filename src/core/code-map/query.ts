@@ -119,11 +119,16 @@ function validateEntry(
   cwd: string | undefined,
   preferredDirName: string | undefined,
 ): boolean {
-  // pln#631 — memoize by file_id, not path: file_id is project-namespaced (1:1 with
-  // path WITHIN a store, so single-store behavior is identical), so a shared checker
-  // across a workspace aggregation never collides two packages' same-named files
-  // (e.g. `src/index.ts` in pkg-a and pkg-b).
-  const cached = checker.memo.get(entry.file_id);
+  // pln#631 — memo key scoped by the store's cwd. Two collision hazards must both be
+  // avoided when a shared checker spans a workspace: keying by PATH collides two
+  // packages' same-named `src/index.ts`; keying by file_id ALONE collides when two
+  // stores share a project_id (the `prj_${basename}` fallback, or a copied
+  // `.brainclaw/config.yaml`) — file_id = sha256(project_id + rel_path), so a shared
+  // id makes the file_id identical too (review F1). Scoping by the store's cwd (unique
+  // per store) is collision-proof either way; single-store keeps cwd constant, so
+  // behavior is identical to before.
+  const memoKey = `${cwd ?? ''} ${entry.file_id}`;
+  const cached = checker.memo.get(memoKey);
   if (cached !== undefined) return cached;
 
   const abs = path.join(projectRoot, entry.path);
@@ -132,19 +137,19 @@ function validateEntry(
     stat = fs.statSync(abs);
   } catch {
     acc.missingPaths.add(entry.path); // §6.1.2 — deletion.
-    checker.memo.set(entry.file_id, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   const shard = readShard(entry.file_id, cwd, preferredDirName);
   if (!shard) {
     // No backing shard to compare against — treat as unchecked, not confident.
     acc.uncheckedPaths.add(entry.path);
-    checker.memo.set(entry.file_id, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   // §6.1.3 — cheap gate: mtime + size match => fresh for this read.
   if (stat.mtimeMs === shard.mtime_ms && stat.size === shard.size_bytes) {
-    checker.memo.set(entry.file_id, true);
+    checker.memo.set(memoKey, true);
     return true;
   }
   // §6.1.4/§6.1.6 — gate tripped: hash only when within budget AND not oversized.
@@ -153,13 +158,13 @@ function validateEntry(
   // `partial`. Keep them separable so the badge reason is accurate.
   if (stat.size > maxParseFileBytes) {
     acc.uncheckedPaths.add(entry.path); // structurally unverifiable, not budget.
-    checker.memo.set(entry.file_id, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   if (budgetExhausted(checker)) {
     acc.uncheckedPaths.add(entry.path);
     acc.budgetSkippedPaths.add(entry.path);
-    checker.memo.set(entry.file_id, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   checker.filesChecked++;
@@ -168,15 +173,15 @@ function validateEntry(
     live = fs.readFileSync(abs, 'utf-8');
   } catch {
     acc.uncheckedPaths.add(entry.path);
-    checker.memo.set(entry.file_id, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   if (hashContent(live) === shard.file_hash) {
-    checker.memo.set(entry.file_id, true); // §6.1 — identical despite mtime touch.
+    checker.memo.set(memoKey, true); // §6.1 — identical despite mtime touch.
     return true;
   }
   acc.staleChangedPaths.add(entry.path); // §6.1.5 — confirmed content change.
-  checker.memo.set(entry.file_id, false);
+  checker.memo.set(memoKey, false);
   return false;
 }
 

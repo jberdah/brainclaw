@@ -346,15 +346,15 @@ export class JsonlBackend implements CodeQueryBackend {
     const resolved = resolveTraversal(cwd, input.traversal ?? 'auto');
     if (resolved.workspace) {
       // pln#631 — root-aggregated find across the workspace's per-project stores.
-      // git-HEAD drift is collapsed to ONE probe at the workspace root (one working
-      // tree; the cascade refreshes all stores against the same HEAD), applied via
-      // the root manifest so a whole-tree HEAD move still surfaces on the aggregate.
-      const agg = aggregateFind(input.query, input.limit, resolved);
-      const rootManifest = readManifest(cwd, input.preferredDirName);
+      // git-HEAD drift is resolved ONCE at the workspace root (one working tree) and
+      // compared PER STORE inside aggregateFind (review F3) — so a child whose index
+      // lags the working tree is flagged even under an otherwise-fresh root.
+      const currentHead = this.gitHeadReader(resolved.root);
+      const agg = aggregateFind(input.query, input.limit, resolved, currentHead);
       return {
         query: agg.query,
         matches: agg.matches,
-        freshness_badge: this.withHeadDrift(agg.freshness_badge, rootManifest, cwd),
+        freshness_badge: agg.freshness_badge,
       };
     }
     const ctx = this.queryContext(input);
