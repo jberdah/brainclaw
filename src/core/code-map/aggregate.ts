@@ -28,11 +28,21 @@ import { readManifest } from './store.js';
 import { coarseFreshness, applyGitHeadDrift } from './freshness.js';
 import {
   findInStore,
+  briefInStore,
   makeLazyChecker,
   newAccumulator,
   deriveBadge,
+  reserveSourceSlots,
+  attachRelatedMemory,
+  attachMemoryIds,
+  BRIEF_FILE_CAP,
   LAZY_BUDGET,
   type FindMatch,
+  type RankedFile,
+  type BriefMatchKind,
+  type BriefReadEntry,
+  type RelatedMemoryItem,
+  type MemoryReader,
 } from './query.js';
 import type { FreshnessBadge, FreshnessStatus } from './types.js';
 
@@ -300,4 +310,93 @@ export function aggregateFind(
   );
   const capped = merged.slice(0, limit ?? DEFAULT_FIND_LIMIT);
   return { query, matches: capped, freshness_badge: mergeBadges(perStore) };
+}
+
+// --- brief aggregation (pln#631 PR2) ---
+
+/** An aggregated brief reading-list entry: a BriefReadEntry tagged with its project. */
+export interface AggregatedBriefReadEntry extends BriefReadEntry {
+  /** Workspace-relative package dir (`''` = root). Undefined on single-store briefs. */
+  project?: string;
+}
+
+export interface AggregatedBriefOutput {
+  target: string;
+  suggested_files_to_read: AggregatedBriefReadEntry[];
+  related_memory: RelatedMemoryItem[];
+  freshness_badge: FreshnessBadge;
+}
+
+/** Match-tier precedence for cross-store target selection: exact > path > fuzzy > none. */
+function briefMatchTier(k: BriefMatchKind): number {
+  return k === 'exact' ? 3 : k === 'path' ? 2 : k === 'fuzzy' ? 1 : 0;
+}
+
+/**
+ * Aggregated brief across a resolved multi-project workspace (pln#631 PR2). Resolves
+ * the target in EVERY store (shared budget), then contributes reading lists ONLY from
+ * the stores at the HIGHEST match tier present (exact > path > fuzzy) — so a symbol
+ * defined exactly in one package is never diluted by fuzzy token-noise from siblings,
+ * while a name defined exactly in two packages briefs both. Reading-list paths are
+ * workspace-relative + project-tagged; the source-reserve + memory attach run on the
+ * MERGED list. Related memory comes from the ROOT project only in PR2 (cross-package
+ * memory attach = follow-up). The badge merges per-store (worst-status + coverage,
+ * per-store HEAD drift) exactly like aggregateFind.
+ */
+export function aggregateBrief(
+  target: string,
+  limit: number | undefined,
+  resolved: ResolvedTraversal,
+  currentHead: string | null,
+  memoryReader: MemoryReader,
+): AggregatedBriefOutput {
+  const checker = makeLazyChecker(aggregateBudget(resolved.stores.length));
+  const perStore = resolved.stores.map((ref) => {
+    const acc = newAccumulator();
+    const r = briefInStore(target, { cwd: ref.cwd }, checker, acc);
+    let badge = deriveBadge(r.base, acc, false, r.confident.length > 0, r.emptyRanked);
+    badge = applyGitHeadDrift(badge, ref.gitHead, currentHead);
+    return { ref, r, badge };
+  });
+
+  // Contribute reading lists from the stores at the highest match TIER present (no
+  // fuzzy dilution). But when NO store DEFINES the target (bestTier 0), fall back to
+  // any store with a non-empty reading list — rankFiles' import-specifier heuristic can
+  // surface relevant IMPORTER files even with no defining symbol (review F1: preserves
+  // single-store brief parity for an imported-but-not-locally-defined name like `axios`).
+  const bestTier = Math.max(0, ...perStore.map((p) => briefMatchTier(p.r.matchKind)));
+  const contributing =
+    bestTier > 0
+      ? perStore.filter((p) => briefMatchTier(p.r.matchKind) === bestTier)
+      : perStore.filter((p) => p.r.confident.length > 0);
+
+  const merged: Array<RankedFile & { project: string }> = [];
+  const seen = new Set<string>();
+  const mergedDefiningPaths = new Set<string>();
+  const symbolNames = new Set<string>();
+  for (const p of contributing) {
+    for (const e of p.r.defining) symbolNames.add(e.name);
+    for (const dp of p.r.definingPaths) mergedDefiningPaths.add(p.ref.relPath ? `${p.ref.relPath}/${dp}` : dp);
+    for (const rf of p.r.confident) {
+      const key = `${p.ref.cwd}::${rf.path}`; // store-scoped dedup (never project_id)
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ ...rf, path: p.ref.relPath ? `${p.ref.relPath}/${rf.path}` : rf.path, project: p.ref.relPath });
+    }
+  }
+  merged.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+
+  const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
+  const capped = reserveSourceSlots(merged, cap, mergedDefiningPaths) as Array<RankedFile & { project: string }>;
+
+  if (symbolNames.size === 0) symbolNames.add(target);
+  const related = attachRelatedMemory(
+    memoryReader({ cwd: resolved.root }),
+    capped.map((f) => f.path),
+    [...symbolNames],
+  );
+  const baseEntries = attachMemoryIds(capped, related);
+  const suggested: AggregatedBriefReadEntry[] = baseEntries.map((s, i) => ({ ...s, project: capped[i]!.project }));
+
+  return { target, suggested_files_to_read: suggested, related_memory: related, freshness_badge: mergeBadges(perStore.map((p) => ({ ref: p.ref, badge: p.badge, hasIndex: p.r.hasIndex }))) };
 }
