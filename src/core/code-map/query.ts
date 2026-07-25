@@ -186,6 +186,26 @@ function validateEntry(
 }
 
 /**
+ * pln#631 PR3 — validate a single file entry against a SPECIFIC store's live tree
+ * (resolves that store's root + parse budget from its manifest). Lets the cross-package
+ * scan lazy-validate importer rows from a sibling store and drop deleted/stale ones,
+ * upholding the same "no silent stale graph hints" rule intra-package graph rows obey.
+ * Shares the caller's checker (one budget) + records into the caller's acc.
+ */
+export function validateStoreEntry(
+  entry: { path: string; file_id: string },
+  checker: LazyChecker,
+  acc: FreshnessAccumulator,
+  cwd: string | undefined,
+  preferredDirName: string | undefined,
+): boolean {
+  const manifest = readManifest(cwd, preferredDirName);
+  const root = manifest?.project_root ?? cwd ?? process.cwd();
+  const maxBytes = manifest?.extractor_config.max_parse_file_bytes ?? 1024 * 1024;
+  return validateEntry(entry, checker, acc, root, maxBytes, cwd, preferredDirName);
+}
+
+/**
  * Derive the response freshness badge from the base manifest status + the
  * outcomes recorded during this query's lazy check (spec §6.1, §9).
  *

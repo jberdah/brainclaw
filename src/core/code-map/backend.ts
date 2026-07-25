@@ -135,6 +135,9 @@ export interface CodeBriefReadEntry {
   /** pln#631 — set only on AGGREGATED briefs: the owning project (workspace-relative
    *  dir, `''` = root). `path` is workspace-root-relative when aggregating. */
   project?: string;
+  /** pln#631 PR3 — true when this row is a cross-package importer (a sibling package
+   *  importing the defining package's public name), not an intra-package graph row. */
+  cross_package?: boolean;
 }
 
 export interface CodeBriefRelatedMemory {

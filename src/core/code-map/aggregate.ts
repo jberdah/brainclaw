@@ -21,10 +21,11 @@
  * Cross-package import resolution + brief aggregation + child-initiated workspace
  * scope are follow-ups (see pln#631).
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../config.js';
 import { listNestedProjects } from './cascade.js';
-import { readManifest } from './store.js';
+import { readManifest, readImportsIndex } from './store.js';
 import { coarseFreshness, applyGitHeadDrift } from './freshness.js';
 import {
   findInStore,
@@ -35,6 +36,7 @@ import {
   reserveSourceSlots,
   attachRelatedMemory,
   attachMemoryIds,
+  validateStoreEntry,
   BRIEF_FILE_CAP,
   LAZY_BUDGET,
   type FindMatch,
@@ -43,6 +45,7 @@ import {
   type BriefReadEntry,
   type RelatedMemoryItem,
   type MemoryReader,
+  type LazyChecker,
 } from './query.js';
 import type { FreshnessBadge, FreshnessStatus } from './types.js';
 
@@ -318,6 +321,9 @@ export function aggregateFind(
 export interface AggregatedBriefReadEntry extends BriefReadEntry {
   /** Workspace-relative package dir (`''` = root). Undefined on single-store briefs. */
   project?: string;
+  /** pln#631 PR3 — true when this row is a CROSS-PACKAGE importer (a sibling package
+   *  importing the defining package's public name), not an intra-package graph row. */
+  cross_package?: boolean;
 }
 
 export interface AggregatedBriefOutput {
@@ -330,6 +336,104 @@ export interface AggregatedBriefOutput {
 /** Match-tier precedence for cross-store target selection: exact > path > fuzzy > none. */
 function briefMatchTier(k: BriefMatchKind): number {
   return k === 'exact' ? 3 : k === 'path' ? 2 : k === 'fuzzy' ? 1 : 0;
+}
+
+/** A merged brief reading-list row (workspace-relative path + owning project). */
+type MergedBriefRow = RankedFile & { project: string; cross_package?: boolean };
+
+/** Read a store's package.json `name` (the specifier siblings import it as), or null. */
+function packageNameOf(cwd: string): string | null {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf-8')) as { name?: unknown };
+    return typeof pkg.name === 'string' && pkg.name.length > 0 ? pkg.name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cross-package reverse dependents (pln#631 PR3): sibling packages that IMPORT the
+ * defining package's public name. READ-TIME only — no cross-store index writes (the
+ * per-project-store-write invariant is inviolate). For each defining store B (package
+ * name `nameB`), scan every OTHER store A's imports index for specifiers `=== nameB`
+ * or `startsWith(nameB + '/')`; each importer file is a cross-package dependent.
+ * NAME-LEVEL precision: an importer whose `imported[]` names one of the target symbols
+ * ranks above a bare package-level import. Reverse-deps ONLY — forward cross-package
+ * deps have no single target file (deferred). Rows are graph-derived + flagged
+ * cross_package so their (name-based, lower) confidence is legible.
+ */
+function crossPackageReverseDeps(
+  contributing: StoreRef[],
+  allStores: StoreRef[],
+  symbolNames: Set<string>,
+  checker: LazyChecker,
+): MergedBriefRow[] {
+  const targetPkgNames = new Map<string, StoreRef>(); // package name -> defining store B
+  for (const ref of contributing) {
+    const name = packageNameOf(ref.cwd);
+    if (name) targetPkgNames.set(name, ref);
+  }
+  if (targetPkgNames.size === 0) return [];
+  const matchesTarget = (spec: string): boolean => {
+    for (const nameB of targetPkgNames.keys()) {
+      if (spec === nameB || spec.startsWith(`${nameB}/`)) return true;
+    }
+    return false;
+  };
+
+  // Aggregate per IMPORTER FILE across ALL matching specifiers first (review F2): a file
+  // importing the target package under two specifiers — one name-level, one bare — must
+  // be scored by its BEST precision, not by whichever specifier `Object.entries` happens
+  // to yield first. Keyed by store cwd + path (never project_id).
+  const contributingCwds = new Set(contributing.map((r) => r.cwd));
+  interface Agg { cwd: string; relPath: string; path: string; file_id: string; namedHits: Set<string>; specs: Set<string>; }
+  const byImporter = new Map<string, Agg>();
+  for (const a of allStores) {
+    if (contributingCwds.has(a.cwd)) continue; // intra-package deps already covered
+    const imports = readImportsIndex(a.cwd);
+    if (!imports) continue;
+    for (const [spec, importers] of Object.entries(imports.entries)) {
+      if (!matchesTarget(spec)) continue;
+      for (const imp of importers) {
+        const key = `${a.cwd}::${imp.path}`;
+        let agg = byImporter.get(key);
+        if (!agg) {
+          agg = { cwd: a.cwd, relPath: a.relPath, path: imp.path, file_id: imp.file_id, namedHits: new Set(), specs: new Set() };
+          byImporter.set(key, agg);
+        }
+        agg.specs.add(spec);
+        for (const n of imp.imported) if (symbolNames.has(n)) agg.namedHits.add(n);
+      }
+    }
+  }
+
+  // Emit one row per importer — but LAZY-VALIDATE it against its store first (review F1):
+  // a cross-package row is graph-derived, so a deleted/stale importer must be SUPPRESSED
+  // just like an intra-package graph row (no silent stale graph hints). Shares the one
+  // budget; a throwaway acc (row-drop only — the sibling store's manifest freshness
+  // already rides the merged badge via its per-store briefInStore).
+  const rows: MergedBriefRow[] = [];
+  const acc = newAccumulator();
+  for (const agg of byImporter.values()) {
+    const ok = validateStoreEntry({ path: agg.path, file_id: agg.file_id }, checker, acc, agg.cwd, undefined);
+    if (!ok) continue; // deleted / stale / budget-skipped → suppress (graph-derived)
+    const nameLevel = agg.namedHits.size > 0;
+    const score = nameLevel ? 5 : 3; // name-level ranks with reverse-deps; package-level below
+    const shortestSpec = [...agg.specs].sort((x, y) => x.length - y.length)[0] ?? '';
+    rows.push({
+      path: agg.relPath ? `${agg.relPath}/${agg.path}` : agg.path,
+      file_id: agg.file_id,
+      reason: nameLevel
+        ? `cross-package: imports ${[...agg.namedHits].sort().join(', ')} from ${shortestSpec}`
+        : `cross-package: imports ${shortestSpec}`,
+      score,
+      bestDelta: score,
+      graphDerived: true,
+      project: agg.relPath,
+      cross_package: true,
+    });
+  }
+  return rows;
 }
 
 /**
@@ -370,7 +474,7 @@ export function aggregateBrief(
       ? perStore.filter((p) => briefMatchTier(p.r.matchKind) === bestTier)
       : perStore.filter((p) => p.r.confident.length > 0);
 
-  const merged: Array<RankedFile & { project: string }> = [];
+  const merged: MergedBriefRow[] = [];
   const seen = new Set<string>();
   const mergedDefiningPaths = new Set<string>();
   const symbolNames = new Set<string>();
@@ -384,10 +488,23 @@ export function aggregateBrief(
       merged.push({ ...rf, path: p.ref.relPath ? `${p.ref.relPath}/${rf.path}` : rf.path, project: p.ref.relPath });
     }
   }
+
+  // pln#631 PR3 — cross-package reverse dependents: sibling packages importing the
+  // defining package's public name. Only when a store genuinely DEFINES the target
+  // (bestTier > 0) — the heuristic fallback has no "defining package" to find importers
+  // of. Rows are flagged cross_package; keyed by their own store so they never collide
+  // with the intra-package rows above.
+  if (bestTier > 0) {
+    // crossPackageReverseDeps dedups internally, and its rows come from NON-contributing
+    // stores (distinct workspace-relative paths from the intra-package rows above), so a
+    // direct append cannot collide.
+    merged.push(...crossPackageReverseDeps(contributing.map((p) => p.ref), resolved.stores, symbolNames, checker));
+  }
+
   merged.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
 
   const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
-  const capped = reserveSourceSlots(merged, cap, mergedDefiningPaths) as Array<RankedFile & { project: string }>;
+  const capped = reserveSourceSlots(merged, cap, mergedDefiningPaths) as MergedBriefRow[];
 
   if (symbolNames.size === 0) symbolNames.add(target);
   const related = attachRelatedMemory(
@@ -396,7 +513,11 @@ export function aggregateBrief(
     [...symbolNames],
   );
   const baseEntries = attachMemoryIds(capped, related);
-  const suggested: AggregatedBriefReadEntry[] = baseEntries.map((s, i) => ({ ...s, project: capped[i]!.project }));
+  const suggested: AggregatedBriefReadEntry[] = baseEntries.map((s, i) => ({
+    ...s,
+    project: capped[i]!.project,
+    ...(capped[i]!.cross_package ? { cross_package: true } : {}),
+  }));
 
   return { target, suggested_files_to_read: suggested, related_memory: related, freshness_badge: mergeBadges(perStore.map((p) => ({ ref: p.ref, badge: p.badge, hasIndex: p.r.hasIndex }))) };
 }
