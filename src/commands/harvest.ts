@@ -698,6 +698,14 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
           const { reservation, result: rr } = turnOwned;
           entry.review_loop = reconcileToReviewLoopResult(reservation, rr, lane);
           reasons.push(`turn-owned reconcile ${reservation.loop_id}: ${entry.review_loop.action} — ${rr.reason}${rr.conflict ? ' [CONFLICT — held]' : ''}`);
+          // pln#630 PR3b — a symmetric request_changes bumped the round + retained the claim
+          // and handed back the next fix-cycle turn. Push it exactly like the legacy path so
+          // the existing async re-dispatch loop spawns round N+1 into the reused worktree. The
+          // fresh iteration means deriveTurnId mints a new turn_id → the launch fence admits
+          // exactly one spawn (a stale re-emit of the same turn_id is denied).
+          if (rr.next_turn) {
+            result.next_turns.push({ loop_id: reservation.loop_id, ...rr.next_turn });
+          }
           // Claim/run/assignment settling is OWNED by reconcileTurn, so we do NOT run the
           // legacy teardown gate — just reflect the resulting claim state. Settlement
           // semantics (reconcile-turn.ts, review #1): an ACCEPTED lane — approve OR

@@ -9,6 +9,7 @@ import { loadAssignment, transitionAssignment } from '../assignments.js';
 import { loadClaim, releaseClaim } from '../claims.js';
 import { createRuntimeEvent } from '../events.js';
 import { readCompletionSignals } from '../runtime-signals.js';
+import { buildFixCycleTask, type ReviewLoopNextTurn } from '../review-loop-close.js';
 import type { LaneResult } from '../schema.js';
 
 /**
@@ -47,9 +48,20 @@ export interface ReconcileTurnResult {
   artifacts_added?: number;
   auto_closed?: boolean;
   loop_status?: string;
+  /**
+   * pln#630 PR3b — a symmetric request_changes turn that did not terminate the loop
+   * bumps the round and hands harvest the next fix-cycle turn to re-dispatch (mirrors the
+   * legacy closeReviewLoopFromLaneResult.next_turn). Present iff the claim was RETAINED.
+   */
+  next_turn?: ReviewLoopNextTurn;
 }
 
-const LOOP_TERMINAL = new Set(['closed', 'cancelled', 'completed', 'abandoned']);
+// The terminal loop statuses (LOOP_STATUSES = open|paused|completed|blocked|cancelled).
+// 'blocked' is LOAD-BEARING (pln#630 PR3b): the iteration cap closes a fix cycle to
+// `blocked`, and a blocked loop must be treated as terminal both by the idempotent
+// early-return below and by the fix-cycle already-bumped branch. (The legacy 'closed'/
+// 'abandoned' entries are not real loop statuses — kept as harmless historical aliases.)
+const LOOP_TERMINAL = new Set(['closed', 'cancelled', 'completed', 'abandoned', 'blocked']);
 
 /** Move a turn-owned run to `completed` via `running` if it never got there. Best-effort. */
 function settleRunCompleted(runId: string, actor: string, cwd?: string): void {
@@ -69,19 +81,29 @@ function settleRunCompleted(runId: string, actor: string, cwd?: string): void {
   } catch { /* best-effort — loop convergence does not depend on run status */ }
 }
 
-function settleAssignmentAndClaim(assignmentId: string, claimId: string | undefined, actor: string, cwd?: string): void {
+/** Complete this turn's assignment (idempotent, best-effort). The re-dispatch of a fix
+ *  cycle mints a FRESH assignment, so completing the old one is always correct. */
+function settleAssignment(assignmentId: string, actor: string, cwd?: string): void {
   try {
     const asg = loadAssignment(assignmentId, cwd);
     if (asg && asg.status !== 'completed' && asg.status !== 'cancelled') {
       try { transitionAssignment(assignmentId, 'completed', { actor }, cwd); } catch { /* transition may be illegal from current state — best-effort */ }
     }
   } catch { /* best-effort */ }
-  if (claimId) {
-    try {
-      const claim = loadClaim(claimId, cwd);
-      if (claim && claim.status === 'active') releaseClaim(claimId, cwd);
-    } catch { /* best-effort */ }
-  }
+}
+
+/**
+ * Release the coordinator claim (idempotent, best-effort). pln#630 PR3b: DEFERRED until
+ * after the advance decision and skipped when the fix cycle retains the claim/worktree. The
+ * caller passes the AUTHORITATIVE claim the slot/assignment is bound to (dec#149 #3) — NOT
+ * reservation.claim_id, which is the dead first-reserver claim in the recovery-winner path.
+ */
+function releaseCoordinatorClaim(claimId: string | undefined, cwd?: string): void {
+  if (!claimId) return;
+  try {
+    const claim = loadClaim(claimId, cwd);
+    if (claim && claim.status === 'active') releaseClaim(claimId, cwd);
+  } catch { /* best-effort */ }
 }
 
 export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
@@ -227,38 +249,90 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     }
   }
 
-  // ── Secondary convergence (best-effort + idempotent): run/assignment/claim.
-  // Runs on BOTH paths so a crash that recorded the turn but not the settle still
-  // converges them on replay. ──
+  // ── Secondary convergence (best-effort + idempotent): run + assignment. The CLAIM
+  // release is DEFERRED to after the advance decision (pln#630 PR3b) so a fix-cycle round
+  // can RETAIN the claim/worktree. Run + assignment settle unconditionally on both paths
+  // (a crash that recorded the turn but not the settle still converges on replay; the
+  // fix-cycle re-dispatch mints a fresh run/assignment, so completing the old is correct). ──
   settleRunCompleted(reservation.child_ids.run_id, actor, cwd);
-  settleAssignmentAndClaim(reservation.child_ids.assignment_id, reservation.claim_id, actor, cwd);
+  settleAssignment(reservation.child_ids.assignment_id, actor, cwd);
 
-  // ── Deterministic stop only: advance closes the loop on reviewer_green / gate.
-  // ALWAYS attempted on a `done` outcome (idempotent) so a crash-before-advance
-  // still closes on the next trigger (Finding 1). Only the phase-advance-gate-blocked
-  // case is expected (fix cycle continues) — any OTHER throw is a real error and is
-  // rethrown, never silently swallowed (Finding 6). ──
+  // ── Advance / stop decision. On a `done` outcome we either drive a deterministic stop
+  // (reviewer_green / gate → close), continue a symmetric fix cycle (bump the round + retain
+  // the claim + emit next_turn), or leave the loop open (asymmetric / no successor). ──
   let auto_closed = false;
+  let retainClaim = false;
+  let next_turn: ReviewLoopNextTurn | undefined;
   if (slot_outcome === 'done') {
-    try {
-      auto_closed = advance({ id: loop.id, actor }, cwd).auto_closed;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Benign "cannot advance/close now" outcomes → the loop stays open, awaiting
-      // the next turn (e.g. request_changes on a single-phase loop): the phase gate
-      // is unsatisfied, or there is no successor phase. Anything else is a REAL
-      // error and must propagate, never be silently swallowed (review Finding 6).
-      if (!/phase_advance_blocked|already at last phase|no post-cycle successor/.test(msg)) throw err;
+    // symmetricRC detection is INDEPENDENT of the bump guard below (safety race 2): a
+    // re-reconcile in the pre-redispatch window must NOT fall into the approve/asymmetric
+    // arm, which would advance the phase FORWARD (to author_response) and corrupt the cycle.
+    const symmetricRC =
+      loop.kind === 'review' &&
+      lane.review_verdict === 'request_changes' &&
+      loop.protocol?.review_mode === 'symmetric';
+    if (symmetricRC) {
+      // EXACTLY-ONCE bump (the one non-negotiable safety guard): each bump changes
+      // deriveTurnId(loop, slot, iteration), so a DOUBLE bump would mint two turn_ids and
+      // the launch fence would spawn BOTH rounds. Bump only when this turn's round is still
+      // current; a re-reconcile after the bump takes the else-branch (no re-bump, no re-emit).
+      if (loop.iteration_count === reservation.iteration) {
+        // Legacy backward-bump (advance to the SAME phase → iteration_count += 1). The
+        // post-advance stop check closes to `blocked` when the max_iterations cap is hit.
+        const adv = advance({ id: loop.id, to_phase: loop.current_phase, actor }, cwd);
+        if (adv.auto_closed || LOOP_TERMINAL.has(adv.loop.status)) {
+          auto_closed = true; // iteration cap → blocked/terminal → release the claim below
+        } else {
+          retainClaim = true; // keep the coordinator claim + worktree for the re-dispatch
+          next_turn = {
+            slot_id: slot.slot_id,
+            role: slot.role ?? 'reviewer',
+            agent: slot.agent ?? '',
+            ...(slot.agent_id ? { agent_id: slot.agent_id } : {}),
+            phase: adv.loop.current_phase,
+            iteration: adv.loop.iteration_count,
+            task: buildFixCycleTask(lane.review_summary ?? lane.summary ?? '', adv.loop.iteration_count),
+          };
+        }
+      } else {
+        // Already bumped by a prior pass (crash between bump and re-dispatch). Keep the
+        // retained claim if the loop is still open; do NOT re-bump or re-emit (MVP — the
+        // residual retain-then-crash strand is PR4 / dec#149 #2). Never re-advance.
+        const cur = getLoop(loop.id, cwd);
+        if (cur && !LOOP_TERMINAL.has(cur.status)) retainClaim = true;
+        else auto_closed = true;
+      }
+    } else {
+      // approve OR asymmetric request_changes — unchanged PR3a / legacy-asymmetric behavior.
+      // Benign "cannot advance/close now" → loop stays open awaiting the next turn; any
+      // OTHER throw is a REAL error and must propagate, never be silently swallowed (Finding 6).
+      try {
+        auto_closed = advance({ id: loop.id, actor }, cwd).auto_closed;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/phase_advance_blocked|already at last phase|no post-cycle successor/.test(msg)) throw err;
+      }
     }
   }
+
+  // Release the coordinator claim now — UNLESS a fix-cycle round retained it. Target the
+  // authoritative claim the assignment is bound to, not reservation.claim_id (dec#149 #3).
+  if (!retainClaim) {
+    const authoritativeClaimId = loadAssignment(reservation.child_ids.assignment_id, cwd)?.claim_id ?? reservation.claim_id;
+    releaseCoordinatorClaim(authoritativeClaimId, cwd);
+  }
+
   const loop_status = getLoop(loop.id, cwd)?.status ?? loop.status;
 
   return {
     reconciled: true,
-    reason: slotTerminal ? `turn ${turn_id} already recorded; advance re-attempted (${slot_outcome})` : `turn ${turn_id} reconciled (${slot_outcome})`,
+    reason: next_turn
+      ? `turn ${turn_id} → request_changes: bumped to round ${next_turn.iteration}, claim retained for re-dispatch`
+      : slotTerminal ? `turn ${turn_id} already recorded; advance re-attempted (${slot_outcome})` : `turn ${turn_id} reconciled (${slot_outcome})`,
     slot_outcome,
     artifacts_added,
     auto_closed,
     loop_status,
+    ...(next_turn ? { next_turn } : {}),
   };
 }
