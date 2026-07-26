@@ -43,6 +43,8 @@ import {
 } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
+import { prepareTurnOwnedReviewDispatch, turnOwnedReviewEnabled } from '../core/review-loop-turn-dispatch.js';
+import type { TurnEcho } from '../core/execution-adapters.js';
 import {
   createAssignment,
   generateAssignmentId,
@@ -400,7 +402,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   }
 
   const commandHints: Array<{ agent: string; command: string; shell: string }> = [];
-  type PreparedInvoke = { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand>; worktreePath?: string };
+  type PreparedInvoke = { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand>; worktreePath?: string; turnEcho?: TurnEcho };
   const preparedInvokes: PreparedInvoke[] = [];
 
   // pln#359 phase 1b — cross-project routing. When `project` is set, all
@@ -472,7 +474,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     opts: { autoExecute: boolean; senderAgent: string; senderAgentId?: string; cwd: string; warnings: string[] },
   ): Promise<'delivered_and_started' | 'command_ready_manual' | 'inbox_only'> => {
     let overall: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' = 'inbox_only';
-    for (const { entry, invoke, worktreePath } of prepared) {
+    for (const { entry, invoke, worktreePath, turnEcho } of prepared) {
       const execResult = await attemptExecution(invoke, {
         agent: entry.agent,
         autoExecute: opts.autoExecute,
@@ -483,6 +485,8 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
         dispatcherAgentId: opts.senderAgentId,
         cwd: opts.cwd,
         requireWorktree: true, // pln#531: never spawn a worker in the integration repo
+        turnEcho, // pln#630 — turn-owned reviewer (initial dispatch): the ack-wrapper writes the
+                  // turn-keyed completion sentinel. undefined for every non-turn-owned entry.
       });
       entry.execution_status = execResult.execution_status;
       // pln#626 Phase 1 — carry the machine-readable reason (+ failure_kind) to
@@ -500,7 +504,21 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       // Attribute the reason to its agent — a 3-target NO_SPAWN dispatch used to
       // emit three identical context-free warnings (pln#626 Phase 1 R5).
       if (execResult.error) opts.warnings.push(`${entry.agent}: ${execResult.error}`);
-      if (entry.assignment_id && entry.claim_id) {
+      if (turnEcho) {
+        // pln#630 risk #1 — a turn-owned reviewer's run was ALREADY created (`created`) by
+        // prepareTurnOwnedReviewDispatch. Do NOT mint a second run here (double-mint). Transition
+        // the deterministic run → running on a real spawn (mirrors dispatchReviewLoopTurn); leave
+        // it `created` otherwise so the no-sentinel legacy fallback (turnOwnedLaneEvidence) + the
+        // pre-run lease reconciler govern it. Non-turn-owned entries take the unchanged else-branch.
+        if (execResult.execution_status === 'delivered_and_started') {
+          try {
+            transitionAgentRun(turnEcho.run_id, 'running', {
+              actor: opts.senderAgent, actor_id: opts.senderAgentId, pid: execResult.pid,
+              status_reason: 'turn-owned reviewer spawned by coordinator',
+            }, opts.cwd);
+          } catch { /* best-effort — the reconciler converges if this races */ }
+        }
+      } else if (entry.assignment_id && entry.claim_id) {
         if (execResult.failure_kind === 'spawn_no_handshake') {
           try {
             const run = createAgentRun({
@@ -1118,43 +1136,89 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             });
 
             let reviewAssignmentId: string | undefined;
-            try {
-              const preId = generateAssignmentId(dispatchCwd);
-              const assignment = createAssignment({
-                id: preId.id,
-                short_label: preId.short_label,
-                claim_id: claimResult.claimId,
+            let reviewTurnEcho: TurnEcho | undefined;
+            // pln#630 — turn-own the INITIAL reviewer dispatch (same default + kill-switch as the
+            // fix cycle). Skipped for cross-project reviews (no local worktree/sentinel → they never
+            // spawn here). WON: prepare minted the DETERMINISTIC assignment + run + turn()-bound the
+            // slot, so we reuse prep.assignmentId for the brief/message/linkage below and carry the
+            // turnEcho so the ack-wrapper writes the turn-keyed sentinel. DENIED: the exactly-once
+            // fence says this dispatch is NOT the spawner — do NOT spawn, do NOT fall back to legacy
+            // (that is the double-spawn hole), and do NOT release the (possibly shared) claim; leave
+            // the slot for reconcile/self-heal. LEGACY: the unchanged inline mint runs.
+            let usedTurnOwned = false;
+            if (turnOwnedReviewEnabled() && !req.project) {
+              const prep = prepareTurnOwnedReviewDispatch({
+                loopId: loop.id,
+                slotId: slot.slot_id,
                 agent: slot.agent ?? '',
-                dispatcher_agent: senderAgent,
-                dispatcher_session_id: connectionSessionId,
-                scope: reviewScope,
+                agentId: slot.agent_id,
+                phase: 'findings',
+                task: req.task,
                 description: reviewDescription,
-                tags: ['coordinate', 'review', 'loop'],
-              }, dispatchCwd);
-              reviewAssignmentId = assignment.id;
-              out.artifacts.push({ type: 'assignment', id: assignment.id });
-            } catch (asgErr) {
-              out.warnings.push(
-                `Review assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
-              );
+                scope: reviewScope,
+                claimId: claimResult.claimId,
+                worktreePath: claimResult.worktreePath,
+                dispatcherAgent: senderAgent,
+                dispatcherAgentId: senderAgentId,
+                sessionId: connectionSessionId,
+                isReviewer: true,
+                cwd: dispatchCwd,
+              });
+              if (prep.kind === 'won') {
+                reviewAssignmentId = prep.assignmentId; // deterministic — harvest correlates on it
+                reviewTurnEcho = { turn_id: prep.turnId, run_id: prep.runId, nonce: prep.nonce };
+                out.artifacts.push({ type: 'assignment', id: prep.assignmentId });
+                usedTurnOwned = true; // prepare already created the assignment + run + bound the slot
+              } else if (prep.kind === 'denied') {
+                out.partial = true;
+                out.warnings.push(
+                  `open_loop: turn-owned reviewer dispatch denied for slot ${slot.slot_id} (${prep.reason}); not spawning — slot left for reconcile/self-heal`,
+                );
+                continue; // MUST NOT spawn AND MUST NOT legacy-fallback beside a live reservation
+              }
+              // prep.kind === 'legacy' (pre-identity failure) → fall through to the inline mint.
             }
 
-            // pln#628 Focus 4B (BLOCKING 2) — assign the slot NOW that the
-            // claim/assignment exist, binding their ids onto the slot so the
-            // harvest close resolves this exact reviewer by assignment_id. Runs
-            // even if assignment creation failed (undefined id → the harvest
-            // falls back to the legacy agent match for this one slot).
-            turn(
-              {
-                id: loop.id,
-                slot_id: slot.slot_id,
-                actor: creatorActor,
-                input: req.task,
-                assignment_id: reviewAssignmentId,
-                claim_id: claimResult.claimId,
-              },
-              dispatchCwd,
-            );
+            if (!usedTurnOwned) {
+              try {
+                const preId = generateAssignmentId(dispatchCwd);
+                const assignment = createAssignment({
+                  id: preId.id,
+                  short_label: preId.short_label,
+                  claim_id: claimResult.claimId,
+                  agent: slot.agent ?? '',
+                  dispatcher_agent: senderAgent,
+                  dispatcher_session_id: connectionSessionId,
+                  scope: reviewScope,
+                  description: reviewDescription,
+                  tags: ['coordinate', 'review', 'loop'],
+                }, dispatchCwd);
+                reviewAssignmentId = assignment.id;
+                out.artifacts.push({ type: 'assignment', id: assignment.id });
+              } catch (asgErr) {
+                out.warnings.push(
+                  `Review assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
+                );
+              }
+
+              // pln#628 Focus 4B (BLOCKING 2) — assign the slot NOW that the
+              // claim/assignment exist, binding their ids onto the slot so the
+              // harvest close resolves this exact reviewer by assignment_id. Runs
+              // even if assignment creation failed (undefined id → the harvest
+              // falls back to the legacy agent match for this one slot). (For the
+              // turn-owned WON path, prepare already turn()-bound the slot.)
+              turn(
+                {
+                  id: loop.id,
+                  slot_id: slot.slot_id,
+                  actor: creatorActor,
+                  input: req.task,
+                  assignment_id: reviewAssignmentId,
+                  claim_id: claimResult.claimId,
+                },
+                dispatchCwd,
+              );
+            }
 
             const reviewBrief = buildCoordinateBrief(slot.agent ?? '', reviewDescription + reviewVerdictBriefSuffix, {
               claimId: claimResult.claimId,
@@ -1203,6 +1267,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               entry: queued.entry,
               invoke: queued.invoke,
               worktreePath: claimResult.worktreePath,
+              turnEcho: reviewTurnEcho,
             });
           } catch (dispatchErr) {
             out.partial = true;
