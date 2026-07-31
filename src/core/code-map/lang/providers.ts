@@ -16,14 +16,31 @@ import { typeScriptProvider } from './typescript/index.js';
 import { pythonProvider } from './python/index.js';
 import { phpProvider } from './php/index.js';
 import { javaProvider } from './java/index.js';
+import { goProvider } from './go/index.js';
+import { rustProvider } from './rust/index.js';
+import { csharpProvider } from './csharp/index.js';
+import { rubyProvider } from './ruby/index.js';
+import { cppProvider } from './cpp/index.js';
+import { cProvider } from './c/index.js';
 
 /**
  * The default registry, pre-loaded with the bundled providers. Add a new
  * provider's singleton to this `createRegistry(...)` call to register it.
+ *
+ * Registration ORDER is the collision tiebreak (earliest wins, after `priority`).
+ * `cpp` is registered BEFORE `c` so the C++ provider (a superset that parses C
+ * fine) wins the shared `.h` extension — a C header parses correctly as C++, but
+ * a C++ header would not parse as C.
  */
 export const defaultRegistry: DefaultCodeLanguageRegistry = createRegistry(
   typeScriptProvider,
   pythonProvider,
   phpProvider,
   javaProvider,
+  goProvider,
+  rustProvider,
+  csharpProvider,
+  rubyProvider,
+  cppProvider,
+  cProvider,
 );

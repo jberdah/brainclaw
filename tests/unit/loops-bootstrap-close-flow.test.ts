@@ -117,8 +117,8 @@ function findEvent<K extends LoopEvent['kind']>(
 describe('closeLoop bootstrap pre-hook — direct write paths (pln#512 step 2)', () => {
   let fixtures: Fixture[] = [];
 
-  beforeEach(() => { fixtures = []; });
-  afterEach(() => {
+  beforeEach(async () => { fixtures = []; });
+  afterEach(async () => {
     for (const f of fixtures) {
       try { fs.rmSync(f.cwd, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
@@ -130,7 +130,7 @@ describe('closeLoop bootstrap pre-hook — direct write paths (pln#512 step 2)',
     return f;
   }
 
-  it('absent PROJECT.md → file written, loop completed, file_apply_resolved(approved=true)', () => {
+  it('absent PROJECT.md → file written, loop completed, file_apply_resolved(approved=true)', async () => {
     const f = make();
     const target = path.join(f.cwd, 'PROJECT.md');
     assert.equal(fs.existsSync(target), false, 'precondition: PROJECT.md must not exist');
@@ -156,7 +156,7 @@ describe('closeLoop bootstrap pre-hook — direct write paths (pln#512 step 2)',
     assert.equal(closedEvent.final_status, 'completed');
   });
 
-  it('PROJECT.md exists but is 0 bytes → file written, completed', () => {
+  it('PROJECT.md exists but is 0 bytes → file written, completed', async () => {
     const f = make();
     const target = path.join(f.cwd, 'PROJECT.md');
     fs.writeFileSync(target, '', 'utf8');
@@ -169,7 +169,7 @@ describe('closeLoop bootstrap pre-hook — direct write paths (pln#512 step 2)',
     assert.ok(findEvent(events, 'file_apply_resolved'));
   });
 
-  it('no project_md_final artifact → close proceeds without write', () => {
+  it('no project_md_final artifact → close proceeds without write', async () => {
     const f = make();
     // Strip the artifact off the persisted thread so the hook hits
     // no_final_artifact.
@@ -188,7 +188,7 @@ describe('closeLoop bootstrap pre-hook — direct write paths (pln#512 step 2)',
     assert.ok(findEvent(events, 'closed'));
   });
 
-  it('cancel close skips the bootstrap hook (no file write, no file_apply events)', () => {
+  it('cancel close skips the bootstrap hook (no file write, no file_apply events)', async () => {
     const f = make();
     const target = path.join(f.cwd, 'PROJECT.md');
 
@@ -204,8 +204,8 @@ describe('closeLoop bootstrap pre-hook — direct write paths (pln#512 step 2)',
 
 describe('closeLoop bootstrap pre-hook — pause-on-overwrite path (pln#512 step 2)', () => {
   let fixtures: Fixture[] = [];
-  beforeEach(() => { fixtures = []; });
-  afterEach(() => {
+  beforeEach(async () => { fixtures = []; });
+  afterEach(async () => {
     for (const f of fixtures) {
       try { fs.rmSync(f.cwd, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
@@ -216,7 +216,7 @@ describe('closeLoop bootstrap pre-hook — pause-on-overwrite path (pln#512 step
     return f;
   }
 
-  it('PROJECT.md present + non-empty → loop paused, pending_file_apply set, file_apply_requested + input_requested emitted, NEW operator_question on artifacts', () => {
+  it('PROJECT.md present + non-empty → loop paused, pending_file_apply set, file_apply_requested + input_requested emitted, NEW operator_question on artifacts', async () => {
     const f = make({ finalContent: '# proposed\n\nNew body.\n' });
     const target = path.join(f.cwd, 'PROJECT.md');
     const existingBody = '# existing\n\nDo not overwrite.\n';
@@ -293,8 +293,8 @@ describe('closeLoop bootstrap pre-hook — pause-on-overwrite path (pln#512 step
 
 describe('provideInput post-hook — file_overwrite_approval resolution (pln#512 step 2)', () => {
   let fixtures: Fixture[] = [];
-  beforeEach(() => { fixtures = []; });
-  afterEach(() => {
+  beforeEach(async () => { fixtures = []; });
+  afterEach(async () => {
     for (const f of fixtures) {
       try { fs.rmSync(f.cwd, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
@@ -324,7 +324,7 @@ describe('provideInput post-hook — file_overwrite_approval resolution (pln#512
     return { fixture, questionId: paused.open_questions[0], target, existingBody };
   }
 
-  it("operator approves → file written with project_md_final body, loop transitions to completed, file_apply_resolved(approved=true)", () => {
+  it("operator approves → file written with project_md_final body, loop transitions to completed, file_apply_resolved(approved=true)", async () => {
     const { fixture, questionId, target } = setupPausedOnApproval();
 
     const result = provideInput(
@@ -362,7 +362,7 @@ describe('provideInput post-hook — file_overwrite_approval resolution (pln#512
     assert.deepEqual(result.thread.open_questions, []);
   });
 
-  it("operator rejects → file untouched, loop transitions to completed, file_apply_resolved(approved=false)", () => {
+  it("operator rejects → file untouched, loop transitions to completed, file_apply_resolved(approved=false)", async () => {
     const { fixture, questionId, target, existingBody } = setupPausedOnApproval();
 
     const result = provideInput(
@@ -393,7 +393,7 @@ describe('provideInput post-hook — file_overwrite_approval resolution (pln#512
     assert.equal(closedEvent.reason, 'file_overwrite_rejected');
   });
 
-  it("timeout → synthetic answer materializes suggested_default='reject', loop completes, file untouched", () => {
+  it("timeout → synthetic answer materializes suggested_default='reject', loop completes, file untouched", async () => {
     const { fixture, questionId, target, existingBody } = setupPausedOnApproval();
 
     // Force the question's deadline into the past so sweepPauseTimeouts
@@ -441,8 +441,8 @@ describe('provideInput post-hook — file_overwrite_approval resolution (pln#512
 
 describe('closeLoop bootstrap pre-hook — atomicity (pln#512 step 2)', () => {
   let fixtures: Fixture[] = [];
-  beforeEach(() => { fixtures = []; });
-  afterEach(() => {
+  beforeEach(async () => { fixtures = []; });
+  afterEach(async () => {
     for (const f of fixtures) {
       try { fs.rmSync(f.cwd, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
@@ -453,7 +453,7 @@ describe('closeLoop bootstrap pre-hook — atomicity (pln#512 step 2)', () => {
     return f;
   }
 
-  it('no .tmp leftovers in cwd after direct write (absent target)', () => {
+  it('no .tmp leftovers in cwd after direct write (absent target)', async () => {
     const f = make({ finalContent: 'line A\nline B\n' });
     closeLoop({ id: f.loop.id, final_status: 'completed', actor: 'agt_test' }, f.cwd);
 
@@ -464,7 +464,7 @@ describe('closeLoop bootstrap pre-hook — atomicity (pln#512 step 2)', () => {
     assert.deepEqual(leftover, [], 'no .tmp file should remain after atomic rename');
   });
 
-  it('no .tmp leftovers after approve-path write (present non-empty target)', () => {
+  it('no .tmp leftovers after approve-path write (present non-empty target)', async () => {
     const f = make({ finalContent: 'fresh A\nfresh B\n' });
     const target = path.join(f.cwd, 'PROJECT.md');
     writeFileAtomic(target, 'old content\n');
@@ -493,8 +493,8 @@ describe('closeLoop bootstrap pre-hook — atomicity (pln#512 step 2)', () => {
 
 describe('bclaw_loop facade — awaiting_file_apply_approval is surfaced structurally (pln#512 phase 3 codex fix #1)', () => {
   let fixtures: Fixture[] = [];
-  beforeEach(() => { fixtures = []; });
-  afterEach(() => {
+  beforeEach(async () => { fixtures = []; });
+  afterEach(async () => {
     for (const f of fixtures) {
       try { fs.rmSync(f.cwd, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
@@ -539,13 +539,13 @@ describe('bclaw_loop facade — awaiting_file_apply_approval is surfaced structu
     assert.equal(resolved.approved, true);
   });
 
-  it('close intent on a paused-overwrite loop returns code=awaiting_file_apply_approval with structured details', () => {
+  it('close intent on a paused-overwrite loop returns code=awaiting_file_apply_approval with structured details', async () => {
     const fixture = setupBootstrapLoop({ finalContent: '# new\n' });
     fixtures.push(fixture);
     const target = path.join(fixture.cwd, 'PROJECT.md');
     fs.writeFileSync(target, '# original\n', 'utf8');
 
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: { intent: 'close', loop_id: fixture.loop.id, status: 'completed', agentId: 'agt_test' },
       cwd: fixture.cwd,
     });

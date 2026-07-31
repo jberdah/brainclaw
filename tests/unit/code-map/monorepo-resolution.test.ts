@@ -61,11 +61,22 @@ describe('code-map ↔ monorepo resolution (F1 coupling)', () => {
         'find via the resolved child cwd must surface the child symbol',
       );
 
-      // The monorepo ROOT has no code map → it must NOT surface the child symbol.
-      const rootFind = await be.find({ query: 'uniqueChildWidget', cwd: root });
+      // The monorepo ROOT's OWN store has no code map → single-store (traversal:'project')
+      // must NOT surface the child symbol. (This is the F1 contract — the anchored child
+      // find above is what resolves the child; the root store itself is empty here.)
+      const rootFind = await be.find({ query: 'uniqueChildWidget', cwd: root, traversal: 'project' });
       assert.ok(
         !rootFind.matches.some((m) => m.name === 'uniqueChildWidget'),
-        'the root (no index) must not surface the child symbol',
+        'the root store (no index) must not surface the child symbol',
+      );
+
+      // pln#631: the DEFAULT (auto) now AGGREGATES at a multi-project root, so the same
+      // root find WITHOUT forcing single-store DOES surface the child symbol — the gap
+      // #3 closes (an agent at the root no longer gets nothing and falls back to grep).
+      const rootAggregated = await be.find({ query: 'uniqueChildWidget', cwd: root });
+      assert.ok(
+        rootAggregated.matches.some((m) => m.name === 'uniqueChildWidget'),
+        'auto-traversal at the root aggregates the child store (pln#631)',
       );
     } finally {
       if (savedCwd === undefined) delete process.env.BRAINCLAW_CWD; else process.env.BRAINCLAW_CWD = savedCwd;

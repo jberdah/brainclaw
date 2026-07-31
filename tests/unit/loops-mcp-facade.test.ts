@@ -30,15 +30,15 @@ function stableJson<T>(value: T): unknown {
 
 describe('bclaw_loop facade — open / get / list', () => {
   let cwd: string;
-  before(() => {
+  before(async () => {
     cwd = makeWorkspace();
   });
-  after(() => {
+  after(async () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('opens a review loop and returns a FacadeResponse envelope', () => {
-    const r = handleBclawLoop({
+  it('opens a review loop and returns a FacadeResponse envelope', async () => {
+    const r = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -66,11 +66,11 @@ describe('bclaw_loop facade — open / get / list', () => {
     assert.match(r.summary, /opened lop_/);
   });
 
-  it('open with the same client_request_id returns the same loop without double-creation', () => {
-    const before = handleBclawLoop({ args: { intent: 'list' }, cwd });
+  it('open with the same client_request_id returns the same loop without double-creation', async () => {
+    const before = await handleBclawLoop({ args: { intent: 'list' }, cwd });
     const beforeTotal = (before.response.result as { total: number }).total;
 
-    const first = handleBclawLoop({
+    const first = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -81,7 +81,7 @@ describe('bclaw_loop facade — open / get / list', () => {
       },
       cwd,
     });
-    const second = handleBclawLoop({
+    const second = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -92,7 +92,7 @@ describe('bclaw_loop facade — open / get / list', () => {
       },
       cwd,
     });
-    const after = handleBclawLoop({ args: { intent: 'list' }, cwd });
+    const after = await handleBclawLoop({ args: { intent: 'list' }, cwd });
     const afterTotal = (after.response.result as { total: number }).total;
 
     assert.equal(first.response.status, 'ok');
@@ -102,8 +102,8 @@ describe('bclaw_loop facade — open / get / list', () => {
     assert.equal(afterTotal, beforeTotal + 1);
   });
 
-  it('open rejects reuse of the same client_request_id with a different payload', () => {
-    handleBclawLoop({
+  it('open rejects reuse of the same client_request_id with a different payload', async () => {
+    await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -114,7 +114,7 @@ describe('bclaw_loop facade — open / get / list', () => {
       cwd,
     });
 
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -131,15 +131,15 @@ describe('bclaw_loop facade — open / get / list', () => {
     assert.ok((r.response.result as { submitted_hash?: string }).submitted_hash);
   });
 
-  it('rejects an invalid payload with a structured validation_error', () => {
-    const r = handleBclawLoop({ args: { intent: 'open' }, cwd });
+  it('rejects an invalid payload with a structured validation_error', async () => {
+    const r = await handleBclawLoop({ args: { intent: 'open' }, cwd });
     assert.equal(r.response.status, 'error');
     assert.equal(r.response.intent, 'bclaw_loop.open');
     assert.match(r.response.error ?? '', /validation_error/);
   });
 
-  it('rejects direct open without allow_orphan — anti-pattern gate (pln#461)', () => {
-    const r = handleBclawLoop({
+  it('rejects direct open without allow_orphan — anti-pattern gate (pln#461)', async () => {
+    const r = await handleBclawLoop({
       args: {
         intent: 'open',
         kind: 'review',
@@ -161,8 +161,8 @@ describe('bclaw_loop facade — open / get / list', () => {
     );
   });
 
-  it('get returns the loop with computed next_expected', () => {
-    const opened = handleBclawLoop({
+  it('get returns the loop with computed next_expected', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -174,7 +174,7 @@ describe('bclaw_loop facade — open / get / list', () => {
     });
     const loopId = payload(opened.response.result).loop.id;
 
-    const r = handleBclawLoop({ args: { intent: 'get', loop_id: loopId }, cwd });
+    const r = await handleBclawLoop({ args: { intent: 'get', loop_id: loopId }, cwd });
     assert.equal(r.response.status, 'ok');
     const p = payload(r.response.result);
     assert.equal(p.loop.id, loopId);
@@ -183,13 +183,13 @@ describe('bclaw_loop facade — open / get / list', () => {
     assert.deepEqual((p.next_expected as { action: string }).action, 'turn');
   });
 
-  it('get with include_events returns the event journal', () => {
-    const opened = handleBclawLoop({
+  it('get with include_events returns the event journal', async () => {
+    const opened = await handleBclawLoop({
       args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'with-events', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: { intent: 'get', loop_id: loopId, include_events: true },
       cwd,
     });
@@ -198,8 +198,8 @@ describe('bclaw_loop facade — open / get / list', () => {
     assert.equal((p.events ?? []).length, 1);
   });
 
-  it('get returns not_found for an unknown loop_id', () => {
-    const r = handleBclawLoop({
+  it('get returns not_found for an unknown loop_id', async () => {
+    const r = await handleBclawLoop({
       args: { intent: 'get', loop_id: 'lop_doesnotexist' },
       cwd,
     });
@@ -207,19 +207,19 @@ describe('bclaw_loop facade — open / get / list', () => {
     assert.match(r.response.error ?? '', /not_found/);
   });
 
-  it('list filters by kind and paginates', () => {
-    handleBclawLoop({ args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'i1', agentId: 'agt_a' }, cwd });
-    handleBclawLoop({ args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'r1', agentId: 'agt_a' }, cwd });
+  it('list filters by kind and paginates', async () => {
+    await handleBclawLoop({ args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'i1', agentId: 'agt_a' }, cwd });
+    await handleBclawLoop({ args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'r1', agentId: 'agt_a' }, cwd });
 
-    const all = handleBclawLoop({ args: { intent: 'list' }, cwd });
+    const all = await handleBclawLoop({ args: { intent: 'list' }, cwd });
     const allResult = all.response.result as { loops: LoopThread[]; total: number };
     assert.ok(allResult.total >= 3);
 
-    const ideation = handleBclawLoop({ args: { intent: 'list', kind: 'ideation' }, cwd });
+    const ideation = await handleBclawLoop({ args: { intent: 'list', kind: 'ideation' }, cwd });
     const ideationResult = ideation.response.result as { loops: LoopThread[] };
     for (const l of ideationResult.loops) assert.equal(l.kind, 'ideation');
 
-    const paged = handleBclawLoop({ args: { intent: 'list', limit: 1, offset: 0 }, cwd });
+    const paged = await handleBclawLoop({ args: { intent: 'list', limit: 1, offset: 0 }, cwd });
     const pagedResult = paged.response.result as { loops: LoopThread[]; total: number };
     assert.equal(pagedResult.loops.length, 1);
   });
@@ -227,15 +227,15 @@ describe('bclaw_loop facade — open / get / list', () => {
 
 describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   let cwd: string;
-  before(() => {
+  before(async () => {
     cwd = makeWorkspace();
   });
-  after(() => {
+  after(async () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('turn flips the reviewer slot to assigned and records a loop_event', () => {
-    const opened = handleBclawLoop({
+  it('turn flips the reviewer slot to assigned and records a loop_event', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -248,7 +248,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const loopId = payload(opened.response.result).loop.id;
     const reviewerSlotId = payload(opened.response.result).loop.slots[0].slot_id;
 
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: {
         intent: 'turn',
         loop_id: loopId,
@@ -266,8 +266,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.equal(r.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
   });
 
-  it('turn without slot_id or role fails as validation_error with the turn intent preserved', () => {
-    const r = handleBclawLoop({
+  it('turn without slot_id or role fails as validation_error with the turn intent preserved', async () => {
+    const r = await handleBclawLoop({
       args: {
         intent: 'turn',
         loop_id: 'lop_abcdef',
@@ -280,8 +280,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.match(r.response.error ?? '', /validation_error/);
   });
 
-  it('complete_turn enforces slot-bound auth via caller_agent_id', () => {
-    const opened = handleBclawLoop({
+  it('complete_turn enforces slot-bound auth via caller_agent_id', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -295,12 +295,12 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const reviewerSlotId = payload(opened.response.result).loop.slots[0].slot_id;
 
     // Assign first.
-    handleBclawLoop({
+    await handleBclawLoop({
       args: { intent: 'turn', loop_id: loopId, slot_id: reviewerSlotId, agentId: 'agt_author' },
       cwd,
     });
 
-    const impersonator = handleBclawLoop({
+    const impersonator = await handleBclawLoop({
       args: {
         intent: 'complete_turn',
         loop_id: loopId,
@@ -314,7 +314,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.match(impersonator.response.error ?? '', /unauthorized_slot_write/);
 
     // Legitimate slot owner.
-    const ok = handleBclawLoop({
+    const ok = await handleBclawLoop({
       args: {
         intent: 'complete_turn',
         loop_id: loopId,
@@ -334,8 +334,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.equal(ok.response.side_effects.filter((s) => s.entity === 'loop_event').length, 2);
   });
 
-  it('advance reports auto_closed=true when reviewer_green stop fires', () => {
-    const opened = handleBclawLoop({
+  it('advance reports auto_closed=true when reviewer_green stop fires', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -346,7 +346,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     });
     const loopId = payload(opened.response.result).loop.id;
 
-    handleBclawLoop({
+    await handleBclawLoop({
       args: {
         intent: 'add_artifact',
         loop_id: loopId,
@@ -356,7 +356,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
       cwd,
     });
 
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: { intent: 'advance', loop_id: loopId, agentId: 'agt_a' },
       cwd,
     });
@@ -373,14 +373,17 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.ok(loopEvents.length >= 1, 'closed event must be surfaced on auto-close');
   });
 
-  it('advance succeeds when expected_version matches', () => {
-    const opened = handleBclawLoop({
-      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'advance-cas-pass', agentId: 'agt_a' },
+  it('advance succeeds when expected_version matches', async () => {
+    const opened = await handleBclawLoop({
+      // ideation: its first phase (proposal) has no advance_gate, so this
+      // exercises the version-CAS mechanic without a phase gate interfering
+      // (pln#628 gave research an investigate advance_gate).
+      args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'advance-cas-pass', agentId: 'agt_a' },
       cwd,
     });
     const openedPayload = payload(opened.response.result);
 
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: {
         intent: 'advance',
         loop_id: openedPayload.loop.id,
@@ -394,14 +397,14 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.equal(payload(r.response.result).loop.version, openedPayload.loop.version + 1);
   });
 
-  it('advance returns version_conflict with actual_version when expected_version mismatches', () => {
-    const opened = handleBclawLoop({
-      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'advance-cas-fail', agentId: 'agt_a' },
+  it('advance returns version_conflict with actual_version when expected_version mismatches', async () => {
+    const opened = await handleBclawLoop({
+      args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'advance-cas-fail', agentId: 'agt_a' },
       cwd,
     });
     const openedPayload = payload(opened.response.result);
 
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: {
         intent: 'advance',
         loop_id: openedPayload.loop.id,
@@ -416,8 +419,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.equal((r.response.result as { actual_version?: number }).actual_version, openedPayload.loop.version);
   });
 
-  it('complete_turn idempotent retry returns the cached response', () => {
-    const opened = handleBclawLoop({
+  it('complete_turn idempotent retry returns the cached response', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -431,7 +434,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const loopId = openedPayload.loop.id;
     const reviewerSlotId = openedPayload.loop.slots[0].slot_id;
 
-    handleBclawLoop({
+    await handleBclawLoop({
       args: { intent: 'turn', loop_id: loopId, slot_id: reviewerSlotId, agentId: 'agt_author' },
       cwd,
     });
@@ -446,8 +449,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
       client_request_id: 'req_complete_same',
     };
 
-    const first = handleBclawLoop({ args: request, cwd });
-    const second = handleBclawLoop({ args: request, cwd });
+    const first = await handleBclawLoop({ args: request, cwd });
+    const second = await handleBclawLoop({ args: request, cwd });
 
     assert.equal(first.response.status, 'ok');
     assert.equal(second.response.status, 'ok');
@@ -456,8 +459,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.deepEqual(stableJson(second.response.side_effects), stableJson(first.response.side_effects));
   });
 
-  it('complete_turn cached response is NOT returned to a different caller (slot-bound auth)', () => {
-    const opened = handleBclawLoop({
+  it('complete_turn cached response is NOT returned to a different caller (slot-bound auth)', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -470,7 +473,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const openedPayload = payload(opened.response.result);
     const loopId = openedPayload.loop.id;
     const reviewerSlotId = openedPayload.loop.slots[0].slot_id;
-    handleBclawLoop({
+    await handleBclawLoop({
       args: { intent: 'turn', loop_id: loopId, slot_id: reviewerSlotId, agentId: 'agt_author' },
       cwd,
     });
@@ -484,7 +487,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
       client_request_id: 'req_owner_match',
     };
 
-    const legitimate = handleBclawLoop({
+    const legitimate = await handleBclawLoop({
       args: { ...payloadBody, agentId: 'agt_reviewer' },
       cwd,
     });
@@ -493,7 +496,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     // Impersonator reuses the same client_request_id + identical payload body.
     // Without caller-match enforcement they'd get back the cached success
     // response. With requireCallerMatch=true the facade must reject.
-    const impersonator = handleBclawLoop({
+    const impersonator = await handleBclawLoop({
       args: { ...payloadBody, agentId: 'agt_impersonator' },
       cwd,
     });
@@ -501,8 +504,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.match(impersonator.response.error ?? '', /^idempotency_owner_mismatch/);
   });
 
-  it('turn with client_request_id is idempotent across retries', () => {
-    const opened = handleBclawLoop({
+  it('turn with client_request_id is idempotent across retries', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -523,29 +526,29 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
       agentId: 'agt_author',
       client_request_id: 'req_turn_1',
     };
-    const first = handleBclawLoop({ args: req, cwd });
-    const second = handleBclawLoop({ args: req, cwd });
+    const first = await handleBclawLoop({ args: req, cwd });
+    const second = await handleBclawLoop({ args: req, cwd });
     assert.equal(first.response.status, 'ok');
     assert.equal(second.response.status, 'ok');
     assert.deepEqual(stableJson(first.response.result), stableJson(second.response.result));
   });
 
-  it('close supports expected_version CAS', () => {
-    const opened = handleBclawLoop({
+  it('close supports expected_version CAS', async () => {
+    const opened = await handleBclawLoop({
       args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'close-cas', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
     const v = payload(opened.response.result).loop.version;
 
-    const stale = handleBclawLoop({
+    const stale = await handleBclawLoop({
       args: { intent: 'close', loop_id: loopId, status: 'completed', expected_version: v + 99, agentId: 'agt_a' },
       cwd,
     });
     assert.equal(stale.response.status, 'error');
     assert.match(stale.response.error ?? '', /^version_conflict/);
 
-    const ok = handleBclawLoop({
+    const ok = await handleBclawLoop({
       args: { intent: 'close', loop_id: loopId, status: 'completed', expected_version: v, agentId: 'agt_a' },
       cwd,
     });
@@ -553,8 +556,8 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.equal(payload(ok.response.result).loop.status, 'completed');
   });
 
-  it('failed mutation does NOT poison the idempotency cache; retry after fixing succeeds', () => {
-    const opened = handleBclawLoop({
+  it('failed mutation does NOT poison the idempotency cache; retry after fixing succeeds', async () => {
+    const opened = await handleBclawLoop({
       args: {
         intent: 'open', allow_orphan: true,
         kind: 'review',
@@ -566,14 +569,14 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     });
     const openedPayload = payload(opened.response.result);
     const reviewerSlotId = openedPayload.loop.slots[0].slot_id;
-    handleBclawLoop({
+    await handleBclawLoop({
       args: { intent: 'turn', loop_id: openedPayload.loop.id, slot_id: reviewerSlotId, agentId: 'agt_author' },
       cwd,
     });
 
     // First call: impersonator tries complete_turn. Rejected by slot-bound
     // auth inside the verb → error, NOT cached (cache writes only on success).
-    const rejected = handleBclawLoop({
+    const rejected = await handleBclawLoop({
       args: {
         intent: 'complete_turn',
         loop_id: openedPayload.loop.id,
@@ -589,7 +592,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     // Second call with the SAME client_request_id but the right caller must
     // succeed — the cache is empty because the first call errored before
     // withLoopLock persisted anything.
-    const ok = handleBclawLoop({
+    const ok = await handleBclawLoop({
       args: {
         intent: 'complete_turn',
         loop_id: openedPayload.loop.id,
@@ -605,15 +608,15 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.equal(payload(ok.response.result).loop.artifacts.length, 1);
   });
 
-  it('add_artifact supports CAS via expected_version', () => {
-    const opened = handleBclawLoop({
+  it('add_artifact supports CAS via expected_version', async () => {
+    const opened = await handleBclawLoop({
       args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'artifact-cas', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
     const v = payload(opened.response.result).loop.version;
 
-    const stale = handleBclawLoop({
+    const stale = await handleBclawLoop({
       args: {
         intent: 'add_artifact',
         loop_id: loopId,
@@ -626,7 +629,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.equal(stale.response.status, 'error');
     assert.match(stale.response.error ?? '', /^version_conflict/);
 
-    const ok = handleBclawLoop({
+    const ok = await handleBclawLoop({
       args: {
         intent: 'add_artifact',
         loop_id: loopId,
@@ -642,15 +645,15 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
 
 describe('bclaw_loop facade — lock_timeout', () => {
   let cwd: string;
-  before(() => {
+  before(async () => {
     cwd = makeWorkspace();
   });
-  after(() => {
+  after(async () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('returns lock_timeout when a concurrent lock is already held past the backoff window', () => {
-    const opened = handleBclawLoop({
+  it('returns lock_timeout when a concurrent lock is already held past the backoff window', async () => {
+    const opened = await handleBclawLoop({
       args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'lock-timeout', agentId: 'agt_a' },
       cwd,
     });
@@ -675,7 +678,7 @@ describe('bclaw_loop facade — lock_timeout', () => {
       }),
     );
 
-    const r = handleBclawLoop({
+    const r = await handleBclawLoop({
       args: { intent: 'advance', loop_id: loopId, agentId: 'agt_b' },
       cwd,
     });
@@ -688,21 +691,21 @@ describe('bclaw_loop facade — lock_timeout', () => {
 
 describe('bclaw_loop facade — pause / resume / close', () => {
   let cwd: string;
-  before(() => {
+  before(async () => {
     cwd = makeWorkspace();
   });
-  after(() => {
+  after(async () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('pause then resume round-trips the status', () => {
-    const opened = handleBclawLoop({
+  it('pause then resume round-trips the status', async () => {
+    const opened = await handleBclawLoop({
       args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'p', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
 
-    const paused = handleBclawLoop({
+    const paused = await handleBclawLoop({
       args: {
         intent: 'pause',
         loop_id: loopId,
@@ -718,7 +721,7 @@ describe('bclaw_loop facade — pause / resume / close', () => {
     assert.equal(paused.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
     assert.deepEqual(paused.response.warnings, []);
 
-    const resumed = handleBclawLoop({
+    const resumed = await handleBclawLoop({
       args: { intent: 'resume', loop_id: loopId, agentId: 'agt_a' },
       cwd,
     });
@@ -726,14 +729,14 @@ describe('bclaw_loop facade — pause / resume / close', () => {
     assert.equal(resumed.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
   });
 
-  it('close transitions to the requested final_status', () => {
-    const opened = handleBclawLoop({
+  it('close transitions to the requested final_status', async () => {
+    const opened = await handleBclawLoop({
       args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'c', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
 
-    const closed = handleBclawLoop({
+    const closed = await handleBclawLoop({
       args: {
         intent: 'close',
         loop_id: loopId,
@@ -749,7 +752,7 @@ describe('bclaw_loop facade — pause / resume / close', () => {
     assert.equal(closed.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
 
     // Any subsequent advance returns a verb_error / not_found-adjacent code.
-    const err = handleBclawLoop({
+    const err = await handleBclawLoop({
       args: { intent: 'advance', loop_id: loopId, agentId: 'agt_a' },
       cwd,
     });
@@ -759,15 +762,15 @@ describe('bclaw_loop facade — pause / resume / close', () => {
 
 describe('bclaw_loop facade — envelope contract', () => {
   let cwd: string;
-  before(() => {
+  before(async () => {
     cwd = makeWorkspace();
   });
-  after(() => {
+  after(async () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('every successful response carries status=ok, intent, artifacts, side_effects, warnings', () => {
-    const r = handleBclawLoop({
+  it('every successful response carries status=ok, intent, artifacts, side_effects, warnings', async () => {
+    const r = await handleBclawLoop({
       args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'env', agentId: 'agt_a' },
       cwd,
     });
@@ -779,8 +782,8 @@ describe('bclaw_loop facade — envelope contract', () => {
     assert.equal(typeof r.response.duration_ms, 'number');
   });
 
-  it('error responses still return a FacadeResponse with intent + error string', () => {
-    const r = handleBclawLoop({
+  it('error responses still return a FacadeResponse with intent + error string', async () => {
+    const r = await handleBclawLoop({
       args: { intent: 'get', loop_id: 'lop_missing' },
       cwd,
     });

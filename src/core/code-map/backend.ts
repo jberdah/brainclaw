@@ -12,8 +12,9 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { readManifest, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
-import { applyGitHeadDrift } from './freshness.js';
+import { applyGitHeadDrift, withCoarse } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
+import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } from './aggregate.js';
 import { defaultMemoryReader } from './memory-reader.js';
 import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
 import { loadConfig } from '../config.js';
@@ -90,6 +91,12 @@ export interface CodeRefreshResult {
 export interface CodeFindInput extends CodeBackendContext {
   query: string;
   limit?: number;
+  /**
+   * pln#631 — store traversal. `auto` (default) aggregates the whole workspace when
+   * cwd is a multi-project root, else single-store; `project` forces single-store;
+   * `workspace` requests aggregation (root cwd only in PR1).
+   */
+  traversal?: TraversalMode;
 }
 
 export interface CodeFindMatch {
@@ -100,6 +107,12 @@ export interface CodeFindMatch {
   kind: string;
   subtype: string | null;
   score: number;
+  /** pln#631 — set only on AGGREGATED results: the owning project (workspace-relative
+   *  dir, `''` = root) + its id. `path` is workspace-root-relative when aggregating. */
+  project?: string;
+  project_id?: string;
+  /** pln#631 PR4 — true when the hit is in the caller's OWN package (locality tiebreak). */
+  local?: boolean;
 }
 
 export interface CodeFindResult {
@@ -111,6 +124,9 @@ export interface CodeFindResult {
 export interface CodeBriefInput extends CodeBackendContext {
   target: string;
   limit?: number;
+  /** pln#631 — store traversal (same semantics as find): `auto` (default) aggregates
+   *  the workspace when cwd is a multi-project root, else single-store. */
+  traversal?: TraversalMode;
 }
 
 export interface CodeBriefReadEntry {
@@ -118,6 +134,14 @@ export interface CodeBriefReadEntry {
   reason: string;
   score: number;
   related_memory_ids: string[];
+  /** pln#631 — set only on AGGREGATED briefs: the owning project (workspace-relative
+   *  dir, `''` = root). `path` is workspace-root-relative when aggregating. */
+  project?: string;
+  /** pln#631 PR3 — true when this row is a cross-package importer (a sibling package
+   *  importing the defining package's public name), not an intra-package graph row. */
+  cross_package?: boolean;
+  /** pln#631 PR4 — true when this row is in the caller's OWN package (locality tiebreak). */
+  local?: boolean;
 }
 
 export interface CodeBriefRelatedMemory {
@@ -146,7 +170,9 @@ export interface CodeQueryBackend {
 }
 
 function badge(status: FreshnessStatus, details: Record<string, unknown> = {}): FreshnessBadge {
-  return { status, details };
+  // pln#601 — stamp the coarse rollup at construction so every backend-built badge
+  // (status, missing_index fallbacks, find/brief base) carries it uniformly.
+  return withCoarse({ status, details });
 }
 
 /**
@@ -329,13 +355,25 @@ export class JsonlBackend implements CodeQueryBackend {
    * as confident (§6.1); the response badge reflects any detected drift.
    */
   async find(input: CodeFindInput): Promise<CodeFindResult> {
+    const cwd = input.cwd ?? process.cwd();
+    const resolved = resolveTraversal(cwd, input.traversal ?? 'auto');
+    if (resolved.workspace) {
+      // pln#631 — root-aggregated find across the workspace's per-project stores.
+      // git-HEAD drift is resolved ONCE at the workspace root (one working tree) and
+      // compared PER STORE inside aggregateFind (review F3) — so a child whose index
+      // lags the working tree is flagged even under an otherwise-fresh root.
+      const currentHead = this.gitHeadReader(resolved.root);
+      const agg = aggregateFind(input.query, input.limit, resolved, currentHead);
+      return {
+        query: agg.query,
+        matches: agg.matches,
+        freshness_badge: agg.freshness_badge,
+      };
+    }
     const ctx = this.queryContext(input);
     const out = runFind(input.query, input.limit, ctx);
     const manifest = readManifest(input.cwd, input.preferredDirName);
-    const base: FreshnessBadge = {
-      status: out.freshness_badge.status,
-      details: out.freshness_badge.details,
-    };
+    const base: FreshnessBadge = badge(out.freshness_badge.status, out.freshness_badge.details);
     return {
       query: out.query,
       matches: out.matches,
@@ -349,13 +387,24 @@ export class JsonlBackend implements CodeQueryBackend {
    * and carries a §6.1 lazy-validated freshness badge.
    */
   async brief(input: CodeBriefInput): Promise<CodeBrief> {
+    const cwd = input.cwd ?? process.cwd();
+    const resolved = resolveTraversal(cwd, input.traversal ?? 'auto');
+    if (resolved.workspace) {
+      // pln#631 PR2 — root-aggregated brief across the per-project stores (per-store
+      // HEAD drift resolved against ONE workspace HEAD, like aggregateFind).
+      const currentHead = this.gitHeadReader(resolved.root);
+      const agg = aggregateBrief(input.target, input.limit, resolved, currentHead, this.memoryReader);
+      return {
+        target: agg.target,
+        suggested_files_to_read: agg.suggested_files_to_read,
+        related_memory: agg.related_memory,
+        freshness_badge: agg.freshness_badge,
+      };
+    }
     const ctx = this.queryContext(input);
     const out = runBrief(input.target, input.limit, ctx, this.memoryReader);
     const manifest = readManifest(input.cwd, input.preferredDirName);
-    const base: FreshnessBadge = {
-      status: out.freshness_badge.status,
-      details: out.freshness_badge.details,
-    };
+    const base: FreshnessBadge = badge(out.freshness_badge.status, out.freshness_badge.details);
     return {
       target: out.target,
       suggested_files_to_read: out.suggested_files_to_read,

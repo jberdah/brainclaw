@@ -19,13 +19,245 @@
  * here imports harvest or review-loop-close, so no import cycle is introduced.
  */
 import { createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment } from './claims.js';
-import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
+import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId, loadAssignment } from './assignments.js';
 import { turn } from './loops/verbs.js';
+import { getLoop } from './loops/store.js';
 import { generateDispatchBrief } from './dispatcher.js';
 import { sendMessage } from './messaging.js';
 import { buildInvokeCommand, resolveModel } from './agent-capability.js';
 import { attemptExecution } from './execution.js';
+import type { TurnEcho } from './execution-adapters.js';
+import { createAgentRun, loadAgentRun, transitionAgentRun } from './agentruns.js';
+import {
+  reserve, commitReservation, armLaunch, consumeLaunchGrant, launchGrant,
+  deriveTurnId, deriveChildIds, ReservationStateError, LaunchFenceError,
+} from './loops/attempt-reservation.js';
 import type { LoopSlot } from './loops/types.js';
+
+/**
+ * pln#630 — gate for the turn-owned (exactly-once) review dispatch path.
+ *
+ * NOW DEFAULT ON (the shipped default): the finalization (PR3a), autonomous fix-cycle (PR3b),
+ * strand self-heal (PR4), and revoked-grant recovery (R1) are all merged; the §9 conformance
+ * harness + a live end-to-end (real spawn → turn-keyed sentinel → harvest → reconcileTurn →
+ * close-on-approve) validated the path. `BRAINCLAW_TURN_OWNED_REVIEW=0` is the explicit
+ * KILL-SWITCH that reverts to the legacy closer (byte-identical) if a problem surfaces in prod.
+ * Note the routing is doubly-gated: even ON, harvest only reconcile-turns a lane that OWNS a
+ * turn reservation — a legacy-dispatched lane (no reservation) still uses the legacy path.
+ */
+export function turnOwnedReviewEnabled(): boolean {
+  // Normalized kill-switch (review Finding 4): any of 0/false/off/no (case/space-insensitive)
+  // disables — so an operator reaching for it under pressure can't mis-set it. Anything else
+  // (including unset) keeps the shipped default ON.
+  const v = (process.env.BRAINCLAW_TURN_OWNED_REVIEW ?? '').trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(v);
+}
+
+/** GRANT lease: bounds ONE launch generation's reserve→arm→consume→spawn→run-`running`
+ *  window. Long enough that a genuinely launching worker never expires under the PR2c-lease
+ *  pre-run reconciler; a live `running` run is out of that reconciler's scope. */
+const TURN_OWNED_LEASE_MS = 10 * 60_000;
+/** DISPATCH lease: how long the committed RESERVATION stays re-dispatchable. Strictly LONGER
+ *  than the grant lease (pln#630 dec#149 R1 / review Finding 1): a reserved_never_launched
+ *  round (grant lease expired → the reconciler revokes the grant) then still has a RECOVERY
+ *  WINDOW to re-arm a fresh generation before the reservation itself expires. armLaunch
+ *  enforces this bound, so a re-dispatch past it refuses arm and stays correctly stranded —
+ *  no phantom-spawn-after-lease. Decoupling the two is what makes R1 recovery actually reachable
+ *  (with a single shared lease, the grant is revoked exactly when the dispatch lease is already
+ *  expired, so re-arm was always denied). */
+const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
+
+/**
+ * The outcome of preparing a turn-owned attempt (dec#144). `legacy` = fail-open
+ * BEFORE identity was reserved → the caller runs the unchanged legacy path.
+ * `denied` = the exactly-once fence said this dispatch is NOT the spawner
+ * (adopted / crossed / revoked / lease-expired) → the caller MUST NOT spawn and
+ * MUST NOT fall back to legacy (that would double-spawn beside the live
+ * reservation). `won` = this dispatch crossed the fence → spawn with `turnEcho`.
+ */
+type TurnOwnedPrep =
+  | { kind: 'legacy' }
+  | { kind: 'denied'; reason: string }
+  | { kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string };
+
+export interface PrepareTurnOwnedReviewInput {
+  loopId: string;
+  slotId: string;
+  agent: string;
+  agentId?: string;
+  phase: string;
+  task: string;
+  description: string;
+  scope: string;
+  claimId: string;
+  worktreePath?: string;
+  dispatcherAgent: string;
+  dispatcherAgentId?: string;
+  sessionId?: string;
+  isReviewer: boolean;
+  cwd: string;
+}
+
+/**
+ * Prepare a turn-owned review dispatch (pln#630 PR2c-b, design dec#144). Runs the
+ * exactly-once machine INLINE in the coordinator (which has store access, unlike
+ * the sandboxed worktree — trp_26e9634b): deterministic turn_id → reserve/adopt →
+ * commit → arm/adopt → consume, spawning ONLY on the winning consume.
+ *
+ * FAIL-CLOSED after `reserve`: once identity is claimed, any error aborts as
+ * `denied` (never legacy) so an ungated legacy worker can never spawn beside a
+ * live reservation (the adversarial double-spawn hole, dec#144 MUST-FIX 1). Only
+ * a failure BEFORE identity is reserved degrades to `legacy`.
+ */
+export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInput): TurnOwnedPrep {
+  const { loopId, slotId, claimId, cwd } = input;
+
+  // ── Snapshot the loop BEFORE turn() bumps its version (dec#139 item 3). ──
+  let iteration: number;
+  let version: number;
+  try {
+    const thread = getLoop(loopId, cwd);
+    if (!thread) return { kind: 'legacy' }; // loop not found — pre-identity, safe to degrade
+    iteration = thread.iteration_count;
+    version = thread.version;
+  } catch {
+    return { kind: 'legacy' };
+  }
+
+  const turnId = deriveTurnId(loopId, slotId, iteration);
+  const { assignment_id: assignmentId, run_id: runId } = deriveChildIds(turnId);
+  // Decoupled leases (dec#149 R1): the reservation dispatch lease is longer than each grant's
+  // lease, giving a revoked (reserved_never_launched) round a window to re-arm. reserve() adopts
+  // on a re-dispatch, so the ORIGINAL (longer) dispatch lease governs re-arm eligibility.
+  const dispatchLease = new Date(Date.now() + TURN_OWNED_DISPATCH_LEASE_MS).toISOString();
+  const grantLease = new Date(Date.now() + TURN_OWNED_LEASE_MS).toISOString();
+
+  // ── Phase 1: claim identity. Fail-OPEN allowed ONLY here (nothing reserved yet). ──
+  try {
+    reserve({
+      turn_id: turnId,
+      loop_id: loopId,
+      slot_id: slotId,
+      target_slot_generation: iteration, // LoopSlot has no generation field — observational proxy (dec#144 #8)
+      loop_version_at_reserve: version,
+      agent: input.agent,
+      agent_id: input.agentId,
+      claim_id: claimId,
+      phase: input.phase,
+      iteration,
+      store_root: cwd,
+      cwd,
+      lease_deadline: dispatchLease,
+    }, cwd);
+  } catch (err) {
+    if (err instanceof ReservationStateError && err.code === 'reservation_exists') {
+      // A concurrent dispatch already OWNS this turn_id — adopt it and fall
+      // through to the fail-closed consume path (we may still legitimately win
+      // the fence if the owner reserved-but-never-crossed; otherwise denied).
+    } else {
+      // FAIL-CLOSED (review Finding 1): any other reserve outcome is
+      // INDETERMINATE — a lock timeout (a live holder mid-critical-section),
+      // lock-lost, or unknown error does NOT prove that no identity was claimed.
+      // Degrading to `legacy` here would spawn an ungated worker beside a
+      // reservation that may well exist — the exact concurrent-dispatch
+      // double-spawn MUST-FIX 1 closes. (A definitively pre-identity error is
+      // unreachable here: the lease we build is always parseable, and
+      // loop-not-found is handled before reserve.)
+      return { kind: 'denied', reason: `reserve indeterminate — fail-closed (no legacy fallback): ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  // ── Phase 2: FAIL-CLOSED. Identity is reserved; never legacy-spawn from here. ──
+  try {
+    commitReservation(turnId, cwd);
+
+    // Arm-or-adopt the launch grant. Arm when none exists OR when a prior generation was
+    // REVOKED (reserved_never_launched — a crash between arm and consume, then the expiry
+    // sweep): re-arm a FRESH generation at a strictly-higher epoch so a revoked round becomes
+    // re-dispatchable (pln#630 dec#149 R1 strand recovery). armLaunch permits re-arming a
+    // revoked grant and still enforces the dispatch lease, so a lease-expired reservation
+    // refuses arm and stays correctly stranded (never a phantom-spawn-after-lease). A
+    // concurrent arm surfaces as `already_armed` → adopt the incumbent grant.
+    let grant = launchGrant(turnId, cwd);
+    if (!grant || grant.status === 'revoked') {
+      const priorEpoch = grant?.epoch ?? -1; // fresh → epoch 0 (unchanged); revoked → epoch+1
+      try {
+        armLaunch(turnId, { epoch: priorEpoch + 1, lease_deadline: grantLease }, cwd);
+      } catch (err) {
+        if (!(err instanceof LaunchFenceError && err.code === 'already_armed')) {
+          // dispatch_lease_expired / lease_invalid / not_committed / epoch_mismatch → do-not-spawn.
+          return { kind: 'denied', reason: `arm_refused: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      }
+      grant = launchGrant(turnId, cwd);
+    }
+    // A crossed grant = launch_attempted_unknown (worker already invoked, never re-spawn);
+    // still-revoked = re-arm refused (lease expired) → never-launch; absent → all do-not-spawn.
+    if (!grant || grant.status !== 'armed') {
+      return { kind: 'denied', reason: `launch_denied: grant is ${grant?.status ?? 'absent'} (not armed)` };
+    }
+
+    // Consume the grant — the atomic exactly-once SPAWN authority.
+    let wonTransition: boolean;
+    try {
+      ({ wonTransition } = consumeLaunchGrant(turnId, grant.token, grant.epoch, cwd));
+    } catch (err) {
+      return { kind: 'denied', reason: `launch_denied: consume refused (${err instanceof Error ? err.message : String(err)})` };
+    }
+    if (!wonTransition) {
+      // Adopted — another invocation crossed the fence. MUST NOT spawn.
+      return { kind: 'denied', reason: 'launch_denied: grant already crossed by a concurrent dispatch' };
+    }
+
+    // ── WON: this dispatch is the SOLE spawner. Bind slot + run to MY live claim
+    // (claimId), NOT the reservation's first-reserver claim (dec#144 #3) — else a
+    // recovery-winner would bind the slot to a dead claim and break complete_turn
+    // auth. Mints are idempotent (save overwrites, so guard on load). ──
+    if (!loadAssignment(assignmentId, cwd)) {
+      createAssignment({
+        id: assignmentId,
+        short_label: assignmentId,
+        claim_id: claimId,
+        agent: input.agent,
+        dispatcher_agent: input.dispatcherAgent,
+        dispatcher_session_id: input.sessionId,
+        scope: input.scope,
+        description: input.description,
+        tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
+      }, cwd);
+    }
+    if (!loadAgentRun(runId, cwd)) {
+      createAgentRun({
+        id: runId,
+        short_label: runId,
+        assignment_id: assignmentId,
+        claim_id: claimId,
+        agent: input.agent,
+        agent_id: input.agentId,
+        transport: 'cli_spawn',
+        status: 'created',
+        scope: input.scope,
+        description: input.description,
+        worktree_path: input.worktreePath,
+        tags: ['turn-owned', 'review', 'loop'],
+      }, cwd);
+    }
+    turn({
+      id: loopId,
+      slot_id: slotId,
+      actor: input.dispatcherAgentId ?? input.dispatcherAgent,
+      input: input.task,
+      turn_id: turnId,
+      assignment_id: assignmentId,
+      claim_id: claimId,
+    }, cwd);
+
+    return { kind: 'won', assignmentId, runId, turnId, nonce: grant.token };
+  } catch (err) {
+    // FAIL-CLOSED: identity reserved; degrade to denied, NEVER legacy.
+    return { kind: 'denied', reason: `turn-owned prep aborted after reserve: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
 
 /**
  * The structured signal a reviewer must emit in LANE-RESULT.json so harvest can
@@ -122,43 +354,102 @@ export async function dispatchReviewLoopTurn(
     result.worktree_path = claimResult.worktreePath;
 
     let assignmentId: string | undefined;
-    try {
-      const preId = generateAssignmentId(cwd);
-      const assignment = createAssignment(
+    let turnEcho: TurnEcho | undefined;
+    let runLegacyProjection = true;
+
+    // pln#630 — turn-owned (exactly-once) dispatch, now the DEFAULT + FAIL-CLOSED after
+    // reserve. Kill-switch off (BRAINCLAW_TURN_OWNED_REVIEW=0) → runLegacyProjection stays
+    // true and this branch is a byte-identical no-op (the legacy projection below runs).
+    if (turnOwnedReviewEnabled()) {
+      const prep = prepareTurnOwnedReviewDispatch({
+        loopId,
+        slotId: slot.slot_id,
+        agent,
+        agentId: slot.agent_id,
+        phase,
+        task: input.task,
+        description,
+        scope,
+        claimId: claimResult.claimId,
+        worktreePath: claimResult.worktreePath,
+        dispatcherAgent: input.dispatcherAgent,
+        dispatcherAgentId: input.dispatcherAgentId,
+        sessionId: input.sessionId,
+        isReviewer,
+        cwd,
+      });
+      if (prep.kind === 'denied') {
+        // The exactly-once fence says this dispatch is NOT the spawner (adopted /
+        // crossed / revoked / lease-expired). MUST NOT spawn AND MUST NOT fall back
+        // to legacy — a legacy spawn beside the live reservation is the double-spawn
+        // hole the fence exists to close (dec#144 MUST-FIX 1).
+        //
+        // Do NOT release the coordinator claim here (review Finding 2, round 2):
+        // createCoordinatorClaim dedups on scope+agent, so a same-turn concurrent
+        // dispatch SHARES one claim C1 — and claim-creation order is uncoupled from
+        // fence-crossing order (different locks), so the loser can be C1's creator
+        // while the WINNER merely reused it and bound its slot/run/assignment to C1.
+        // releaseClaim() runs unauthenticated with no active-binding guard, so ANY
+        // release in the denied path can flip a claim a live winner depends on to
+        // `released` (re-opening the slot.claim_id divergence MUST-FIX 3 closed). A
+        // genuine orphan — the rare double-failure where no dispatch wins — is
+        // low-harm and reaped by the claim staleness sweep (auto_release_after_hours);
+        // sabotaging a live winner is high-harm and not self-healing. So we leave it.
+        result.execution_status = 'inbox_only';
+        result.error = prep.reason;
+        return result;
+      }
+      if (prep.kind === 'won') {
+        // Deterministic assignment mint + slot binding already happened inside
+        // prepare; skip the legacy projection and carry the turn-keyed echo so the
+        // ack-wrapper writes a turn-keyed completion sentinel.
+        assignmentId = prep.assignmentId;
+        result.assignment_id = prep.assignmentId;
+        turnEcho = { turn_id: prep.turnId, run_id: prep.runId, nonce: prep.nonce };
+        runLegacyProjection = false;
+      }
+      // prep.kind === 'legacy' (fail-open BEFORE identity) → fall through unchanged.
+    }
+
+    if (runLegacyProjection) {
+      try {
+        const preId = generateAssignmentId(cwd);
+        const assignment = createAssignment(
+          {
+            id: preId.id,
+            short_label: preId.short_label,
+            claim_id: claimResult.claimId,
+            agent,
+            dispatcher_agent: input.dispatcherAgent,
+            dispatcher_session_id: input.sessionId,
+            scope,
+            description,
+            tags: ['coordinate', 'review', 'loop', isReviewer ? 're-review' : 'author-fix'],
+          },
+          cwd,
+        );
+        assignmentId = assignment.id;
+        result.assignment_id = assignment.id;
+      } catch (asgErr) {
+        result.error = `assignment creation failed: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`;
+      }
+
+      // Bind the slot to the new claim/assignment (PR1 BLOCKING 2 invariant): a
+      // later harvest must resolve THIS slot by assignment_id, not by agent name
+      // (which is ambiguous under symmetric multi-reviewer loops). Runs even if
+      // assignment creation failed (undefined id → legacy agent-match fallback).
+      turn(
         {
-          id: preId.id,
-          short_label: preId.short_label,
+          id: loopId,
+          slot_id: slot.slot_id,
+          actor: input.dispatcherAgentId ?? input.dispatcherAgent,
+          input: input.task,
+          assignment_id: assignmentId,
           claim_id: claimResult.claimId,
-          agent,
-          dispatcher_agent: input.dispatcherAgent,
-          dispatcher_session_id: input.sessionId,
-          scope,
-          description,
-          tags: ['coordinate', 'review', 'loop', isReviewer ? 're-review' : 'author-fix'],
         },
         cwd,
       );
-      assignmentId = assignment.id;
-      result.assignment_id = assignment.id;
-    } catch (asgErr) {
-      result.error = `assignment creation failed: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`;
     }
-
-    // Bind the slot to the new claim/assignment (PR1 BLOCKING 2 invariant): a
-    // later harvest must resolve THIS slot by assignment_id, not by agent name
-    // (which is ambiguous under symmetric multi-reviewer loops). Runs even if
-    // assignment creation failed (undefined id → legacy agent-match fallback).
-    turn(
-      {
-        id: loopId,
-        slot_id: slot.slot_id,
-        actor: input.dispatcherAgentId ?? input.dispatcherAgent,
-        input: input.task,
-        assignment_id: assignmentId,
-        claim_id: claimResult.claimId,
-      },
-      cwd,
-    );
 
     // Reviewer turns must carry the verdict contract; author-fix turns must not
     // (an author lane has no verdict — it's mapped by scope+slot instead).
@@ -227,11 +518,23 @@ export async function dispatchReviewLoopTurn(
       dispatcherAgentId: input.dispatcherAgentId,
       cwd,
       requireWorktree: true, // never spawn a worker in the integration repo (pln#531)
+      turnEcho, // pln#630 PR2c-b — undefined on the legacy path (wrapper unchanged)
     });
     result.execution_status = execResult.execution_status;
     result.command = execResult.command;
     result.shell = execResult.shell;
     if (execResult.error && !result.error) result.error = execResult.error;
+
+    // pln#630 PR2c-b — a turn-owned run was preallocated `created`; once the
+    // worker actually spawned, move it to `running` so it leaves the PR2c-lease
+    // pre-run lease scope (created/launching) and is governed by the heartbeat
+    // reconciler instead. If it did NOT start, leave it `created` → the pre-run
+    // reconciler converges it (crossed → launch_attempted_unknown) at lease.
+    if (turnEcho && execResult.execution_status === 'delivered_and_started') {
+      try {
+        transitionAgentRun(turnEcho.run_id, 'running', { actor: input.dispatcherAgent, status_reason: 'turn-owned worker spawned' }, cwd);
+      } catch { /* best-effort — the reconciler converges if this races */ }
+    }
 
     return result;
   } catch (err) {

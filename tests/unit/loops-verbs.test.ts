@@ -146,6 +146,18 @@ describe('loops verbs — turn / complete_turn', () => {
     assert.equal(last.kind, 'turn_assigned');
   });
 
+  it('turn stamps current_turn_id when provided; leaves it unset for legacy turns (pln#630 PR2c)', () => {
+    const loop = openReview(cwd);
+    const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;
+    const owned = turn({ id: loop.id, slot_id: reviewerSlotId, assignment_id: 'asg_o', turn_id: 'tat_owned1', actor: 'agt_test' }, cwd);
+    assert.equal(owned.slots.find((s) => s.slot_id === reviewerSlotId)!.current_turn_id, 'tat_owned1');
+
+    const legacy = openReview(cwd);
+    const legacySlot = legacy.slots.find((s) => s.role === 'reviewer')!.slot_id;
+    const afterLegacy = turn({ id: legacy.id, slot_id: legacySlot, assignment_id: 'asg_l', actor: 'agt_test' }, cwd);
+    assert.equal(afterLegacy.slots.find((s) => s.slot_id === legacySlot)!.current_turn_id, undefined);
+  });
+
   it('complete_turn flips slot to done and attaches an artifact', () => {
     const loop = openReview(cwd);
     const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;

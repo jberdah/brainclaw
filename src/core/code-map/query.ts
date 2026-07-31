@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { hashContent } from './extractor.js';
+import { coarseFreshness } from './freshness.js';
 import {
   readImportsIndex,
   readManifest,
@@ -36,7 +37,7 @@ export const LAZY_BUDGET = {
   maxWallMs: 2500,
 } as const;
 
-interface LazyChecker {
+export interface LazyChecker {
   /** Per-query budget config. */
   readonly budget: { maxFilesChecked: number; maxWallMs: number };
   /** Wall clock start of this query (for max_wall_ms). */
@@ -56,7 +57,7 @@ interface LazyChecker {
  * per-path memoization so a brief() that touches one file from several ranking
  * signals spends a single budget slot.
  */
-function makeLazyChecker(
+export function makeLazyChecker(
   budget: { maxFilesChecked: number; maxWallMs: number } = LAZY_BUDGET,
 ): LazyChecker {
   return {
@@ -80,7 +81,7 @@ function budgetExhausted(checker: LazyChecker): boolean {
 }
 
 /** Reasons attached to the response badge details. */
-interface FreshnessAccumulator {
+export interface FreshnessAccumulator {
   staleChangedPaths: Set<string>;
   missingPaths: Set<string>;
   /** Could not validate this path. Superset that includes `budgetSkippedPaths`. */
@@ -94,7 +95,7 @@ interface FreshnessAccumulator {
   budgetSkippedPaths: Set<string>;
 }
 
-function newAccumulator(): FreshnessAccumulator {
+export function newAccumulator(): FreshnessAccumulator {
   return {
     staleChangedPaths: new Set(),
     missingPaths: new Set(),
@@ -118,7 +119,16 @@ function validateEntry(
   cwd: string | undefined,
   preferredDirName: string | undefined,
 ): boolean {
-  const cached = checker.memo.get(entry.path);
+  // pln#631 — memo key scoped by the store's cwd. Two collision hazards must both be
+  // avoided when a shared checker spans a workspace: keying by PATH collides two
+  // packages' same-named `src/index.ts`; keying by file_id ALONE collides when two
+  // stores share a project_id (the `prj_${basename}` fallback, or a copied
+  // `.brainclaw/config.yaml`) — file_id = sha256(project_id + rel_path), so a shared
+  // id makes the file_id identical too (review F1). Scoping by the store's cwd (unique
+  // per store) is collision-proof either way; single-store keeps cwd constant, so
+  // behavior is identical to before.
+  const memoKey = `${cwd ?? ''} ${entry.file_id}`;
+  const cached = checker.memo.get(memoKey);
   if (cached !== undefined) return cached;
 
   const abs = path.join(projectRoot, entry.path);
@@ -127,19 +137,19 @@ function validateEntry(
     stat = fs.statSync(abs);
   } catch {
     acc.missingPaths.add(entry.path); // §6.1.2 — deletion.
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   const shard = readShard(entry.file_id, cwd, preferredDirName);
   if (!shard) {
     // No backing shard to compare against — treat as unchecked, not confident.
     acc.uncheckedPaths.add(entry.path);
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   // §6.1.3 — cheap gate: mtime + size match => fresh for this read.
   if (stat.mtimeMs === shard.mtime_ms && stat.size === shard.size_bytes) {
-    checker.memo.set(entry.path, true);
+    checker.memo.set(memoKey, true);
     return true;
   }
   // §6.1.4/§6.1.6 — gate tripped: hash only when within budget AND not oversized.
@@ -148,13 +158,13 @@ function validateEntry(
   // `partial`. Keep them separable so the badge reason is accurate.
   if (stat.size > maxParseFileBytes) {
     acc.uncheckedPaths.add(entry.path); // structurally unverifiable, not budget.
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   if (budgetExhausted(checker)) {
     acc.uncheckedPaths.add(entry.path);
     acc.budgetSkippedPaths.add(entry.path);
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   checker.filesChecked++;
@@ -163,16 +173,36 @@ function validateEntry(
     live = fs.readFileSync(abs, 'utf-8');
   } catch {
     acc.uncheckedPaths.add(entry.path);
-    checker.memo.set(entry.path, false);
+    checker.memo.set(memoKey, false);
     return false;
   }
   if (hashContent(live) === shard.file_hash) {
-    checker.memo.set(entry.path, true); // §6.1 — identical despite mtime touch.
+    checker.memo.set(memoKey, true); // §6.1 — identical despite mtime touch.
     return true;
   }
   acc.staleChangedPaths.add(entry.path); // §6.1.5 — confirmed content change.
-  checker.memo.set(entry.path, false);
+  checker.memo.set(memoKey, false);
   return false;
+}
+
+/**
+ * pln#631 PR3 — validate a single file entry against a SPECIFIC store's live tree
+ * (resolves that store's root + parse budget from its manifest). Lets the cross-package
+ * scan lazy-validate importer rows from a sibling store and drop deleted/stale ones,
+ * upholding the same "no silent stale graph hints" rule intra-package graph rows obey.
+ * Shares the caller's checker (one budget) + records into the caller's acc.
+ */
+export function validateStoreEntry(
+  entry: { path: string; file_id: string },
+  checker: LazyChecker,
+  acc: FreshnessAccumulator,
+  cwd: string | undefined,
+  preferredDirName: string | undefined,
+): boolean {
+  const manifest = readManifest(cwd, preferredDirName);
+  const root = manifest?.project_root ?? cwd ?? process.cwd();
+  const maxBytes = manifest?.extractor_config.max_parse_file_bytes ?? 1024 * 1024;
+  return validateEntry(entry, checker, acc, root, maxBytes, cwd, preferredDirName);
 }
 
 /**
@@ -182,7 +212,7 @@ function validateEntry(
  * Precedence: an exhausted budget yields `partial`; otherwise any detected
  * change/deletion yields `stale_changed_files`; else the manifest base status.
  */
-function deriveBadge(
+export function deriveBadge(
   base: FreshnessStatus,
   acc: FreshnessAccumulator,
   budgetExhausted: boolean,
@@ -230,7 +260,7 @@ function deriveBadge(
   // <index_status>, this call's spot-check <status>".
   if (status !== base) details.index_status = base;
   void hadConfidentMatch;
-  return { status, details };
+  return { status, coarse: coarseFreshness(status), details };
 }
 
 // --- find() (spec §12.1) ---
@@ -274,20 +304,68 @@ function queryTokens(query: string): string[] {
 }
 
 /**
- * Score a symbol index entry against the query. Exact (full-query) token match
- * scores highest; a prefix/substring match scores lower. Exported symbols and
- * components/hooks get a small boost (these are what agents most want to find).
+ * pln#601 — normalize an identifier to a separator/case-INSENSITIVE canonical
+ * form (strip `_`, `-`, `.`, camelCase boundaries collapse to nothing; lowercase).
+ * `EntityRegistry`, `ENTITY_REGISTRY`, and `entity-registry` all → `entityregistry`.
+ * Without this, `scoreEntry` compared raw-lowercased strings, so a Pascal-case
+ * query `EntityRegistry` failed to exact/prefix/substring-match the snake_case
+ * `ENTITY_REGISTRY` and dropped it to the sub-token floor (score 1) alongside 19
+ * unrelated `*Registry` symbols — the Fable-audit "all results score 1 → the agent
+ * re-greps" defect that undercuts the whole "stop grepping blind" value prop.
  */
-function scoreEntry(entry: SymbolIndexEntry, query: string): number {
-  const q = query.toLowerCase();
-  const name = entry.name.toLowerCase();
+function normIdent(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * pln#601 — a path that is a test/spec file (its symbols must not outrank the real
+ * def, and it should not crowd source out of a brief). Recognizes conventions across
+ * ALL supported languages (JS/TS + py/php/java/go/rust/c#/ruby/c/c++), so the
+ * source-over-test bias actually works for the polyglot langs, not just JS/TS.
+ * Exported for the classification regression tests.
+ */
+export function isTestPath(p: string): boolean {
+  // Directory conventions (all langs): tests/, test/, __tests__/, spec(s)/ (Ruby
+  // RSpec), __mocks__/. NOTE: a source dir literally named `spec/` (e.g. an OpenAPI
+  // `spec/` folder) is an accepted false-positive — RSpec `spec/` is the commoner
+  // meaning now that Ruby is supported, and path alone can't disambiguate.
+  if (/(?:^|[\\/])(?:tests?|__tests__|specs?|__mocks__)[\\/]/i.test(p)) return true;
+  const base = p.replace(/\\/g, '/').split('/').pop() ?? p;
+  return (
+    // separator-suffixed: foo.test.ts, foo_test.go, foo-spec.js, foo_spec.rb, foo_test.py
+    /[._-](?:test|spec)\.(?:[cm]?[jt]sx?|py|rb|go|php|java|cs|rs)$/i.test(base) ||
+    // pytest / minitest prefix: test_foo.py, test_foo.rb
+    /^test_.+\.(?:py|rb)$/i.test(base) ||
+    // bare test/spec file: test.ts, spec.rb
+    /^(?:test|spec)\.(?:[cm]?[jt]sx?|py|rb|go)$/i.test(base) ||
+    // xUnit / JUnit PascalCase suffix: FooTest.cs, BarTests.cs, BazTest.java
+    // (case-SENSITIVE capital T so `contest.cs` / `latest.cs` are not false hits)
+    /Tests?\.(?:cs|java)$/.test(base)
+  );
+}
+
+/**
+ * Score a symbol index entry against the query. Matching is separator/case
+ * INSENSITIVE (pln#601): an exact NORMALIZED match scores highest, then prefix,
+ * then substring, then the sub-token floor. Exported symbols + components/hooks
+ * get a small boost; test-file symbols are biased DOWN so a test helper never
+ * outranks the real definition of the same name (the Fable-audit brief-noise
+ * companion to the find defect). Exported for focused ranking tests.
+ */
+export function scoreEntry(entry: SymbolIndexEntry, query: string): number {
+  const q = normIdent(query);
+  const name = normIdent(entry.name);
   let score = 0;
-  if (name === q) score += 10;
-  else if (name.startsWith(q)) score += 6;
-  else if (name.includes(q)) score += 3;
-  else score += 1; // matched only via a sub-token bucket
+  if (q.length === 0) score += 1;
+  else if (name === q) score += 10;         // exact, style-insensitive
+  else if (name.startsWith(q)) score += 6;  // prefix
+  else if (name.includes(q)) score += 3;    // substring
+  else score += 1;                          // matched only via a sub-token bucket
   score *= entry.score_hint; // exported (1.0) vs internal (0.8)
   if (entry.subtype === 'component' || entry.subtype === 'hook') score += 1;
+  // pln#601 — source over test: a test/spec symbol of the same name must not
+  // outrank the real definition (keeps find/brief pointing at source first).
+  if (isTestPath(entry.path)) score *= 0.4;
   return score;
 }
 
@@ -323,35 +401,47 @@ function gatherSymbolEntries(index: SymbolsIndex, query: string): SymbolIndexEnt
   return out;
 }
 
-export function find(query: string, limit: number | undefined, ctx: QueryContext): FindOutput {
-  const base = baseStatus(ctx);
+/** Store-local find CORE result (pln#631) — pre-cap, pre-badge. */
+export interface StoreFindResult {
+  /** Confident matches, score-sorted (NOT capped). */
+  matches: FindMatch[];
+  /** This store's base manifest freshness status. */
+  base: FreshnessStatus;
+  /** False when the store has no symbols index (missing_index). */
+  hasIndex: boolean;
+  /** True when zero candidate symbols were gathered (drives the refresh hint). */
+  emptyCandidates: boolean;
+  /** The per-store lazy-check outcomes (for badge merging by the aggregator). */
+  acc: FreshnessAccumulator;
+}
+
+/**
+ * Store-local find CORE (pln#631): gather → lazy-validate → score → sort, with NO
+ * cap and NO badge. Accepts an INJECTED checker + acc so a workspace aggregation can
+ * share ONE lazy budget across stores (the checker's memo is file_id-keyed, unique
+ * per store, so sharing never collides same-named files across packages). `find()`
+ * wraps this with a fresh checker/acc + cap + badge for the unchanged single-store
+ * path; `aggregate.ts` fans it out across stores with a shared checker.
+ */
+export function findInStore(
+  query: string,
+  ctx: QueryContext,
+  checker: LazyChecker,
+  acc: FreshnessAccumulator,
+): StoreFindResult {
   const index = readSymbolsIndex(ctx.cwd, ctx.preferredDirName);
   if (!index) {
-    return {
-      query,
-      matches: [],
-      freshness_badge: { status: 'missing_index', details: { hint: 'run refresh' } },
-    };
+    return { matches: [], base: 'missing_index', hasIndex: false, emptyCandidates: true, acc };
   }
-
+  const base = baseStatus(ctx);
   const root = resolveRoot(ctx);
   const maxBytes = maxParseBytes(ctx);
-  const checker = makeLazyChecker();
-  const acc = newAccumulator();
 
   const candidates = gatherSymbolEntries(index, query);
   const ranked: FindMatch[] = [];
   for (const entry of candidates) {
     // §6.1 — lazy validate before serving as confident.
-    const confident = validateEntry(
-      entry,
-      checker,
-      acc,
-      root,
-      maxBytes,
-      ctx.cwd,
-      ctx.preferredDirName,
-    );
+    const confident = validateEntry(entry, checker, acc, root, maxBytes, ctx.cwd, ctx.preferredDirName);
     if (!confident) continue;
     ranked.push({
       node_id: entry.node_id,
@@ -363,13 +453,25 @@ export function find(query: string, limit: number | undefined, ctx: QueryContext
       score: scoreEntry(entry, query),
     });
   }
-
   ranked.sort(
     (a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.name.localeCompare(b.name),
   );
-  const capped = ranked.slice(0, limit ?? DEFAULT_FIND_LIMIT);
+  return { matches: ranked, base, hasIndex: true, emptyCandidates: candidates.length === 0, acc };
+}
 
-  const badge = deriveBadge(base, acc, checker.exhausted, capped.length > 0, candidates.length === 0);
+export function find(query: string, limit: number | undefined, ctx: QueryContext): FindOutput {
+  const checker = makeLazyChecker();
+  const acc = newAccumulator();
+  const r = findInStore(query, ctx, checker, acc);
+  if (!r.hasIndex) {
+    return {
+      query,
+      matches: [],
+      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
+    };
+  }
+  const capped = r.matches.slice(0, limit ?? DEFAULT_FIND_LIMIT);
+  const badge = deriveBadge(r.base, acc, checker.exhausted, capped.length > 0, r.emptyCandidates);
   return { query, matches: capped, freshness_badge: badge };
 }
 
@@ -460,7 +562,7 @@ export interface BriefOutput {
 /** spec §9 — the brief reading list is capped at 12 files. */
 export const BRIEF_FILE_CAP = 12;
 
-interface RankedFile {
+export interface RankedFile {
   path: string;
   file_id: string;
   reason: string;
@@ -570,6 +672,44 @@ function rankFiles(
   );
 }
 
+/**
+ * pln#601 — reserve most of the §9 reading list for SOURCE files. On a symbol with
+ * many test importers, the reverse-dependent test files (blast radius, +5 each) can
+ * fill the entire {@link BRIEF_FILE_CAP} and crowd out the source files an agent needs
+ * to understand the symbol — the Fable-audit brief-noise defect. At most `maxTest`
+ * test files (~1/4 of the cap, min 2) are admitted UNLESS there aren't enough non-test
+ * files to fill the cap, in which case the deferred tests backfill the empty slots so
+ * the list is never artificially short. Defining files ARE the target and are never
+ * counted as noise (a symbol legitimately defined in a test file still leads the list).
+ * Input is pre-sorted by score; output preserves that order within each bucket.
+ */
+export function reserveSourceSlots(
+  ranked: RankedFile[],
+  cap: number,
+  definingPaths: Set<string>,
+): RankedFile[] {
+  const maxTest = Math.max(2, Math.floor(cap / 4)); // e.g. 3 of 12
+  const out: RankedFile[] = [];
+  const overflowTests: RankedFile[] = [];
+  let testsIncluded = 0;
+  for (const rf of ranked) {
+    if (out.length >= cap) break;
+    const isNoise = isTestPath(rf.path) && !definingPaths.has(rf.path);
+    if (isNoise && testsIncluded >= maxTest) {
+      overflowTests.push(rf);
+      continue;
+    }
+    out.push(rf);
+    if (isNoise) testsIncluded++;
+  }
+  // Non-test ran out before the cap → backfill the empty slots with deferred tests.
+  for (const rf of overflowTests) {
+    if (out.length >= cap) break;
+    out.push(rf);
+  }
+  return out;
+}
+
 /** Build a node-id → symbol index entry map (deduped; entries repeat across token buckets). */
 function buildNodeIdIndex(symbolsIndex: SymbolsIndex): Map<string, SymbolIndexEntry> {
   const out = new Map<string, SymbolIndexEntry>();
@@ -671,53 +811,87 @@ function filesMatchingPath(symbolsIndex: SymbolsIndex, target: string): SymbolIn
   return out;
 }
 
-export function brief(
+/** How a brief resolved its target within a store (drives cross-store selection). */
+export type BriefMatchKind = 'exact' | 'path' | 'fuzzy' | 'none';
+
+/** Store-local brief CORE result (pln#631 PR2) — pre-cap, pre-badge, pre-memory. */
+export interface StoreBriefResult {
+  /** Defining symbol entries for the target in this store. */
+  defining: SymbolIndexEntry[];
+  definingPaths: Set<string>;
+  /** How the target resolved here — an aggregation prefers exact/path over fuzzy. */
+  matchKind: BriefMatchKind;
+  /** Confident ranked reading list (NOT capped). */
+  confident: RankedFile[];
+  base: FreshnessStatus;
+  hasIndex: boolean;
+  /** True when rankFiles produced nothing (drives the deriveBadge empty hint). */
+  emptyRanked: boolean;
+  acc: FreshnessAccumulator;
+}
+
+/**
+ * Store-local brief CORE (pln#631 PR2): resolve the target → graph signals →
+ * rankFiles → confident list, with NO cap, NO badge, NO related-memory attach.
+ * Accepts an INJECTED checker + acc so a workspace aggregation can share ONE lazy
+ * budget across stores (memo is cwd-scoped, so sharing is collision-safe). `brief()`
+ * wraps this with a fresh checker/acc + reserve + memory + badge for the unchanged
+ * single-store path; `aggregate.ts` fans it out and merges target-defining stores.
+ */
+export function briefInStore(
   target: string,
-  limit: number | undefined,
   ctx: QueryContext,
-  memoryReader: MemoryReader,
-): BriefOutput {
-  const base = baseStatus(ctx);
+  checker: LazyChecker,
+  acc: FreshnessAccumulator,
+): StoreBriefResult {
   const symbolsIndex = readSymbolsIndex(ctx.cwd, ctx.preferredDirName);
   if (!symbolsIndex) {
     return {
-      target,
-      suggested_files_to_read: [],
-      related_memory: [],
-      freshness_badge: { status: 'missing_index', details: { hint: 'run refresh' } },
+      defining: [],
+      definingPaths: new Set(),
+      matchKind: 'none',
+      confident: [],
+      base: 'missing_index',
+      hasIndex: false,
+      emptyRanked: true,
+      acc,
     };
   }
+  const base = baseStatus(ctx);
   const importsIndex = readImportsIndex(ctx.cwd, ctx.preferredDirName);
   const resolutionIndex = readResolutionIndex(ctx.cwd, ctx.preferredDirName);
 
   // Resolve target -> defining symbol entries. A brief orients on a SPECIFIC target,
   // so prefer EXACT name matches when present — otherwise the token index floods the
-  // result with unrelated same-token symbols (e.g. `resolveProjectImports` would pull
-  // in every `resolve*`), burying the real defining file + its graph signals. Fall
-  // back to the fuzzy token set, then to a path match. (find() stays fuzzy by design.)
+  // result with unrelated same-token symbols. Fall back to the fuzzy token set, then
+  // a path match. `matchKind` records which path won so an aggregation can prefer the
+  // stores that actually DEFINE the target over stores that only fuzzy-match a token.
   let defining: SymbolIndexEntry[];
+  let matchKind: BriefMatchKind;
   if (looksLikePathTarget(target)) {
-    // PATH target (pln#593 1b): resolve the exact file; the graph signals (its
-    // imports / dependents / direct tests) then rank below it via rankFiles. Skip
-    // the fuzzy token gather entirely — it floods a path brief with same-token
-    // noise. Degrade to the fuzzy set only if the path resolves to nothing indexed.
     defining = filesMatchingPath(symbolsIndex, target);
-    if (defining.length === 0) defining = gatherSymbolEntries(symbolsIndex, target);
+    if (defining.length > 0) matchKind = 'path';
+    else {
+      defining = gatherSymbolEntries(symbolsIndex, target);
+      matchKind = defining.length > 0 ? 'fuzzy' : 'none';
+    }
   } else {
     defining = gatherSymbolEntries(symbolsIndex, target);
     const exact = defining.filter((e) => e.name.toLowerCase() === target.toLowerCase());
-    if (exact.length > 0) defining = exact;
-    else if (defining.length === 0) defining = filesMatchingPath(symbolsIndex, target);
+    if (exact.length > 0) {
+      defining = exact;
+      matchKind = 'exact';
+    } else if (defining.length > 0) {
+      matchKind = 'fuzzy';
+    } else {
+      defining = filesMatchingPath(symbolsIndex, target);
+      matchKind = defining.length > 0 ? 'path' : 'none';
+    }
   }
 
   const root = resolveRoot(ctx);
   const maxBytes = maxParseBytes(ctx);
-  const checker = makeLazyChecker();
-  const acc = newAccumulator();
 
-  // P1d graph signals. FORWARD: read from defining shards — but only CONFIDENT ones
-  // (validate first; a stale importer shard's edge list is not trusted). REVERSE: from
-  // the resolution index (each importer row is lazy-validated below like any other).
   const definingPaths = new Set(defining.map((e) => e.path));
   const definingByNodeId = new Map(defining.map((e) => [e.node_id, e] as const));
   const confidentDefiningFileIds = new Map<string, string>();
@@ -734,39 +908,30 @@ export function brief(
 
   const ranked = rankFiles(defining, fwd, rev, symbolsIndex, importsIndex, target);
 
-  // §6.1 — lazy validate each suggested file; exclude deletions from the confident
-  // list (still recorded in the badge). P1d: a GRAPH-ONLY row that fails validation
-  // (stale / unchecked / deleted) is SUPPRESSED — no silent stale graph hints (Codex).
+  // §6.1 — lazy validate each suggested file; exclude deletions; suppress a graph-only
+  // row that fails validation (no silent stale graph hints).
   const confident: RankedFile[] = [];
   for (const rf of ranked) {
     const ok = validateEntry(
-      { path: rf.path, file_id: rf.file_id },
-      checker,
-      acc,
-      root,
-      maxBytes,
-      ctx.cwd,
-      ctx.preferredDirName,
+      { path: rf.path, file_id: rf.file_id }, checker, acc, root, maxBytes, ctx.cwd, ctx.preferredDirName,
     );
-    if (acc.missingPaths.has(rf.path)) continue; // deletion: exclude entirely.
-    if (rf.graphDerived && !ok) continue; // graph-only + not confident → suppress.
-    // Non-graph stale/unchecked rows still appear (badge flags them) so the agent
-    // knows the file exists but may be out of date.
+    if (acc.missingPaths.has(rf.path)) continue;
+    if (rf.graphDerived && !ok) continue;
     confident.push(rf);
   }
 
-  const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
-  const capped = confident.slice(0, cap);
+  return { defining, definingPaths, matchKind, confident, base, hasIndex: true, emptyRanked: ranked.length === 0, acc };
+}
 
-  // Related memory (spec §11): match by the candidate paths + symbol names.
-  const candidatePaths = capped.map((f) => f.path);
-  const symbolNames = [...new Set(defining.map((e) => e.name))];
-  if (symbolNames.length === 0) symbolNames.push(target);
-  const memoryItems = memoryReader(ctx);
-  const related = attachRelatedMemory(memoryItems, candidatePaths, symbolNames);
-
-  // Attach matching memory ids per file (those whose related_paths/text name it).
-  const suggested: BriefReadEntry[] = capped.map((f) => {
+/**
+ * Attach related-memory ids per reading-list entry (spec §11). Shared by the
+ * single-store brief() and the workspace aggregation so both surface memory identically.
+ */
+export function attachMemoryIds(
+  capped: Array<{ path: string; reason: string; score: number }>,
+  related: RelatedMemoryItem[],
+): BriefReadEntry[] {
+  return capped.map((f) => {
     const ids = related
       .filter((m) => {
         const fileNorm = f.path.replace(/\\/g, '/');
@@ -780,12 +945,37 @@ export function brief(
       .map((m) => m.id);
     return { path: f.path, reason: f.reason, score: f.score, related_memory_ids: ids };
   });
+}
 
-  const badge = deriveBadge(base, acc, checker.exhausted, capped.length > 0, ranked.length === 0);
-  return {
-    target,
-    suggested_files_to_read: suggested,
-    related_memory: related,
-    freshness_badge: badge,
-  };
+export function brief(
+  target: string,
+  limit: number | undefined,
+  ctx: QueryContext,
+  memoryReader: MemoryReader,
+): BriefOutput {
+  const checker = makeLazyChecker();
+  const acc = newAccumulator();
+  const r = briefInStore(target, ctx, checker, acc);
+  if (!r.hasIndex) {
+    return {
+      target,
+      suggested_files_to_read: [],
+      related_memory: [],
+      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
+    };
+  }
+
+  const cap = Math.min(limit ?? BRIEF_FILE_CAP, BRIEF_FILE_CAP);
+  // pln#601 — reserve source slots so test importers can't crowd out source files.
+  const capped = reserveSourceSlots(r.confident, cap, r.definingPaths);
+
+  // Related memory (spec §11): match by the candidate paths + symbol names.
+  const candidatePaths = capped.map((f) => f.path);
+  const symbolNames = [...new Set(r.defining.map((e) => e.name))];
+  if (symbolNames.length === 0) symbolNames.push(target);
+  const related = attachRelatedMemory(memoryReader(ctx), candidatePaths, symbolNames);
+  const suggested = attachMemoryIds(capped, related);
+
+  const badge = deriveBadge(r.base, acc, checker.exhausted, capped.length > 0, r.emptyRanked);
+  return { target, suggested_files_to_read: suggested, related_memory: related, freshness_badge: badge };
 }

@@ -265,7 +265,13 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:f3d49b28d2d366bb`
+- MCP public surface fingerprint: `sha256:8241fa50b8cb4805`
+  (updated 2026-07-25 for pln#632: `bclaw_loop` gains the `bind` intent — an
+  implementation loop dispatches its linked sequence and advances bind→execute — plus
+  its typed inputSchema properties `dry_run`, `lanes`, `auto_execute`, `model`, and
+  `max_assignments`. Additive — no tool added/removed/renamed; the new enum value + the
+  new properties move the fingerprint.)
+  Previous: `sha256:f3d49b28d2d366bb`
   (updated 2026-07-24 for pln#630 PR2b-a: `LoopSlotSchema` gains an optional
   `current_turn_id`, which flows through the zod-derived `LoopSlotInput` into
   `bclaw_loop`'s published inputSchema. Additive optional field; regenerates
