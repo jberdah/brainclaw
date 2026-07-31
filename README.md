@@ -44,7 +44,7 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 | **Project memory**               | constraints, decisions, traps, handoffs, and layered instructions agents can resume from                                                                                                            |
 | **Coordination state**           | shared plans, file claims (dispatched work isolated in Git Worktrees), runtime notes, and board views for active work                                                                                                 |
 | **Agent-ready context**          | compact, prompt-sized context built from real workspace state instead of stale instructions                                                                                                         |
-| **Code Map**                     | a Tree-sitter symbol + import index (JS/TS, Python, PHP, Java) so agents ask "where is X / what should I read first" before editing, with related decisions/traps attached — `bclaw_code_find` / `bclaw_code_brief`, see [code map](docs/code-map.md) |
+| **Code Map**                     | a Tree-sitter symbol + import index (11 languages — JS/TS, Python, PHP, Java, Go, Rust, C#, Ruby, C, C++) so agents ask "where is X / what should I read first" before editing, with related decisions/traps attached — `bclaw_code_find` / `bclaw_code_brief`, see [code map](docs/code-map.md) |
 | **Native agent files**           | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance                                                                         |
 | **Multi-turn loops**             | review and ideation loops with structured phases, iteration semantics, and per-phase memory filters — see[loop engine](docs/concepts/loop-engine.md) and [ideation loop](docs/concepts/ideation-loop.md) |
 | **Machine AI surface discovery** | detects local coding agents plus desktop AI work surfaces such as ChatGPT Desktop and Gemini CLI                                                                                                    |
@@ -55,7 +55,7 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 
 ## Code Map
 
-When an agent (or you) is about to edit unfamiliar code, the first question is *"where is this, and what should I read first?"* Code Map answers it without grepping: a per-project [Tree-sitter](https://tree-sitter.github.io/) index of the symbols each file defines (functions, classes, types, React components/hooks), what it imports/exports, and how files relate — across **JS / TS / TSX, Python, PHP, and Java**.
+When an agent (or you) is about to edit unfamiliar code, the first question is *"where is this, and what should I read first?"* Code Map answers it without grepping: a per-project [Tree-sitter](https://tree-sitter.github.io/) index of the symbols each file defines (functions, classes, types, React components/hooks), what it imports/exports, and how files relate — across **11 languages: JS / TS / TSX, Python, PHP, Java, Go, Rust, C#, Ruby, C, and C++**.
 
 ```bash
 brainclaw code-map find useAuth        # locate a symbol / component / hook by name
@@ -256,8 +256,8 @@ bclaw_coordinate({
 });
 
 // 4. The reviewer's verdict is harvested from its LANE-RESULT.json and the loop
-//    auto-closes on approve — no manual advance needed for the approve path.
-//    (bclaw_loop remains available to drive the request_changes fix cycle by hand.)
+//    auto-closes on approve; request_changes re-dispatches the fix cycle
+//    autonomously. (bclaw_loop remains available to inspect or drive by hand.)
 bclaw_loop({ intent: "get", loop_id: "lop_abc" }); // inspect status any time
 ```
 
@@ -270,7 +270,7 @@ Brainclaw's Loop Engine moves beyond manual ping-pong by formalizing multi-turn 
 
 Each loop maintains a structured lifecycle, explicit phases, iteration bounds, and per-phase memory filters, executed seamlessly via `bclaw_loop`.
 
-**Autonomous convergence (pln#628 Focus 4B):** a dispatched reviewer doesn't need to be driven by hand. It writes its verdict (`review_verdict: approve | request_changes`) into its `LANE-RESULT.json`; when the coordinator harvests the lane, brainclaw records the verdict on the loop and **auto-closes it on approve** — the review loop reaches `reviewer_green` with no human ping-pong. `request_changes` advances to the author phase (the automated fix→re-review cycle is a planned follow-up).
+**Autonomous convergence (pln#628 Focus 4B + pln#630):** a dispatched reviewer doesn't need to be driven by hand. It writes its verdict (`review_verdict: approve | request_changes`) into its `LANE-RESULT.json`; when the coordinator harvests the lane, brainclaw records the verdict on the loop and **auto-closes it on approve** — the review loop reaches `reviewer_green` with no human ping-pong. On `request_changes`, brainclaw **runs the fix→re-review cycle autonomously**: it bumps the round, retains the worktree, and re-dispatches — through an exactly-once turn-attempt state machine (immutable attempt records behind an atomic launch fence, on by default; kill-switch `BRAINCLAW_TURN_OWNED_REVIEW=0`) so a turn is never double-spawned, with a bounded round cap that lands on `blocked` instead of looping forever.
 
 ## Enterprise Ready: Mono-repo & Micro-services
 
