@@ -486,6 +486,29 @@ The three rules are independent: `hard_deadline` bounds pathological "heartbeat 
 - Execution loops (`implementation`) route by `claim_id` — preserved from the claim-routed model already in use.
 - `session_id` is not a routing key; it remains observability-only. This is consistent with `architecture_session_centric_identity` in memory.
 
+### Project resolution gate (pln#521 P1)
+
+`bclaw_coordinate(intent='review', open_loop=true)` resolves WHICH project the
+loop belongs to before it writes anything. A loop that lands in the wrong store
+persists a candidate, claim, assignment and loop where nobody is watching, and
+spawns the reviewer against the wrong repo.
+
+The ladder, in order: an explicit `project` argument; then any selector that
+already won upstream (`--cwd`, `BRAINCLAW_PROJECT`, a session switch, the
+physical child store, the workspace `active-project.json`); then the bare cwd
+fallback. The fallback is accepted in a single-project store — there is exactly
+one answer — and **refused** with `needs_project_selection` when the store can
+host several projects (`project_mode: multi-project`, or a `store_type: workspace`
+parent with nested project stores). The error lists the candidates and creates
+nothing; fix it by passing `project='<name>'` or by making the choice sticky with
+`bclaw_switch`. Ref, scope and path are never used to guess the project (B3
+rejected in `art_e29e88878209`: a wrong guess costs more than an explicit choice).
+
+Both `bclaw_coordinate` (open_loop reviews) and `bclaw_dispatch_status` echo the
+decision as `project_name` / `project_cwd`. `dispatch_status` additionally carries
+`_resolution_trace` (`source_cwd`, `effective_cwd`, `active_source`, `project_arg`)
+so a misroute can be diagnosed without reverse-engineering cwd and store state.
+
 ## Open questions (resolved / deferred)
 
 Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revision` → addressed in v8):
