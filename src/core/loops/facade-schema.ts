@@ -48,6 +48,14 @@ export const BclawLoopOpenSchema = z.object({
   linked: LoopLinksSchema.optional(),
   stop_condition: StopConditionSchema.optional(),
   mode: z.enum(REVIEW_MODES).optional(),
+  /** pln#632 — engine-run verify command (opener-provided). Argv array, run shell:false;
+   *  set once at open, drives the deterministic command_green gate via bclaw_loop(verify). */
+  verify: z
+    .object({
+      command: z.array(z.string().min(1)).min(1),
+      timeout_ms: z.number().int().positive().optional(),
+    })
+    .optional(),
   // Opt-in acknowledgement that the caller will drive dispatch manually.
   // Absent (or false) → handler rejects with a pointer to bclaw_coordinate,
   // because a loop opened without a follow-up turn/claim/inbox never runs.
@@ -157,6 +165,44 @@ export const BclawLoopCloseSchema = z.object({
 });
 
 /**
+ * pln#632 — `bclaw_loop(intent='verify')`: run the loop's opener-configured verify
+ * command (tests/build/lint) and record a deterministic `verify_report` for the current
+ * iteration. Does NOT advance. No command in the request — provenance is the loop's
+ * `protocol.verify`, never the caller (the determinism guarantee).
+ */
+export const BclawLoopVerifySchema = z.object({
+  intent: z.literal('verify'),
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  // No expected_version: runVerify is idempotent by (loop, iteration) via its own
+  // two-lock re-check, not optimistic-concurrency CAS (review F3).
+  ...CallerEnvelopeFields,
+});
+
+/**
+ * pln#632 — `bclaw_loop(intent='bind')`: the ENGINE action for an implementation loop's
+ * `bind` phase. Dispatches the loop's linked sequence (by id, no active-sequence hijack)
+ * and advances `bind → execute`. Idempotent (a loop past `bind` → noop). `dry_run`
+ * previews what would dispatch without spawning or advancing. Implementation loops only —
+ * review/ideation loops dispatch via bclaw_coordinate.
+ */
+export const BclawLoopBindSchema = z.object({
+  intent: z.literal('bind'),
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  /** Analyze + report what would dispatch; no spawn, no advance. */
+  dry_run: z.boolean().optional(),
+  /** Restrict the bind dispatch to specific lanes. */
+  lanes: z.array(z.string().min(1)).optional(),
+  /** Deliver briefs without spawning (→ manual launch commands). */
+  auto_execute: z.boolean().optional(),
+  /** Model override for the dispatched agents. */
+  model: z.string().min(1).optional(),
+  /** Cap assignments made in this bind. */
+  max_assignments: z.number().int().positive().optional(),
+  // No expected_version: bind is idempotent by loop phase (past `bind` → noop), not CAS.
+  ...CallerEnvelopeFields,
+});
+
+/**
  * pln#508 step 2 — `bclaw_loop(intent='request_input')`.
  *
  * A slot pauses on an operator question. The handler generates a fresh
@@ -227,6 +273,8 @@ export const BclawLoopRequestSchema = z.discriminatedUnion('intent', [
   BclawLoopPauseSchema,
   BclawLoopResumeSchema,
   BclawLoopCloseSchema,
+  BclawLoopVerifySchema,
+  BclawLoopBindSchema,
   BclawLoopRequestInputSchema,
   BclawLoopProvideInputSchema,
 ]);
@@ -245,6 +293,8 @@ export const BCLAW_LOOP_INTENTS = [
   'pause',
   'resume',
   'close',
+  'verify',
+  'bind',
   'request_input',
   'provide_input',
 ] as const;

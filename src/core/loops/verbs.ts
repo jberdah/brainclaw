@@ -525,6 +525,13 @@ export interface TurnInput {
    * instance, not merely a process running the same agent name.
    */
   claim_id?: string;
+  /**
+   * pln#630 PR2c — pointer to the immutable turn-attempt reservation owning
+   * this dispatch. Stamped onto the slot so the reconciler/GET can tell a
+   * turn-owned run from a legacy one (read-strict acceptance + observational
+   * GET, PR2b-c). Absent for legacy (non-turn-owned) dispatch.
+   */
+  turn_id?: string;
   actor: string;
 }
 
@@ -561,6 +568,7 @@ export function turn(input: TurnInput, cwd?: string): LoopThread {
           phase: current.current_phase,
           assignment_id: input.assignment_id ?? slot.assignment_id,
           claim_id: input.claim_id ?? slot.claim_id,
+          current_turn_id: input.turn_id ?? slot.current_turn_id,
         }
       : slot,
   );

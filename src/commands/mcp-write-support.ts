@@ -38,6 +38,15 @@ export interface McpWriteToolContext {
   cwd: string;
   connectionSessionId?: string;
   currentModel?: string;
+  /**
+   * pln#521 P1 — the resolution that produced `cwd`, forwarded verbatim from
+   * the executor. Handlers that must not write into a project nobody selected
+   * (the loop project gate) need `active_source` to tell a deliberate choice
+   * from the bare cwd fallback; `cwd` alone cannot express the difference.
+   * Optional: absent is read as the fallback, which only makes the gate
+   * stricter.
+   */
+  effectiveScope?: ResolvedEffectiveCwd;
 }
 
 // ── Authenticated connection principal (pln#562 step 3) ──────────────────────

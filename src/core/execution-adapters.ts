@@ -30,14 +30,58 @@ export interface AckWrapPaths {
   stderrLog: string;
 }
 
-export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, isWin32: boolean): string {
+/**
+ * pln#630 PR2c — turn-attempt correlation echoed into the completion sentinel.
+ * When present, the mechanical wrapper writes a turn-keyed JSON body (instead of
+ * an empty presence marker) so the read-strict acceptance path can prove WHICH
+ * attempt+generation finished. The wrapper is the COORDINATOR shell (not the
+ * sandboxed agent), so it can always write the project-root sentinel. All three
+ * values are `[A-Za-z0-9_-]` (tat_/run_ hex, uuid) → no shell metacharacters on
+ * cmd.exe or POSIX. `at` is intentionally omitted (readCompletionSignal defaults
+ * it) to keep the shell one-liner robust.
+ */
+export interface TurnEcho {
+  turn_id: string;
+  run_id: string;
+  nonce: string;
+}
+
+// The turn-echo values are raw-embedded into a shell one-liner (see marker()),
+// so the `[A-Za-z0-9_-]` safety invariant documented on TurnEcho is LOAD-BEARING,
+// not cosmetic. A stray `"` desyncs cmd.exe quote-parity (no sentinel file is
+// written → the turn-owned run never converges under read-strict acceptance —
+// exactly the §13 D2 non-convergence this feature prevents); a `'` breaks out of
+// the POSIX `printf '…'` wrapper. All real sources (deriveTurnId/deriveChildIds
+// hex, crypto.randomUUID nonce) satisfy it, so this guard never fires in
+// production — it exists to turn a future out-of-class caller's SILENT corruption
+// into a loud, fast failure at the embed site.
+const TURN_ECHO_SAFE = /^[A-Za-z0-9_-]+$/;
+
+export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, isWin32: boolean, turnEcho?: TurnEcho): string {
+  if (turnEcho) {
+    for (const [field, value] of Object.entries(turnEcho)) {
+      if (!TURN_ECHO_SAFE.test(value)) {
+        throw new Error(
+          `buildAckWrapCommand: turnEcho.${field} must match ${TURN_ECHO_SAFE} to be shell-safe for the completion sentinel (got ${JSON.stringify(value)})`,
+        );
+      }
+    }
+  }
   const touch = isWin32
     ? (p: string) => `type nul > "${p}"`
     : (p: string) => `touch "${p}"`;
+  // completed/failed marker: a turn-keyed JSON body when turnEcho is present,
+  // else the legacy empty touch (byte-for-byte unchanged for non-turn-owned
+  // spawns — full back-compat).
+  const marker = (p: string, status: 'completed' | 'failed'): string => {
+    if (!turnEcho) return touch(p);
+    const body = JSON.stringify({ turn_id: turnEcho.turn_id, run_id: turnEcho.run_id, nonce: turnEcho.nonce, status });
+    return isWin32 ? `echo ${body}>"${p}"` : `printf '%s' '${body}' > "${p}"`;
+  };
   const redirected = `${bashCommand} > "${paths.stdoutLog}" 2> "${paths.stderrLog}"`;
   return (
     `${touch(paths.ackPath)} && ` +
-    `( ${redirected} && ${touch(paths.completedPath)} || ${touch(paths.failedPath)} )`
+    `( ${redirected} && ${marker(paths.completedPath, 'completed')} || ${marker(paths.failedPath, 'failed')} )`
   );
 }
 
@@ -109,6 +153,13 @@ export interface ExecutionAdapterStartOptions {
    * coordination dir, not in the worktree's local store.
    */
   ackRoot?: string;
+  /**
+   * pln#630 PR2c — when set, the ack-wrap writes a turn-keyed JSON completion
+   * body (see {@link TurnEcho}) so a turn-owned run converges under read-strict
+   * acceptance. Absent → legacy empty presence marker. Flows in from the
+   * turn-owned dispatch path (PR2c-b).
+   */
+  turnEcho?: TurnEcho;
 }
 
 export interface ExecutionAdapter {
@@ -241,7 +292,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
         failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'failed'),
         stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stdout'),
         stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stderr'),
-      }, isWin32);
+      }, isWin32, options.turnEcho);
       child = spawn(wrappedCmd, [], {
         detached: !isWin32,
         shell: true,

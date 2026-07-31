@@ -11,6 +11,8 @@ import { findLatestAgentRunForAssignment } from '../../src/core/agentruns.js';
 import { loadAssignment } from '../../src/core/assignments.js';
 import { listClaims } from '../../src/core/claims.js';
 import { readInbox } from '../../src/core/messaging.js';
+import { getReservation, listReservations, deriveTurnId } from '../../src/core/loops/attempt-reservation.js';
+import { listLoops } from '../../src/core/loops/store.js';
 import type { FacadeResponse } from '../../src/core/facade-schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -1305,5 +1307,89 @@ describe('bclaw_coordinate — cross-project routing (pln#359 phase 1b)', () => 
     const sourceInbox = readInbox({ agent: 'codex' }, sourceWorkspace.dir);
     const sourceAssign = sourceInbox.messages.find((m) => m.type === 'assign');
     assert.ok(sourceAssign, 'single-project mode still writes into source inbox');
+  });
+});
+
+describe('bclaw_coordinate — turn-owned INITIAL reviewer dispatch (pln#630)', () => {
+  let workspace: TestWorkspace;
+  let restoreCwd: (() => void) | undefined;
+  let prevTestMode: string | undefined;
+  let prevNoSpawn: string | undefined;
+  let prevFlag: string | undefined;
+
+  function git(...args: string[]) {
+    return spawnSync('git', ['-C', workspace.dir, ...args], { encoding: 'utf8' });
+  }
+
+  beforeEach(() => {
+    prevTestMode = process.env.BRAINCLAW_TEST_MODE;
+    prevNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    prevFlag = process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    process.env.BRAINCLAW_NO_SPAWN = '1'; // reservation is minted by prepare BEFORE the (skipped) spawn
+    workspace = createTestWorkspace({ prefix: 'bclaw-coordinate-turnown-', currentAgent: 'claude-code' });
+    workspace.registerAgent('codex');
+    workspace.registerAgent('claude-code');
+    restoreCwd = workspace.useCwd();
+    fs.writeFileSync(path.join(workspace.dir, '.gitignore'), '.brainclaw/\nnode_modules/\n');
+    fs.mkdirSync(path.join(workspace.dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspace.dir, 'src', 'feature.ts'), 'export const x = 1;\n');
+    git('init', '-q');
+    git('add', '-A');
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '-q', '-m', 'baseline');
+  });
+
+  afterEach(() => {
+    restoreCwd?.();
+    workspace.cleanup();
+    if (prevTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE; else process.env.BRAINCLAW_TEST_MODE = prevTestMode;
+    if (prevNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN; else process.env.BRAINCLAW_NO_SPAWN = prevNoSpawn;
+    if (prevFlag === undefined) delete process.env.BRAINCLAW_TURN_OWNED_REVIEW; else process.env.BRAINCLAW_TURN_OWNED_REVIEW = prevFlag;
+  });
+
+  const coordinate = (extra: Record<string, unknown>) =>
+    executeMcpToolCall({ name: 'bclaw_coordinate', args: { task: 'review the change', autoExecute: false, ...extra }, cwd: workspace.dir });
+
+  const reviewLoop = () => listLoops({ kind: 'review' }, workspace.dir)[0];
+
+  it('review + open_loop mints a turn-owned reservation per reviewer + binds the slot to the deterministic id (default ON)', async () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW; // shipped default = ON
+    const res = await coordinate({ intent: 'review', open_loop: true, targetAgents: ['codex'] });
+    assert.notEqual(res.response.isError, true);
+    const loop = reviewLoop();
+    assert.ok(loop, 'a review loop was opened');
+    const reviewerSlot = loop!.slots.find((s) => s.role === 'reviewer');
+    assert.ok(reviewerSlot, 'reviewer slot exists');
+    const turnId = deriveTurnId(loop!.id, reviewerSlot!.slot_id, 0);
+    const resv = getReservation(turnId, workspace.dir);
+    assert.ok(resv, 'a turn-owned reservation was minted for the initial reviewer turn');
+    assert.equal(resv!.decision, 'committed');
+    assert.equal(reviewerSlot!.assignment_id, resv!.child_ids.assignment_id, 'slot bound to the DETERMINISTIC assignment id (not a random one)');
+  });
+
+  it('kill-switch (BRAINCLAW_TURN_OWNED_REVIEW=0): review + open_loop mints NO reservation (legacy inline dispatch)', async () => {
+    process.env.BRAINCLAW_TURN_OWNED_REVIEW = '0';
+    const res = await coordinate({ intent: 'review', open_loop: true, targetAgents: ['codex'] });
+    assert.notEqual(res.response.isError, true);
+    assert.equal(listReservations({}, workspace.dir).length, 0, 'kill-switch → no turn-owned reservation (legacy path)');
+    const reviewerSlot = reviewLoop()!.slots.find((s) => s.role === 'reviewer')!;
+    assert.match(reviewerSlot.assignment_id ?? '', /^asgn_|^asg_/, 'legacy random assignment id still binds the slot');
+  });
+
+  it('symmetric fan-out: two reviewers → two DISTINCT turn-owned reservations', async () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const res = await coordinate({ intent: 'review', open_loop: true, targetAgents: ['codex', 'claude-code'], review_mode: 'symmetric' });
+    assert.notEqual(res.response.isError, true);
+    const committed = listReservations({ decision: 'committed' }, workspace.dir);
+    assert.equal(committed.length, 2, 'one reservation per reviewer slot');
+    assert.notEqual(committed[0]!.turn_id, committed[1]!.turn_id, 'distinct turn_ids (distinct slot_ids)');
+    assert.notEqual(committed[0]!.child_ids.assignment_id, committed[1]!.child_ids.assignment_id, 'distinct assignment ids');
+  });
+
+  it('non-regression: assign mints NO reservation (turn-owned is review-open_loop only)', async () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const res = await coordinate({ intent: 'assign', scope: 'src/feature.ts', targetAgents: ['codex'] });
+    assert.notEqual(res.response.isError, true);
+    assert.equal(listReservations({}, workspace.dir).length, 0, 'assign never routes through the turn-owned fence');
   });
 });

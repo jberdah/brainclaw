@@ -66,6 +66,15 @@ const perFileTimeoutMs = {
   e2e: 300000,
 };
 
+// Per-FILE timeout overrides (basename) for known slow-but-correct stress files
+// that legitimately run near the per-kind cap. journal-crash-storm does a kill-9
+// storm + convergence and completes in ~4.5min on an idle runner, but tips over
+// the 5min e2e cap under CI load (recurring false TIMEOUT that blocked merges).
+// It runs ALONE in the serial lane, so a longer budget costs nothing in parallel.
+const perFileTimeoutOverrideMs = {
+  'journal-crash-storm.test.js': 600000,
+};
+
 function getTestKind(filepath) {
   if (unitTestSet.has(filepath)) {
     return 'unit';
@@ -134,11 +143,13 @@ export function getSelectedTests(groupName) {
 }
 
 export function createTestDescriptor(filepath) {
+  const kind = getTestKind(filepath);
+  const override = perFileTimeoutOverrideMs[path.basename(filepath)];
   return {
     filepath,
     label: relativeTestPath(filepath),
-    kind: getTestKind(filepath),
-    timeoutMs: perFileTimeoutMs[getTestKind(filepath)],
+    kind,
+    timeoutMs: override ?? perFileTimeoutMs[kind],
   };
 }
 

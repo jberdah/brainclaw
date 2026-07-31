@@ -1515,6 +1515,45 @@ export function isBranchMergedByContent(
 }
 
 /**
+ * True when a LOCAL git branch of this exact name exists (pln#529). Lets the
+ * gated-sequence base selector distinguish "predecessor branch gone (merged +
+ * cleaned → code is on HEAD)" from "branch present but not yet integrated →
+ * fork the dependent lane from it". Returns false on any git failure.
+ */
+export function localBranchExists(mainWorktreePath: string, branchName: string): boolean {
+  return probeLocalBranch(mainWorktreePath, branchName) === 'present';
+}
+
+/**
+ * pln#529 — TRI-STATE local-branch probe. `localBranchExists` collapses "branch
+ * genuinely absent" and "git failed" into one `false`, and the gated-base
+ * resolver's unsafe direction is "absent → assume on HEAD". A transient git
+ * failure (timeout, index.lock, not-a-repo) must NOT be read as "absent → the
+ * socle is on HEAD" (that silently drops the predecessor's code). `git rev-parse
+ * --verify --quiet` exits 1 with EMPTY stderr for a clean not-found; any other
+ * failure carries stderr — so:
+ *   present  = exit 0
+ *   absent   = failure with empty stderr (clean not-found)
+ *   unknown  = failure with stderr (real git error — caller must fail safe)
+ */
+export type BranchProbe = 'present' | 'absent' | 'unknown';
+export function probeLocalBranch(mainWorktreePath: string, branchName: string): BranchProbe {
+  const r = runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branchName}`], mainWorktreePath);
+  if (r.ok) return 'present';
+  return r.stderr.trim() === '' ? 'absent' : 'unknown';
+}
+
+/**
+ * True when `cwd` is inside a git work tree. pln#529 uses this to distinguish a
+ * NON-git project (where branch/worktree propagation is inapplicable — fall back
+ * to the legacy HEAD base) from a git repo whose branch probe transiently failed
+ * (which must fail SAFE, not silently assume HEAD).
+ */
+export function isGitRepo(cwd: string): boolean {
+  return runGit(['rev-parse', '--is-inside-work-tree'], cwd).ok;
+}
+
+/**
  * Removes worktrees whose branch has been fully merged into the current branch
  * (typically master/main after a merge). Also removes brainclaw-managed
  * worktree directories that no longer have a corresponding git worktree entry
