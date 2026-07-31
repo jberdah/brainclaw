@@ -141,6 +141,12 @@ function getReviewAssignee(tags: string[]): string | undefined {
 interface ResolvedReadContext {
   /** Effective cwd — post store resolution and project-arg routing. */
   cwd: string;
+  /**
+   * Effective cwd BEFORE `project`-arg routing (pln#521 P1). Differs from
+   * `cwd` exactly when a `project` argument re-routed the read; the
+   * dispatch_status `_resolution_trace` needs both ends to show the hop.
+   */
+  sourceCwd: string;
   activeSource: ResolvedEffectiveCwd['active_source'];
   resolvedProject: ResolvedEffectiveCwd['resolved_project'];
   /**
@@ -203,6 +209,7 @@ export function handleMcpReadToolCall(
 
   return dispatchReadTool(name, args, {
     cwd,
+    sourceCwd: effective.cwd,
     activeSource,
     resolvedProject,
     projectRoutingApplied,
@@ -2132,11 +2139,14 @@ function dispatchReadTool(
     // reverse-engineering cwd + store state. The decision (project_name/
     // project_cwd) is a first-class field; the reasoning is the `_resolution_trace`
     // sibling, which by design ships here and nowhere else. Deliberately cheap:
-    // no candidate/nested-store scan on a hot read path.
+    // no candidate/nested-store scan on a hot read path. source_cwd is the
+    // PRE-routing cwd (ctx.sourceCwd) — using the routed cwd would make the two
+    // ends identical exactly when a `project` arg hopped stores, i.e. the one
+    // case the trace exists to show.
     const projectCwd = resolvedProject?.path ?? cwd;
     const projectName = resolvedProject?.name;
     const resolutionTrace = {
-      source_cwd: cwd,
+      source_cwd: ctx.sourceCwd,
       effective_cwd: projectCwd,
       active_source: activeSource,
       ...(projectRoutingApplied && typeof args.project === 'string' ? { project_arg: args.project } : {}),

@@ -220,6 +220,31 @@ describe('bclaw_coordinate(review, open_loop) — project gate', () => {
     );
   });
 
+  it('dispatch_status echoes project_cwd/project_name and a _resolution_trace (B4)', async () => {
+    const opened = await review();
+    assert.equal(opened.response.isError, false, JSON.stringify(opened.response));
+    const loopId = (opened.response.structuredContent as { result: { loop_id: string } }).result.loop_id;
+    assert.ok(loopId, 'review loop must exist to query');
+
+    const status = await executeMcpToolCall({
+      name: 'bclaw_dispatch_status',
+      args: { target_id: loopId },
+      cwd: workspace.dir,
+    });
+
+    assert.equal(status.response.isError, false, JSON.stringify(status.response));
+    const structured = status.response.structuredContent as Record<string, unknown>;
+    assert.equal(structured.project_cwd, path.resolve(workspace.dir));
+    assert.equal(structured.project_name, 'alpha');
+    const trace = structured._resolution_trace as Record<string, unknown>;
+    assert.ok(trace, '_resolution_trace ships on dispatch_status');
+    assert.equal(trace.effective_cwd, path.resolve(workspace.dir));
+    assert.equal(typeof trace.source_cwd, 'string');
+    assert.ok(trace.active_source, 'active_source names the winning selector');
+    // No project arg was passed, so the trace must not invent one.
+    assert.equal(trace.project_arg, undefined);
+  });
+
   it('does not gate a plain review (no open_loop) even in an ambiguous store', async () => {
     makeMultiProject(workspace, ['alpha', 'beta']);
 
