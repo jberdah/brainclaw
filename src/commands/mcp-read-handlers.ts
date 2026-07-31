@@ -2127,9 +2127,31 @@ function dispatchReadTool(
       `  git: commits_ahead=${status.runtime.commits_ahead ?? 'n/a'} dirty_tracked=${status.runtime.dirty_tracked ?? 'n/a'}`,
     ];
 
+    // pln#521 P1 (B4) — routing echo. Operators debugging a dispatch need to see
+    // which project this status was read from, and WHY that project won, without
+    // reverse-engineering cwd + store state. The decision (project_name/
+    // project_cwd) is a first-class field; the reasoning is the `_resolution_trace`
+    // sibling, which by design ships here and nowhere else. Deliberately cheap:
+    // no candidate/nested-store scan on a hot read path.
+    const projectCwd = resolvedProject?.path ?? cwd;
+    const projectName = resolvedProject?.name;
+    const resolutionTrace = {
+      source_cwd: cwd,
+      effective_cwd: projectCwd,
+      active_source: activeSource,
+      ...(projectRoutingApplied && typeof args.project === 'string' ? { project_arg: args.project } : {}),
+    };
+    lines.push('', `Project: ${projectName ?? '(unnamed)'} — ${projectCwd} (via ${activeSource})`);
+
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
-      structuredContent: { ...status, schema_version: SCHEMA_VERSION } as unknown as Record<string, unknown>,
+      structuredContent: {
+        ...status,
+        project_cwd: projectCwd,
+        ...(projectName ? { project_name: projectName } : {}),
+        _resolution_trace: resolutionTrace,
+        schema_version: SCHEMA_VERSION,
+      } as unknown as Record<string, unknown>,
     };
   }
 

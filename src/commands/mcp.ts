@@ -1913,7 +1913,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_coordinate') {
-      return await handleBclawCoordinate(args, { cwd, connectionSessionId, currentModel });
+      // pln#521 P1 — scopeInfo carries WHICH selector produced `cwd`, which the
+      // review open_loop project gate needs to distinguish a chosen project
+      // from the bare cwd fallback.
+      return await handleBclawCoordinate(args, { cwd, connectionSessionId, currentModel, effectiveScope: scopeInfo });
     }
 
     if (name === 'bclaw_loop') {
