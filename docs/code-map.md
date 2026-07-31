@@ -1,7 +1,8 @@
 # Code Map
 
-Code Map is a per-project structural index of your JavaScript / TypeScript / JSX /
-TSX, Python, PHP, and Java codebase. It parses each supported file with Tree-sitter and records the
+Code Map is a per-project structural index of your codebase across 11 languages:
+JavaScript / TypeScript (including JSX / TSX), Python, PHP, Java, Go, Rust, C#,
+Ruby, C, and C++. It parses each supported file with Tree-sitter and records the
 symbols it defines (functions, classes, types, interfaces, React components and
 hooks), what it imports and exports, and how files relate — then answers fast
 "what should I read before I edit this?" questions for both human operators and
@@ -201,11 +202,24 @@ single-project repos ignore the flag entirely.
 which nested projects have a built index vs `missing_index`, plus an aggregate
 count — so you can see workspace-wide freshness from the root.
 
+### Workspace-wide `find` / `brief`
+
+Once the per-child indexes exist (built by `--cascade`), `find` and `brief` run
+at a multi-project workspace **root** automatically aggregate across every child
+project's store — no flag needed. Matches are project-tagged with
+workspace-relative paths, and the freshness badge merges per-store status (worst
+status wins) plus coverage (how many projects are indexed, listing any unindexed
+children). An aggregated `brief` also surfaces **cross-package reverse
+dependents**: sibling packages that import the defining package's public name
+rank into the reading list, flagged `cross_package`.
+
+From **inside** a child project, reads stay single-store by default (locality).
+An explicit `traversal: "workspace"` (backend option) walks up to the nearest
+enclosing multi-project root and aggregates from there, with the caller's own
+package ranked first (`local: true` on its rows).
+
 **Not yet supported** (roadmap):
 
-- A single **federated query** at the root that fans out across the per-child
-  indexes and merges the results (today, `--cascade` builds the per-child indexes;
-  `find` / `brief` still run against one store at a time).
 - **Cross-service edges** — e.g. linking an API call to the route that defines it in
   another service. Code Map indexes language *symbols* and *module imports*, not
   framework routes or runtime HTTP calls, so it does not (today) map "service A calls
@@ -215,7 +229,9 @@ count — so you can see workspace-wide freshness from the root.
 
 The parser is [Tree-sitter](https://tree-sitter.github.io/) compiled to
 WebAssembly. The engine glue (`web-tree-sitter`) and the prebuilt grammar `.wasm`
-files (JavaScript / TypeScript / JSX / TSX, Python, PHP, Java) are **bundled into the package** during the
+files — 12 grammars covering the 11 supported languages: `javascript` (also
+handles JSX), `typescript`, `tsx`, `python`, `php`, `java`, `go`, `rust`,
+`c_sharp`, `ruby`, `c`, `cpp` — are **bundled into the package** during the
 build (`scripts/copy-code-map-wasm.mjs` copies them into `dist/wasm/` and vendors
 the engine glue into `dist/vendor/web-tree-sitter/`).
 
