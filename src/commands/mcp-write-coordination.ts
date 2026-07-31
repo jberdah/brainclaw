@@ -31,6 +31,7 @@ import { nowISO } from '../core/ids.js';
 import { validateMcpField } from '../core/input-validation.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
+import { validateLoopProjectResolution, type LoopProjectResolved } from '../core/loops/project-resolution.js';
 import { ackMessage, getThread, hasActiveAssignment, sendMessage } from '../core/messaging.js';
 import { dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
 import { CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
@@ -314,7 +315,7 @@ export function handleBclawAckMessage(args: Record<string, unknown>, ctx: McpWri
 }
 
 export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: McpWriteToolContext): Promise<McpToolExecutionOutcome> {
-  const { cwd, connectionSessionId, currentModel } = ctx;
+  const { cwd, connectionSessionId, currentModel, effectiveScope } = ctx;
   const startMs = Date.now();
   const parseResult = CoordinateRequestSchema.safeParse(args);
   if (!parseResult.success) {
@@ -421,6 +422,36 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     );
   }
   const effectiveAutoExecute = isCrossProject ? false : req.autoExecute;
+
+  // pln#521 P1 — project resolution gate. A review loop written into the wrong
+  // store is worse than one that never opened: candidate, claim, assignment and
+  // loop all persist where nobody is watching, and the reviewer spawns against
+  // the wrong repo (DGX misroute). So when this store can host several projects
+  // and NONE was selected, refuse here — before the pre-flight spawn and before
+  // the first write — instead of silently defaulting to cwd. Explicit `project`,
+  // a session switch, or an active-project pointer all count as a choice; ref /
+  // scope / path never do (B3 rejected, art_e29e88878209). Scoped to the failing
+  // path (review + open_loop): every other intent keeps its routing untouched.
+  let projectResolution: LoopProjectResolved | undefined;
+  if (req.intent === 'review' && req.open_loop === true) {
+    // Resolve from `cwd`, not `dispatchCwd`: an explicit project name is
+    // resolvable from the SOURCE store (its links / store chain), which is
+    // exactly what produced dispatchCwd above. Re-resolving from the target
+    // could fail for a link whose name differs from the target's project_name.
+    const resolution = validateLoopProjectResolution({
+      cwd,
+      projectArg: req.project,
+      activeSource: effectiveScope?.active_source,
+    });
+    if (!resolution.ok) {
+      return {
+        response: createToolErrorResponse(resolution.code, resolution.message, {
+          candidates: resolution.candidates,
+        }),
+      };
+    }
+    projectResolution = resolution;
+  }
 
   // can_30c295b4 / trp#371 Tier 2 — scope-aware dirty-working-tree guard.
   // Intents that spawn a worktree worker from HEAD can review/edit stale code,
@@ -1333,6 +1364,16 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     result = {
       candidate_id: output.candidateId,
       selected_targets: resolvedAgents,
+      // pln#521 P1 (B4) — echo the routing decision so an operator can see WHERE
+      // the loop landed without reverse-engineering cwd and store state. Present
+      // for open_loop reviews (the gated path); the reasoning behind the decision
+      // ships as `_resolution_trace` on dispatch_status, not here.
+      ...(projectResolution
+        ? {
+          project_cwd: projectResolution.project_cwd,
+          ...(projectResolution.project_name ? { project_name: projectResolution.project_name } : {}),
+        }
+        : {}),
       // pln#626 Phase 1 (review rework) — expose the reviewer delivery entries
       // so review is as honest as assign/reroute: each entry's execution_reason
       // (set by runCoordinateExecution) feeds the top-level derivation, so a
