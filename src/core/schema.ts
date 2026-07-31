@@ -1109,6 +1109,9 @@ export const RuntimeEventTypeSchema = z.enum([
   'candidate_harvested',
   'lane_result_harvested',
   'lane_integrated',
+  // pln#521 P4 — a turn-owned loop artifact was harvested + integrated into the loop
+  // by reconcileTurn (observability for the harvest path).
+  'loop_artifact_harvested',
 ]);
 export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
 

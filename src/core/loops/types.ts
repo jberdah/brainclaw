@@ -131,9 +131,29 @@ export const LoopIterationSchema = z.object({
 });
 export type LoopIteration = z.infer<typeof LoopIterationSchema>;
 
+/** pln#632 — hard ceiling + default for an engine-run verify command's wall clock. */
+export const VERIFY_TIMEOUT_HARD_CAP_MS = 15 * 60 * 1000;
+export const VERIFY_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * pln#632 — engine-run verify command config, set by the loop OPENER at open (never by
+ * the agent under test — that is the determinism guarantee). The command is an argv
+ * ARRAY run with `shell:false` (no injection surface); an operator who needs a pipeline
+ * passes it explicitly as `['bash','-lc','npm test && npm run lint']` and owns that.
+ * When present, `bclaw_loop(intent='verify')` runs it and records a deterministic
+ * `verify_report`; absent, the loop falls back to the agent-narrated report unchanged.
+ */
+export const LoopVerifyConfigSchema = z.object({
+  command: z.array(z.string().min(1)).min(1),
+  timeout_ms: z.number().int().positive().max(VERIFY_TIMEOUT_HARD_CAP_MS).optional(),
+});
+export type LoopVerifyConfig = z.infer<typeof LoopVerifyConfigSchema>;
+
 export const LoopProtocolConfigSchema = z.object({
   review_mode: z.enum(REVIEW_MODES).optional(),
   iteration: LoopIterationSchema.optional(),
+  /** pln#632 — engine-run verify command (opener-provided; makes command_green real). */
+  verify: LoopVerifyConfigSchema.optional(),
   /**
    * pln#508 step 1 — protocol preset selector. When set (e.g. `'bootstrap'`),
    * the coordinate facade routes preset-specific behaviors (close hook,
