@@ -690,6 +690,12 @@ export interface DispatchHealthReport {
   inferred_completed: ReconcileResultSummary[];
   health_check_unverified: ReconcileResultSummary[];
   inferred_failed: ReconcileResultSummary[];
+  /**
+   * pln#630 PR2c-lease — turn-owned runs cancelled on lease expiry with no launch
+   * receipt (`reserved_never_launched`). A clean non-launch, not a health failure,
+   * so it does NOT drive exit_code (unlike inferred_failed / launch_attempted_unknown).
+   */
+  inferred_cancelled: ReconcileResultSummary[];
   no_op_open: number;
   exit_code: 0 | 1;
 }
@@ -711,6 +717,7 @@ export function runDispatchHealthCheck(options: DoctorOptions = {}): DispatchHea
   const inferred_completed: ReconcileResultSummary[] = [];
   const health_check_unverified: ReconcileResultSummary[] = [];
   const inferred_failed: ReconcileResultSummary[] = [];
+  const inferred_cancelled: ReconcileResultSummary[] = [];
   let no_op_open = 0;
 
   for (const result of results) {
@@ -734,6 +741,7 @@ export function runDispatchHealthCheck(options: DoctorOptions = {}): DispatchHea
       case 'inferred_completed': inferred_completed.push(summary); break;
       case 'health_check_unverified': health_check_unverified.push(summary); break;
       case 'inferred_failed': inferred_failed.push(summary); break;
+      case 'inferred_cancelled': inferred_cancelled.push(summary); break;
       case 'no_op': no_op_open += 1; break;
     }
   }
@@ -744,6 +752,7 @@ export function runDispatchHealthCheck(options: DoctorOptions = {}): DispatchHea
     inferred_completed,
     health_check_unverified,
     inferred_failed,
+    inferred_cancelled,
     no_op_open,
     exit_code: inferred_failed.length > 0 ? 1 : 0,
   };
@@ -778,7 +787,16 @@ function renderDispatchHealthHumanReport(report: DispatchHealthReport): string {
     lines.push('');
   }
 
-  if (report.inferred_failed.length === 0 && report.inferred_completed.length === 0 && report.health_check_unverified.length === 0) {
+  if (report.inferred_cancelled.length > 0) {
+    lines.push(`⊘ ${report.inferred_cancelled.length} turn-owned run(s) cancelled on lease expiry (reserved, never launched):`);
+    for (const r of report.inferred_cancelled) {
+      lines.push(`  - ${r.run_id} ${r.agent} (${r.scope}) — ${r.reason}`);
+    }
+    lines.push('');
+  }
+
+  if (report.inferred_failed.length === 0 && report.inferred_completed.length === 0
+      && report.health_check_unverified.length === 0 && report.inferred_cancelled.length === 0) {
     lines.push(`✔ No dispatch issues detected (${report.no_op_open} open run(s) within grace window or already healthy).`);
   } else {
     lines.push(`(${report.no_op_open} other open run(s) within grace window or already healthy.)`);

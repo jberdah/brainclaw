@@ -127,13 +127,33 @@ export type LoopPhase = z.infer<typeof LoopPhaseSchema> & {
 export const LoopIterationSchema = z.object({
   cycle: z.array(z.string().min(1)).min(1),
   max_iterations: z.number().int().positive(),
-  exit_when: z.enum(['critic_signal', 'no_new_critique_artifacts']),
+  exit_when: z.enum(['critic_signal', 'no_new_critique_artifacts', 'command_green']),
 });
 export type LoopIteration = z.infer<typeof LoopIterationSchema>;
+
+/** pln#632 — hard ceiling + default for an engine-run verify command's wall clock. */
+export const VERIFY_TIMEOUT_HARD_CAP_MS = 15 * 60 * 1000;
+export const VERIFY_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * pln#632 — engine-run verify command config, set by the loop OPENER at open (never by
+ * the agent under test — that is the determinism guarantee). The command is an argv
+ * ARRAY run with `shell:false` (no injection surface); an operator who needs a pipeline
+ * passes it explicitly as `['bash','-lc','npm test && npm run lint']` and owns that.
+ * When present, `bclaw_loop(intent='verify')` runs it and records a deterministic
+ * `verify_report`; absent, the loop falls back to the agent-narrated report unchanged.
+ */
+export const LoopVerifyConfigSchema = z.object({
+  command: z.array(z.string().min(1)).min(1),
+  timeout_ms: z.number().int().positive().max(VERIFY_TIMEOUT_HARD_CAP_MS).optional(),
+});
+export type LoopVerifyConfig = z.infer<typeof LoopVerifyConfigSchema>;
 
 export const LoopProtocolConfigSchema = z.object({
   review_mode: z.enum(REVIEW_MODES).optional(),
   iteration: LoopIterationSchema.optional(),
+  /** pln#632 — engine-run verify command (opener-provided; makes command_green real). */
+  verify: LoopVerifyConfigSchema.optional(),
   /**
    * pln#508 step 1 — protocol preset selector. When set (e.g. `'bootstrap'`),
    * the coordinate facade routes preset-specific behaviors (close hook,
@@ -360,9 +380,31 @@ export const REF_BASED_ARTIFACT_TYPES = new Set<string>([
  * is enforced. This preserves backward compatibility with proposal / critique
  * / revision / plan_draft / change_summary artifacts produced before pln#508.
  */
+/**
+ * pln#609 — implementation loop `verify_report` artifact body. Records the
+ * outcome of a verify command (tests/build/lint) for one execute↔verify
+ * iteration. `passed` is the single field the `command_green` iteration exit
+ * reads. Kept small (tails only) to fit LOOP_ARTIFACT_BODY_MAX_BYTES. In
+ * Increment 1 the report is produced by the verify turn (add_artifact); the
+ * engine-run execution seam (spawnSync, out of the loop lock) is Increment 2.
+ */
+export const VerifyReportBodySchema = z.object({
+  command: z.string().min(1),
+  exit_code: z.number().int().nullable(),
+  passed: z.boolean(),
+  duration_ms: z.number().int().nonnegative().optional(),
+  cwd: z.string().optional(),
+  timed_out: z.boolean().optional(),
+  stdout_tail: z.string().max(1024).optional(),
+  stderr_tail: z.string().max(1024).optional(),
+});
+export type VerifyReportBody = z.infer<typeof VerifyReportBodySchema>;
+
 export const KNOWN_ARTIFACT_BODY_SCHEMAS = {
   // inline JSON body: body = JSON.stringify({ ...fields per OperatorQuestionBodySchema })
   operator_question: OperatorQuestionBodySchema,
+  // inline JSON body: body = JSON.stringify({ ...fields per VerifyReportBodySchema })
+  verify_report: VerifyReportBodySchema,
 
   // inline JSON body: body = JSON.stringify({ ...fields per OperatorAnswerBodySchema })
   operator_answer: OperatorAnswerBodySchema,
@@ -828,22 +870,95 @@ export const DEFAULT_PROTOCOLS: Record<
     },
     stop_condition: { kind: 'artifact_produced', phase: 'synthesis', type: 'plan_draft' },
   },
+  // pln#609 — implementation loop v2. The loop ADDS to the dispatch pipeline
+  // what it lacked: a deterministic command_green gate + a bounded fix↔verify
+  // cycle + per-phase context sculpting. `bind` is an ENGINE action (bind
+  // plan+sequence and dispatch) not narration; execute↔verify iterates until
+  // the verify command is green (a passing verify_report this iteration) or
+  // the cycle cap is hit (→ handoff_ready with the red report → blocked).
   implementation: {
     phases: [
-      { name: 'sequence_build' },
-      { name: 'dispatch' },
-      { name: 'execute' },
-      { name: 'self_check' },
-      { name: 'handoff_ready' },
+      { name: 'bind', context_filter: ['plans', 'decisions', 'constraints', 'project_vision'] },
+      { name: 'execute', context_filter: ['decisions', 'constraints', 'traps', 'runtime_notes'] },
+      {
+        name: 'verify',
+        context_filter: ['traps', 'runtime_notes'],
+        // Cannot leave verify without having produced a verify_report THIS
+        // iteration — guards "narrated verify, didn't run it". Reuses the
+        // iteration-aware min_artifacts_by_type evaluator.
+        advance_gate: { kind: 'min_artifacts_by_type', type: 'verify_report', n: 1, scope: 'phase' },
+      },
+      { name: 'handoff_ready', context_filter: ['handoffs', 'plans'] },
     ],
-    stop_condition: { kind: 'artifact_produced', phase: 'handoff_ready', type: 'handoff' },
+    // execute ↔ verify bounded cycle; exit early when a passing verify_report
+    // exists in the current iteration (command_green).
+    iteration: {
+      cycle: ['execute', 'verify'],
+      max_iterations: 3,
+      exit_when: 'command_green',
+    },
+    // Mirrors review: handoff within budget → completed; cap exhausted without
+    // green → blocked (stopHitsMaxIterations).
+    stop_condition: {
+      kind: 'any',
+      conditions: [
+        { kind: 'artifact_produced', phase: 'handoff_ready', type: 'handoff' },
+        { kind: 'max_iterations', n: 3 },
+      ],
+    },
   },
+  // pln#628 PART 3 — research loop, ideation-shaped: investigate ↔ synthesize
+  // converges on a deliverable. NO max_iterations in the stop → research ALWAYS
+  // lands in `conclude` and completes with a synthesis (there is no "blocked"
+  // research outcome). exit_when=critic_signal: `synthesize` emits it when the
+  // question is judged answered (explicit sufficiency beats saturation-by-absence
+  // for open-ended research). Reuses existing machinery only.
   research: {
-    phases: [{ name: 'investigate' }, { name: 'synthesize' }],
-    stop_condition: { kind: 'manual' },
+    phases: [
+      {
+        name: 'investigate',
+        context_filter: ['plans', 'decisions', 'constraints', 'project_vision', 'candidates', 'runtime_notes', 'traps'],
+        // Don't synthesize an empty round: ≥1 finding gathered THIS iteration
+        // (iteration-aware phase scope) before advancing.
+        advance_gate: { kind: 'min_artifacts_by_type', type: 'finding', n: 1, scope: 'phase' },
+      },
+      { name: 'synthesize', context_filter: ['*'] },
+      { name: 'conclude', context_filter: ['*'] },
+    ],
+    iteration: { cycle: ['investigate', 'synthesize'], max_iterations: 3, exit_when: 'critic_signal' },
+    stop_condition: { kind: 'artifact_produced', phase: 'conclude', type: 'synthesis' },
   },
+  // pln#628 PART 3 — debug loop, implementation-shaped: "bug fixed" ⟺ "the
+  // reproducing command is now green" ⟺ a passing verify_report. hypothesize →
+  // isolate → fix repeats until the repro no longer reproduces (command_green)
+  // or the cycle cap is hit (→ handoff with the red report → blocked). Reuses
+  // command_green + verify_report; no new engine machinery.
   debug: {
-    phases: [{ name: 'reproduce' }, { name: 'hypothesize' }, { name: 'isolate' }, { name: 'fix' }],
-    stop_condition: { kind: 'manual' },
+    phases: [
+      {
+        name: 'reproduce',
+        context_filter: ['traps', 'runtime_notes', 'handoffs', 'plans'],
+        // Cannot start hypothesizing until a reliable repro exists.
+        advance_gate: { kind: 'artifact_produced', phase: 'reproduce', type: 'repro' },
+      },
+      { name: 'hypothesize', context_filter: ['decisions', 'constraints', 'traps', 'runtime_notes'] },
+      { name: 'isolate', context_filter: ['decisions', 'constraints', 'traps', 'runtime_notes'] },
+      {
+        name: 'fix',
+        context_filter: ['traps', 'runtime_notes', 'constraints'],
+        // Mirrors implementation's verify gate: cannot leave fix without having
+        // re-run the repro THIS iteration (iteration-aware phase scope).
+        advance_gate: { kind: 'min_artifacts_by_type', type: 'verify_report', n: 1, scope: 'phase' },
+      },
+      { name: 'handoff', context_filter: ['handoffs', 'plans'] },
+    ],
+    iteration: { cycle: ['hypothesize', 'isolate', 'fix'], max_iterations: 3, exit_when: 'command_green' },
+    stop_condition: {
+      kind: 'any',
+      conditions: [
+        { kind: 'artifact_produced', phase: 'handoff', type: 'handoff' },
+        { kind: 'max_iterations', n: 3 },
+      ],
+    },
   },
 };

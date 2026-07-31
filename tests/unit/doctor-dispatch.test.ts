@@ -109,7 +109,8 @@ describe('runDispatchHealthCheck', () => {
     assert.match(report.generated_at, /^\d{4}-\d{2}-\d{2}T/);
     assert.equal(report.total, 2);
     assert.equal(
-      report.no_op_open + report.inferred_completed.length + report.health_check_unverified.length + report.inferred_failed.length,
+      report.no_op_open + report.inferred_completed.length + report.health_check_unverified.length
+        + report.inferred_failed.length + report.inferred_cancelled.length,
       report.total,
     );
   });

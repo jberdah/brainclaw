@@ -47,7 +47,7 @@ export type NextPhaseDecision =
       kind: 'exit_cycle';
       target: string;
       iteration: number;
-      reason: 'no_new_critique_artifacts' | 'critic_signal';
+      reason: 'no_new_critique_artifacts' | 'critic_signal' | 'command_green';
     }
   | {
       kind: 'max_iterations';
@@ -158,6 +158,18 @@ export function decideNextPhase(
     };
   }
 
+  if (
+    iterationBlock.exit_when === 'command_green' &&
+    hasPassingVerifyReportInIteration(thread, thread.iteration_count)
+  ) {
+    return {
+      kind: 'exit_cycle',
+      target: postCycleTarget,
+      iteration: thread.iteration_count,
+      reason: 'command_green',
+    };
+  }
+
   // Cap check. If incrementing iteration_count would exceed the cap,
   // exit via max_iterations. (iteration_count is 0-indexed; cap=3 means
   // iterations 0, 1, 2 are allowed; refusing iteration 3 → exit.)
@@ -218,4 +230,26 @@ export function hasCriticSignalInIteration(
   return thread.artifacts.some(
     (a) => (a.iteration ?? 0) === iteration && a.type === 'critic_signal',
   );
+}
+
+/**
+ * `exit_when='command_green'` predicate (pln#609): true when the just-finished
+ * iteration produced a PASSING `verify_report` artifact (body.passed === true).
+ * The verify command ran during the verify turn and recorded the report — this
+ * is a PURE read; no command is executed here (execution seam = verify-command.ts,
+ * Increment 2). Iteration-window scoped so a green from a prior iteration can
+ * never satisfy the current one; absence reads as false.
+ */
+export function hasPassingVerifyReportInIteration(
+  thread: LoopThread,
+  iteration: number,
+): boolean {
+  return artifactsInIteration(thread, iteration).some((a) => {
+    if (a.type !== 'verify_report') return false;
+    try {
+      return (JSON.parse(a.body ?? '{}') as { passed?: unknown }).passed === true;
+    } catch {
+      return false;
+    }
+  });
 }

@@ -61,6 +61,9 @@ describe('code-map cascade (DGX Finding 2 — monorepo-native refresh)', () => {
     assert.ok(result.cascade!.children.every((c) => c.lock_acquired), 'each child lock_acquired propagated');
 
     // Each symbol must resolve in EXACTLY ONE store — the most specific project.
+    // traversal:'project' (pln#631) keeps each find SINGLE-STORE so this tests the
+    // refresh SCOPING (per-store ownership); the default 'auto' would aggregate at
+    // the multi-project root and (correctly) surface every child symbol.
     const stores: Record<string, string> = { root, app_a: appA, app_b: appB, nested_pkg: nested };
     const expectedOwner: Record<string, string> = {
       rootThing: 'root', alphaThing: 'app_a', betaThing: 'app_b', nestedThing: 'nested_pkg',
@@ -68,7 +71,7 @@ describe('code-map cascade (DGX Finding 2 — monorepo-native refresh)', () => {
     for (const [sym, owner] of Object.entries(expectedOwner)) {
       const owners: string[] = [];
       for (const [label, cwd] of Object.entries(stores)) {
-        const found = await be.find({ query: sym, cwd });
+        const found = await be.find({ query: sym, cwd, traversal: 'project' });
         if (found.matches.some((m) => m.name === sym)) owners.push(label);
       }
       assert.deepEqual(owners, [owner], `${sym} must be owned by exactly ${owner}, got [${owners}]`);
@@ -122,7 +125,9 @@ describe('code-map cascade (DGX Finding 2 — monorepo-native refresh)', () => {
     await be.refresh({ cwd: root, scope: 'all', cascade: true });
     const after = await be.status({ cwd: root });
     assert.equal(after.stats?.files_indexed, 1, 'root store now scoped to the file no child owns');
-    const rootFind = await be.find({ query: 'alphaThing', cwd: root });
+    // Single-store (pln#631): assert the root STORE was compacted; the default 'auto'
+    // would aggregate the child store back in (the intended workspace behavior).
+    const rootFind = await be.find({ query: 'alphaThing', cwd: root, traversal: 'project' });
     assert.ok(!rootFind.matches.some((m) => m.name === 'alphaThing'), 'child symbol no longer in the root store');
   });
 
@@ -148,7 +153,7 @@ describe('code-map cascade (DGX Finding 2 — monorepo-native refresh)', () => {
     assert.equal((await be.status({ cwd: root })).stats?.files_indexed, 1, 'default cascade compacts child-owned files out of root');
     const owners: string[] = [];
     for (const [label, cwd] of Object.entries({ root, app_a: appA })) {
-      const found = await be.find({ query: 'alphaThing', cwd });
+      const found = await be.find({ query: 'alphaThing', cwd, traversal: 'project' });
       if (found.matches.some((m) => m.name === 'alphaThing')) owners.push(label);
     }
     assert.deepEqual(owners, ['app_a'], 'child symbol must remain only in the child store');

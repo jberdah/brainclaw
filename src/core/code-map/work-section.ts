@@ -18,6 +18,7 @@
  *                      bclaw_work beyond that bounded wait (rule §6 rule 8).
  */
 import { readManifest } from './store.js';
+import { withCoarse } from './freshness.js';
 import { readCodeLock, isLockAbandoned } from './lock.js';
 import { codeMapDir, lockPath } from './paths.js';
 import { JsonlBackend } from './backend.js';
@@ -144,10 +145,10 @@ export async function codeMapWorkSection(
           return {
             enabled: true,
             matches: out.matches,
-            freshness_badge: {
+            freshness_badge: withCoarse({
               status: 'partial',
               details: { partial_reason: 'code_map_lock_active', lock_wait_ms: lockWaitMs },
-            },
+            }),
             lock_wait_ms: lockWaitMs,
           };
         } catch {
@@ -157,10 +158,10 @@ export async function codeMapWorkSection(
       return {
         enabled: true,
         matches: [],
-        freshness_badge: {
+        freshness_badge: withCoarse({
           status: 'partial',
           details: { partial_reason: 'code_map_lock_active', lock_wait_ms: lockWaitMs },
-        },
+        }),
         lock_wait_ms: lockWaitMs,
       };
     }
@@ -173,7 +174,7 @@ export async function codeMapWorkSection(
       missing_index:
         'Code Map index is empty for this project. Run `brainclaw code-map refresh --all` (or bclaw_code_refresh) before relying on find/brief.',
       matches: [],
-      freshness_badge: { status: 'missing_index', details: {} },
+      freshness_badge: withCoarse({ status: 'missing_index', details: {} }),
       ...(lockWaitMs !== undefined ? { lock_wait_ms: lockWaitMs } : {}),
     };
   }
@@ -185,13 +186,13 @@ export async function codeMapWorkSection(
     return {
       enabled: true,
       matches: [],
-      freshness_badge: {
+      freshness_badge: withCoarse({
         status: manifest.freshness.status,
         details: {
           stale_file_count: manifest.freshness.stale_file_count,
           partial_reason: manifest.freshness.partial_reason,
         },
-      },
+      }),
       ...(lockWaitMs !== undefined ? { lock_wait_ms: lockWaitMs } : {}),
     };
   }

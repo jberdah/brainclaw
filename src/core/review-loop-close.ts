@@ -69,8 +69,11 @@ export interface ReviewLoopNextTurn {
   task: string;
 }
 
-/** Build the fix+re-review brief for a request_changes cycle turn (symmetric). */
-function buildFixCycleTask(summary: string, iteration: number): string {
+/** Build the fix+re-review brief for a request_changes cycle turn (symmetric).
+ *  Exported so the turn-owned reconcile path (pln#630 PR3b) reuses the identical
+ *  wording — the reviewer contract must not drift between the legacy and turn-owned
+ *  fix cycles. */
+export function buildFixCycleTask(summary: string, iteration: number): string {
   return (
     `The reviewer requested changes (fix cycle round ${iteration}). `
     + 'Apply the requested changes DIRECTLY in this worktree (it is the same '

@@ -486,6 +486,29 @@ The three rules are independent: `hard_deadline` bounds pathological "heartbeat 
 - Execution loops (`implementation`) route by `claim_id` — preserved from the claim-routed model already in use.
 - `session_id` is not a routing key; it remains observability-only. This is consistent with `architecture_session_centric_identity` in memory.
 
+### Project resolution gate (pln#521 P1)
+
+`bclaw_coordinate(intent='review', open_loop=true)` resolves WHICH project the
+loop belongs to before it writes anything. A loop that lands in the wrong store
+persists a candidate, claim, assignment and loop where nobody is watching, and
+spawns the reviewer against the wrong repo.
+
+The ladder, in order: an explicit `project` argument; then any selector that
+already won upstream (`--cwd`, `BRAINCLAW_PROJECT`, a session switch, the
+physical child store, the workspace `active-project.json`); then the bare cwd
+fallback. The fallback is accepted in a single-project store — there is exactly
+one answer — and **refused** with `needs_project_selection` when the store can
+host several projects (`project_mode: multi-project`, or a `store_type: workspace`
+parent with nested project stores). The error lists the candidates and creates
+nothing; fix it by passing `project='<name>'` or by making the choice sticky with
+`bclaw_switch`. Ref, scope and path are never used to guess the project (B3
+rejected in `art_e29e88878209`: a wrong guess costs more than an explicit choice).
+
+Both `bclaw_coordinate` (open_loop reviews) and `bclaw_dispatch_status` echo the
+decision as `project_name` / `project_cwd`. `dispatch_status` additionally carries
+`_resolution_trace` (`source_cwd`, `effective_cwd`, `active_source`, `project_arg`)
+so a misroute can be diagnosed without reverse-engineering cwd and store state.
+
 ## Open questions (resolved / deferred)
 
 Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revision` → addressed in v8):
@@ -519,6 +542,7 @@ Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revis
 The loop surface exposed over MCP is intentionally narrow:
 
 - **Review loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="asymmetric"|"symmetric", targetAgents=[…])` opens the loop and dispatches the first turn. The reviewer's verdict is then harvested from `LANE-RESULT.json` (`review_verdict`) and **auto-advances/closes the loop on approve** — no manual driving needed for the approve path (pln#628 Focus 4B). `bclaw_loop(intent="turn"|"complete_turn"|"advance"|"close")` remains available to drive turns by hand (e.g. the `request_changes` fix cycle, or a human-operated slot).
+  - **Turn-owned exactly-once fix cycle (default, pln#630).** The autonomous `request_changes` fix-cycle re-dispatch runs through the turn-owned attempt state machine (immutable attempt record + atomic launch fence → spawned at most once; `reconcileTurn` finalizes from read-strict, turn-keyed evidence — the ack-wrapper's completion sentinel). It falls back to the legacy closer when a reviewer resolves to inbox/manual (no sentinel) so the loop still converges. **Kill-switch:** set `BRAINCLAW_TURN_OWNED_REVIEW=0` (also `false`/`off`/`no`) to revert review finalization to the legacy presence-based closer.
 - **Ideation loops** — `bclaw_coordinate(intent="ideate", preset="bootstrap")` opens an ideation loop from a preset.
 
 Custom phase lists (`LoopPhase[]`) and bespoke `StopCondition` logic exist in the loop engine internally, but are **not** exposed through the MCP facade today: `CoordinateRequestSchema` accepts only `open_loop`, `review_mode`, `preflight`, `ref`, and `preset` — no `phases` or `stop_condition` — and the standalone `bclaw_loop` tool does not expose an `open` intent. Programmatic construction of ad-hoc loops is therefore internal / future work until the facade is extended.
