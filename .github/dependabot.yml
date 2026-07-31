@@ -17,6 +17,15 @@ updates:
       # Pin to 0.25.x until the grammars are rebuilt against the new ABI.
       - dependency-name: "web-tree-sitter"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # TypeScript 7 (native compiler) — validated 2026-07-31 in an isolated
+      # spike (PR #56 closing comment): OUR code compiles clean and 2.6x faster,
+      # dist/ .js output byte-identical, BUT typescript-eslint 8.61 hard-crashes
+      # at require time against the native compiler's API (typescript-estree,
+      # eslint exit 2), breaking `npm run lint`. The blocker is upstream, not
+      # this codebase. Lift this ignore when typescript-eslint ships TS7
+      # support; the vscode-extension (no typescript-eslint) already runs TS7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       production-dependencies:
         dependency-type: "production"
