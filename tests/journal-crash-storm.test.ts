@@ -49,6 +49,12 @@ function tmpStore(): string {
 }
 
 async function waitForChild(child: ReturnType<typeof spawn>): Promise<{ status: number | null; stderr: string }> {
+  // A child that already exited (e.g. it starved on the lock and died before
+  // the storm's kill) never fires 'close' again — awaiting it would hang this
+  // file into the 600s per-file TIMEOUT. Resolve from the recorded exit state.
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { status: child.exitCode, stderr: '' };
+  }
   return await new Promise((resolve) => {
     let stderr = '';
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
@@ -79,15 +85,32 @@ describe('journal crash-storm convergence (pln#565 — cutover gate)', { concurr
     // deterministic signal (commit happened) rather than a racy wall-clock delay
     // — node ESM cold-start under variable load made a fixed timeout flaky.
     const markerPath = (i: number) => path.join(dir, `child-${i}.committed`);
+    // Pre-commit lock starvation is designed contention, not a journal defect:
+    // the store lock is maximally unfair (the incumbent's release→reacquire gap
+    // is microseconds, a contender polls every 50ms), so a child can lose the
+    // 5s acquire race repeatedly while another sits in its fsync loop. Dying on
+    // that starvation destroyed the test's own precondition — with 2 of 3
+    // children dead pre-commit, quorum was permanently unreachable and the
+    // parent burned the full startup budget into a false TIMEOUT (the 3 CI
+    // flakes of 2026-07: green runs use ~1% of the budget; the failures were
+    // starved children, not slow runs). Retry until the FIRST commit lands;
+    // any other error, or any error after committing, is a real journal bug
+    // and still crashes the child loudly.
     const childScript = (child: number) => `
       import fs from 'node:fs';
       import { forceAppendJournalRecords } from ${JSON.stringify(journalUrl)};
+      let committed = false;
       for (let k = 0; k < 100000; k++) {
-        forceAppendJournalRecords([{
-          action: 'create', item_type: 'decision',
-          item_id: 'dec_k${child}_' + k, agent: 'killable-${child}',
-        }], ${JSON.stringify(dir)});
-        if (k === 0) fs.writeFileSync(${JSON.stringify(markerPath(child))}, 'ok');
+        try {
+          forceAppendJournalRecords([{
+            action: 'create', item_type: 'decision',
+            item_id: 'dec_k${child}_' + k, agent: 'killable-${child}',
+          }], ${JSON.stringify(dir)});
+        } catch (err) {
+          if (!committed && String(err).includes('Could not acquire lock')) continue;
+          throw err;
+        }
+        if (!committed) { committed = true; fs.writeFileSync(${JSON.stringify(markerPath(child))}, 'ok'); }
       }
     `;
 
@@ -120,15 +143,30 @@ describe('journal crash-storm convergence (pln#565 — cutover gate)', { concurr
     // quick, but shared CI runners can still stall process spawn. Kept within
     // the 300s per-file e2e budget of scripts/run-tests.mjs.
     const deadline = Date.now() + (process.env.CI ? 210_000 : 90_000);
-    while (Date.now() < deadline) {
-      if (committedCount() >= QUORUM) break;
-      await new Promise((r) => setTimeout(r, 50));
+    // Fail fast when quorum becomes unreachable: a child that exited without
+    // committing can never commit, so once (committed + live-uncommitted)
+    // drops below QUORUM, burning the rest of the budget only converts the
+    // real diagnostic into an opaque timeout. The kill lives in a finally so
+    // a failed precondition never leaves live children holding the event loop
+    // open into the 600s per-file cap.
+    const exited: boolean[] = Array.from({ length: N }, () => false);
+    children.forEach((c, i) => c.on('exit', () => { exited[i] = true; }));
+    try {
+      while (Date.now() < deadline) {
+        const committed = committedCount();
+        if (committed >= QUORUM) break;
+        const liveUncommitted = children.filter((_, i) => !exited[i] && !fs.existsSync(markerPath(i))).length;
+        if (committed + liveUncommitted < QUORUM) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      assert.ok(
+        committedCount() >= QUORUM,
+        `at least ${QUORUM} of ${N} children should have committed at least once before the kill `
+        + `(committed=${committedCount()}, exited=${exited.filter(Boolean).length} of ${N})`,
+      );
+    } finally {
+      for (const c of children) c.kill('SIGKILL');
     }
-    assert.ok(
-      committedCount() >= QUORUM,
-      `at least ${QUORUM} of ${N} children should have committed at least once before the kill`,
-    );
-    for (const c of children) c.kill('SIGKILL');
     await Promise.all(children.map(waitForChild));
 
     // INVARIANT 1: the journal is always readable after a crash storm — torn
