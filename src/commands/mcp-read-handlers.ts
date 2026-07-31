@@ -141,6 +141,12 @@ function getReviewAssignee(tags: string[]): string | undefined {
 interface ResolvedReadContext {
   /** Effective cwd — post store resolution and project-arg routing. */
   cwd: string;
+  /**
+   * Effective cwd BEFORE `project`-arg routing (pln#521 P1). Differs from
+   * `cwd` exactly when a `project` argument re-routed the read; the
+   * dispatch_status `_resolution_trace` needs both ends to show the hop.
+   */
+  sourceCwd: string;
   activeSource: ResolvedEffectiveCwd['active_source'];
   resolvedProject: ResolvedEffectiveCwd['resolved_project'];
   /**
@@ -203,6 +209,7 @@ export function handleMcpReadToolCall(
 
   return dispatchReadTool(name, args, {
     cwd,
+    sourceCwd: effective.cwd,
     activeSource,
     resolvedProject,
     projectRoutingApplied,
@@ -2127,9 +2134,34 @@ function dispatchReadTool(
       `  git: commits_ahead=${status.runtime.commits_ahead ?? 'n/a'} dirty_tracked=${status.runtime.dirty_tracked ?? 'n/a'}`,
     ];
 
+    // pln#521 P1 (B4) — routing echo. Operators debugging a dispatch need to see
+    // which project this status was read from, and WHY that project won, without
+    // reverse-engineering cwd + store state. The decision (project_name/
+    // project_cwd) is a first-class field; the reasoning is the `_resolution_trace`
+    // sibling, which by design ships here and nowhere else. Deliberately cheap:
+    // no candidate/nested-store scan on a hot read path. source_cwd is the
+    // PRE-routing cwd (ctx.sourceCwd) — using the routed cwd would make the two
+    // ends identical exactly when a `project` arg hopped stores, i.e. the one
+    // case the trace exists to show.
+    const projectCwd = resolvedProject?.path ?? cwd;
+    const projectName = resolvedProject?.name;
+    const resolutionTrace = {
+      source_cwd: ctx.sourceCwd,
+      effective_cwd: projectCwd,
+      active_source: activeSource,
+      ...(projectRoutingApplied && typeof args.project === 'string' ? { project_arg: args.project } : {}),
+    };
+    lines.push('', `Project: ${projectName ?? '(unnamed)'} — ${projectCwd} (via ${activeSource})`);
+
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
-      structuredContent: { ...status, schema_version: SCHEMA_VERSION } as unknown as Record<string, unknown>,
+      structuredContent: {
+        ...status,
+        project_cwd: projectCwd,
+        ...(projectName ? { project_name: projectName } : {}),
+        _resolution_trace: resolutionTrace,
+        schema_version: SCHEMA_VERSION,
+      } as unknown as Record<string, unknown>,
     };
   }
 
