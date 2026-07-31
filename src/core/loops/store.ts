@@ -22,6 +22,7 @@ import {
   type LoopLinks,
   type LoopPhase,
   type LoopProtocolConfig,
+  type LoopVerifyConfig,
   type LoopSlot,
   type LoopStatus,
   type LoopThread,
@@ -97,6 +98,13 @@ export interface OpenLoopInput {
    * kind-default protocol behavior.
    */
   protocol?: LoopProtocolConfig;
+  /**
+   * pln#632 — engine-run verify command, provided by the OPENER (never the agent under
+   * test). Merged onto the resolved kind-default protocol so it adds `command_green`
+   * verification WITHOUT discarding the kind's iteration block (unlike the full
+   * `protocol` override). Ignored if `protocol` already carries a `verify`.
+   */
+  verify?: LoopVerifyConfig;
   created_by: string;
 }
 
@@ -199,7 +207,12 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
   // presets) wins over the kind/mode-derived default. When no override
   // is supplied, fall back to the legacy resolveProtocol() path so
   // existing callers (review, default ideation) are unaffected.
-  const protocol = input.protocol ?? resolveProtocol(input.kind, input.mode);
+  let protocol = input.protocol ?? resolveProtocol(input.kind, input.mode);
+  // pln#632 — merge an opener-provided verify command onto the resolved protocol (adds
+  // the engine-run command_green gate without discarding the kind-default iteration).
+  if (input.verify && !protocol?.verify) {
+    protocol = { ...(protocol ?? {}), verify: input.verify };
+  }
 
   const thread: LoopThread = {
     schema_version: 1,

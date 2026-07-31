@@ -35,22 +35,37 @@ import {
 import type { LoopSlot } from './loops/types.js';
 
 /**
- * pln#630 PR2c-b — opt-in flag gating the turn-owned (exactly-once) review
- * dispatch path. DEFAULT OFF; must stay off through PR2c-b + PR3 and be flipped
- * only in PR4 after the §9 conformance harness proves it (a turn-owned run that
- * genuinely completes stays `created` until reconcileTurn/PR3 finalizes it — so
- * enabling this before PR3 would stall successful turns). Flag-off is a
- * byte-identical no-op: the legacy dispatch below runs unchanged.
+ * pln#630 — gate for the turn-owned (exactly-once) review dispatch path.
+ *
+ * NOW DEFAULT ON (the shipped default): the finalization (PR3a), autonomous fix-cycle (PR3b),
+ * strand self-heal (PR4), and revoked-grant recovery (R1) are all merged; the §9 conformance
+ * harness + a live end-to-end (real spawn → turn-keyed sentinel → harvest → reconcileTurn →
+ * close-on-approve) validated the path. `BRAINCLAW_TURN_OWNED_REVIEW=0` is the explicit
+ * KILL-SWITCH that reverts to the legacy closer (byte-identical) if a problem surfaces in prod.
+ * Note the routing is doubly-gated: even ON, harvest only reconcile-turns a lane that OWNS a
+ * turn reservation — a legacy-dispatched lane (no reservation) still uses the legacy path.
  */
-function turnOwnedReviewEnabled(): boolean {
-  return process.env.BRAINCLAW_TURN_OWNED_REVIEW === '1';
+export function turnOwnedReviewEnabled(): boolean {
+  // Normalized kill-switch (review Finding 4): any of 0/false/off/no (case/space-insensitive)
+  // disables — so an operator reaching for it under pressure can't mis-set it. Anything else
+  // (including unset) keeps the shipped default ON.
+  const v = (process.env.BRAINCLAW_TURN_OWNED_REVIEW ?? '').trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(v);
 }
 
-/** Dispatch lease budget for a turn-owned attempt (reserve + launch grant). Long
- *  enough that reserve→arm→consume→spawn→run-`running` never expires a genuinely
- *  launching worker under the PR2c-lease pre-run reconciler; a live `running` run
- *  is out of that reconciler's scope so this only bounds the pre-spawn window. */
+/** GRANT lease: bounds ONE launch generation's reserve→arm→consume→spawn→run-`running`
+ *  window. Long enough that a genuinely launching worker never expires under the PR2c-lease
+ *  pre-run reconciler; a live `running` run is out of that reconciler's scope. */
 const TURN_OWNED_LEASE_MS = 10 * 60_000;
+/** DISPATCH lease: how long the committed RESERVATION stays re-dispatchable. Strictly LONGER
+ *  than the grant lease (pln#630 dec#149 R1 / review Finding 1): a reserved_never_launched
+ *  round (grant lease expired → the reconciler revokes the grant) then still has a RECOVERY
+ *  WINDOW to re-arm a fresh generation before the reservation itself expires. armLaunch
+ *  enforces this bound, so a re-dispatch past it refuses arm and stays correctly stranded —
+ *  no phantom-spawn-after-lease. Decoupling the two is what makes R1 recovery actually reachable
+ *  (with a single shared lease, the grant is revoked exactly when the dispatch lease is already
+ *  expired, so re-arm was always denied). */
+const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
 
 /**
  * The outcome of preparing a turn-owned attempt (dec#144). `legacy` = fail-open
@@ -111,7 +126,11 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
 
   const turnId = deriveTurnId(loopId, slotId, iteration);
   const { assignment_id: assignmentId, run_id: runId } = deriveChildIds(turnId);
-  const lease = new Date(Date.now() + TURN_OWNED_LEASE_MS).toISOString();
+  // Decoupled leases (dec#149 R1): the reservation dispatch lease is longer than each grant's
+  // lease, giving a revoked (reserved_never_launched) round a window to re-arm. reserve() adopts
+  // on a re-dispatch, so the ORIGINAL (longer) dispatch lease governs re-arm eligibility.
+  const dispatchLease = new Date(Date.now() + TURN_OWNED_DISPATCH_LEASE_MS).toISOString();
+  const grantLease = new Date(Date.now() + TURN_OWNED_LEASE_MS).toISOString();
 
   // ── Phase 1: claim identity. Fail-OPEN allowed ONLY here (nothing reserved yet). ──
   try {
@@ -128,7 +147,7 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
       iteration,
       store_root: cwd,
       cwd,
-      lease_deadline: lease,
+      lease_deadline: dispatchLease,
     }, cwd);
   } catch (err) {
     if (err instanceof ReservationStateError && err.code === 'reservation_exists') {
@@ -152,22 +171,28 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
   try {
     commitReservation(turnId, cwd);
 
-    // Arm-or-adopt the launch grant. Only arm when none exists; a concurrent
-    // arm surfaces as `already_armed` → adopt the incumbent grant.
+    // Arm-or-adopt the launch grant. Arm when none exists OR when a prior generation was
+    // REVOKED (reserved_never_launched — a crash between arm and consume, then the expiry
+    // sweep): re-arm a FRESH generation at a strictly-higher epoch so a revoked round becomes
+    // re-dispatchable (pln#630 dec#149 R1 strand recovery). armLaunch permits re-arming a
+    // revoked grant and still enforces the dispatch lease, so a lease-expired reservation
+    // refuses arm and stays correctly stranded (never a phantom-spawn-after-lease). A
+    // concurrent arm surfaces as `already_armed` → adopt the incumbent grant.
     let grant = launchGrant(turnId, cwd);
-    if (!grant) {
+    if (!grant || grant.status === 'revoked') {
+      const priorEpoch = grant?.epoch ?? -1; // fresh → epoch 0 (unchanged); revoked → epoch+1
       try {
-        armLaunch(turnId, { epoch: 0, lease_deadline: lease }, cwd);
+        armLaunch(turnId, { epoch: priorEpoch + 1, lease_deadline: grantLease }, cwd);
       } catch (err) {
         if (!(err instanceof LaunchFenceError && err.code === 'already_armed')) {
-          // dispatch_lease_expired / lease_invalid / not_committed → do-not-spawn.
+          // dispatch_lease_expired / lease_invalid / not_committed / epoch_mismatch → do-not-spawn.
           return { kind: 'denied', reason: `arm_refused: ${err instanceof Error ? err.message : String(err)}` };
         }
       }
       grant = launchGrant(turnId, cwd);
     }
-    // A crossed grant = launch_attempted_unknown (worker already invoked, never
-    // re-spawn); revoked = never-launch; absent = arm failed → all do-not-spawn.
+    // A crossed grant = launch_attempted_unknown (worker already invoked, never re-spawn);
+    // still-revoked = re-arm refused (lease expired) → never-launch; absent → all do-not-spawn.
     if (!grant || grant.status !== 'armed') {
       return { kind: 'denied', reason: `launch_denied: grant is ${grant?.status ?? 'absent'} (not armed)` };
     }
@@ -332,9 +357,9 @@ export async function dispatchReviewLoopTurn(
     let turnEcho: TurnEcho | undefined;
     let runLegacyProjection = true;
 
-    // pln#630 PR2c-b — turn-owned (exactly-once) dispatch, flag-gated (default off)
-    // + FAIL-CLOSED after reserve. Flag-off → runLegacyProjection stays true and
-    // this branch is a byte-identical no-op (the legacy projection below runs).
+    // pln#630 — turn-owned (exactly-once) dispatch, now the DEFAULT + FAIL-CLOSED after
+    // reserve. Kill-switch off (BRAINCLAW_TURN_OWNED_REVIEW=0) → runLegacyProjection stays
+    // true and this branch is a byte-identical no-op (the legacy projection below runs).
     if (turnOwnedReviewEnabled()) {
       const prep = prepareTurnOwnedReviewDispatch({
         loopId,

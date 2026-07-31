@@ -40,7 +40,7 @@ import { loadAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
 import { readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
-import { findReservationByRunId, evidenceMatchesAttempt, launchGrant } from './loops/attempt-reservation.js';
+import { findReservationByRunId, evidenceMatchesAttempt, launchGrant, revokeLaunchGrant } from './loops/attempt-reservation.js';
 import type { TurnReservation } from './loops/attempt-reservation.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
@@ -674,6 +674,16 @@ function reconcileTurnOwnedPreRunLease(
   const reason = crossed
     ? `launch_attempted_unknown: launch grant crossed but run never reached running by lease ${leaseISO} — outcome unknown, never completed`
     : `reserved_never_launched: no launch receipt by lease ${leaseISO} (grant=${grant?.status ?? 'none'})`;
+  // pln#630 dec#149 R1 (review Finding 2) — make the reserved_never_launched strand REACHABLE
+  // through the WIRED lazy reconciler: revoke the still-armed grant so its authoritative status
+  // becomes `revoked`. That is what lets reconcileTurn's fix-cycle strand detector see the strand
+  // and re-emit, and lets the re-dispatch re-arm a fresh generation (dec#149 R1). Idempotent +
+  // best-effort: a race to crossed/revoked is fine (the decision file governs) and must never
+  // block the run's terminal transition below.
+  if (!crossed && grant?.status === 'armed') {
+    try { revokeLaunchGrant(reservation.turn_id, grant.epoch, 'reserved_never_launched', cwd, actor); }
+    catch { /* raced to crossed/revoked — authoritative status governs */ }
+  }
   try {
     transitionAgentRun(run.id, targetStatus, { actor, status_reason: reason }, cwd);
     cascadeReleaseOnFailure(run, actor, cwd, targetStatus);

@@ -84,7 +84,7 @@ describe('runLoopCommand', () => {
   let restoreExit: () => void;
   let captured: Captured;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     workspace = createTestWorkspace({
       prefix: 'bclaw-cli-loop-verbs-',
       currentAgent: 'agt_test',
@@ -95,17 +95,17 @@ describe('runLoopCommand', () => {
     restoreExit = stubExit();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     restoreConsole();
     restoreExit();
     workspace.cleanup();
   });
 
-  it('turn resolves a slot by id, assigns it, and prints next_expected', () => {
+  it('turn resolves a slot by id, assigns it, and prints next_expected', async () => {
     const loop = openReview(workspace.dir);
     const slot = reviewerSlot(loop);
 
-    const result = runLoopCommand(
+    const result = await runLoopCommand(
       'turn',
       { loop_id: loop.id },
       { slot: slot.slot_id, input: 'review this diff', assignmentId: 'asg_cli_1' },
@@ -122,13 +122,13 @@ describe('runLoopCommand', () => {
     assert.ok(joined.includes('next:'), `expected next_expected, got:\n${joined}`);
   });
 
-  it('complete-turn with --outcome done --artifact lands the artifact and bumps the slot', () => {
+  it('complete-turn with --outcome done --artifact lands the artifact and bumps the slot', async () => {
     const loop = openReview(workspace.dir);
     const slot = reviewerSlot(loop);
-    runLoopCommand('turn', { loop_id: loop.id }, { slot: slot.slot_id, input: 'review' }, workspace.dir);
+    await runLoopCommand('turn', { loop_id: loop.id }, { slot: slot.slot_id, input: 'review' }, workspace.dir);
     captured.stdout.length = 0;
 
-    runLoopCommand(
+    await runLoopCommand(
       'complete-turn',
       { loop_id: loop.id },
       {
@@ -146,12 +146,12 @@ describe('runLoopCommand', () => {
     assert.equal(onDisk.artifacts[0].body, 'LGTM');
   });
 
-  it('complete-turn with --outcome failed --failure-reason works without artifact', () => {
+  it('complete-turn with --outcome failed --failure-reason works without artifact', async () => {
     const loop = openReview(workspace.dir);
     const slot = reviewerSlot(loop);
-    runLoopCommand('turn', { loop_id: loop.id }, { slot: slot.slot_id, input: 'review' }, workspace.dir);
+    await runLoopCommand('turn', { loop_id: loop.id }, { slot: slot.slot_id, input: 'review' }, workspace.dir);
 
-    runLoopCommand(
+    await runLoopCommand(
       'complete-turn',
       { loop_id: loop.id },
       { slot: slot.slot_id, outcome: 'failed', failureReason: 'tool error' },
@@ -163,16 +163,16 @@ describe('runLoopCommand', () => {
     assert.equal(onDisk.artifacts.length, 0);
   });
 
-  it('advance moves the loop one phase forward when the gate passes', () => {
+  it('advance moves the loop one phase forward when the gate passes', async () => {
     const loop = openReview(workspace.dir);
-    const result = runLoopCommand('advance', { loop_id: loop.id }, {}, workspace.dir);
+    const result = await runLoopCommand('advance', { loop_id: loop.id }, {}, workspace.dir);
     assert.equal(result.current_phase, 'findings');
     assert.equal(getLoop(loop.id, workspace.dir)!.current_phase, 'findings');
   });
 
-  it('advance --to-phase honors the explicit target', () => {
+  it('advance --to-phase honors the explicit target', async () => {
     const loop = openReview(workspace.dir);
-    const result = runLoopCommand(
+    const result = await runLoopCommand(
       'advance',
       { loop_id: loop.id },
       { toPhase: 'verdict' },
@@ -181,7 +181,7 @@ describe('runLoopCommand', () => {
     assert.equal(result.current_phase, 'verdict');
   });
 
-  it('advance --force bypasses gate check', () => {
+  it('advance --force bypasses gate check', async () => {
     const loop = openLoop(
       {
         kind: 'ideation',
@@ -191,10 +191,10 @@ describe('runLoopCommand', () => {
       },
       workspace.dir,
     );
-    runLoopCommand('advance', { loop_id: loop.id }, {}, workspace.dir);
+    await runLoopCommand('advance', { loop_id: loop.id }, {}, workspace.dir);
     captured.stdout.length = 0;
 
-    const result = runLoopCommand(
+    const result = await runLoopCommand(
       'advance',
       { loop_id: loop.id },
       { force: true },
@@ -204,9 +204,9 @@ describe('runLoopCommand', () => {
     assert.equal(result.current_phase, 'revision');
   });
 
-  it('add-artifact attaches a fresh artifact and the loop reflects it', () => {
+  it('add-artifact attaches a fresh artifact and the loop reflects it', async () => {
     const loop = openReview(workspace.dir);
-    runLoopCommand(
+    await runLoopCommand(
       'add-artifact',
       { loop_id: loop.id },
       {
@@ -225,9 +225,9 @@ describe('runLoopCommand', () => {
     assert.equal(onDisk.artifacts[0].produced_by, 'codex');
   });
 
-  it('--json emits parseable JSON with expected fields', () => {
+  it('--json emits parseable JSON with expected fields', async () => {
     const loop = openReview(workspace.dir);
-    runLoopCommand('advance', { loop_id: loop.id }, { json: true }, workspace.dir);
+    await runLoopCommand('advance', { loop_id: loop.id }, { json: true }, workspace.dir);
 
     const parsed = JSON.parse(captured.stdout.join('\n'));
     assert.equal(parsed.ok, true);
@@ -237,19 +237,19 @@ describe('runLoopCommand', () => {
     assert.ok(parsed.next_expected);
   });
 
-  it('exits 1 on malformed loop_id', () => {
-    assert.throws(
+  it('exits 1 on malformed loop_id', async () => {
+    await assert.rejects(
       () => runLoopCommand('advance', { loop_id: 'not-a-loop' }, {}, workspace.dir),
       (err: unknown) => err instanceof ProcessExitError && err.code === 1,
     );
     assert.ok(captured.stderr.join('\n').includes('invalid loop_id'));
   });
 
-  it('exits 2 on a verb error', () => {
+  it('exits 2 on a verb error', async () => {
     const loop = openReview(workspace.dir);
     closeLoop({ id: loop.id, final_status: 'cancelled', actor: 'agt_test' }, workspace.dir);
 
-    assert.throws(
+    await assert.rejects(
       () => runLoopCommand('advance', { loop_id: loop.id }, {}, workspace.dir),
       (err: unknown) => err instanceof ProcessExitError && err.code === 2,
     );

@@ -24,7 +24,87 @@ import { loadClaim, releaseClaimsCascade, logCascadeReleaseResult } from '../cor
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
 import { commitWorktreeOnBehalf, worktreesBaseDir, resolveGitToplevel } from '../core/worktree.js';
 import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult, type ReviewLoopNextTurn } from '../core/review-loop-close.js';
-import { dispatchReviewLoopTurn } from '../core/review-loop-turn-dispatch.js';
+import { closeIdeationLoopFromLaneResult } from '../core/ideation-loop-close.js';
+import { dispatchReviewLoopTurn, turnOwnedReviewEnabled } from '../core/review-loop-turn-dispatch.js';
+import { reconcileTurn, type ReconcileTurnResult } from '../core/loops/reconcile-turn.js';
+import { findReservationByAssignmentId, type TurnReservation } from '../core/loops/attempt-reservation.js';
+import { readCompletionSignals } from '../core/runtime-signals.js';
+
+/**
+ * pln#630 PR3a — finalize a TURN-OWNED review lane via the exactly-once `reconcileTurn`
+ * instead of the legacy `closeReviewLoopFromLaneResult`. Returns `undefined` for a legacy
+ * (non-reserved) lane so the caller runs the unchanged legacy path — this is the
+ * exactly-one-finalizer discriminator: a lane is turn-owned iff a reservation OWNS its
+ * assignment_id (only the turn-owned dispatch writes a reservation file).
+ *
+ * Evidence sourcing (the load-bearing subtlety): a real reviewer's LANE-RESULT.json is
+ * KEYLESS — the review brief never asks the worker to echo turn_id/run_id/nonce — so
+ * read-strict `reconcileTurn` (which matches lane.{turn_id,run_id,nonce} against the
+ * attempt) would REJECT it. We source the keys authoritatively: turn_id + run_id are
+ * deterministic from the reservation, and the NONCE — the non-derivable proof that THIS
+ * launch generation actually ran — comes from the coordinator's completion SENTINEL
+ * (written mechanically by the ack-wrapper with the launch-grant token). A caller/test
+ * that already supplies keyed lanes is honored (lane.* wins); a stale generation's
+ * sentinel carries the old token → still rejected, preserving the anti-stale guarantee.
+ */
+/**
+ * The turn-owned FINALIZATION discriminator (pln#630, review Finding 1). A lane finalizes via
+ * the exactly-once reconcileTurn ONLY if a committed reservation OWNS it AND turn-keyed evidence
+ * (the nonce) is available — from the lane or the coordinator's completion SENTINEL. Without the
+ * nonce, reconcileTurn's read-strict gate can NEVER converge: this is reachable in production
+ * when a turn-owned dispatch WON the fence but did not ack-wrap-spawn (inbox_only / IDE-only
+ * reviewer, command_ready_manual, capacity cap, BRAINCLAW_NO_SPAWN, worktree-creation failure) —
+ * it minted a reservation but no sentinel will ever be written. Returning undefined there routes
+ * the lane to the LEGACY presence-based closer so the loop still converges instead of stalling
+ * forever. This is SAFE: the exactly-once SPAWN guarantee is enforced at DISPATCH by the launch
+ * fence (already run), so using legacy FINALIZATION for a sentinel-less lane reintroduces no
+ * double-spawn; and a sentinel that lands after a legacy close makes a later reconcile a
+ * terminal-loop idempotent no-op.
+ */
+function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): { reservation: TurnReservation; nonce: string } | undefined {
+  const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
+  if (!reservation) return undefined; // legacy lane (no reservation)
+  const nonce = lane.nonce ?? readCompletionSignals(cwd, reservation.child_ids.assignment_id).completed?.nonce;
+  if (!nonce) return undefined; // reservation but NO turn-keyed evidence → legacy finalization
+  return { reservation, nonce };
+}
+
+function reconcileTurnOwnedReviewLane(
+  lane: LaneResult,
+  cwd: string,
+): { reservation: TurnReservation; result: ReconcileTurnResult } | undefined {
+  const ev = turnOwnedLaneEvidence(lane, cwd);
+  if (!ev) return undefined; // legacy lane OR no turn-keyed evidence — caller runs the legacy path
+  const { reservation, nonce } = ev;
+  const enrichedLane: LaneResult = {
+    ...lane,
+    turn_id: lane.turn_id ?? reservation.turn_id,
+    run_id: lane.run_id ?? reservation.child_ids.run_id,
+    nonce,
+  };
+  const result = reconcileTurn({ turn_id: reservation.turn_id, lane: enrichedLane, cwd });
+  return { reservation, result };
+}
+
+/**
+ * Map a `reconcileTurn` result onto the `ReviewLoopCloseResult` shape harvest records for
+ * observability (entry.review_loop / CLI). No keep_claim / next_turn: the request_changes
+ * turn-owned re-dispatch (fix cycle) is pln#630 PR3b — deferred and non-corrupting (the
+ * loop stays open awaiting its next turn, identical to the legacy asymmetric path).
+ */
+function reconcileToReviewLoopResult(
+  reservation: TurnReservation,
+  rr: ReconcileTurnResult,
+  lane: LaneResult,
+): ReviewLoopCloseResult {
+  return {
+    loop_id: reservation.loop_id,
+    verdict: lane.review_verdict === 'request_changes' ? 'request_changes' : 'approve',
+    action: rr.auto_closed ? 'closed' : rr.reconciled ? 'advanced' : 'noop',
+    reason: rr.reason,
+    loop_status: rr.loop_status,
+  };
+}
 
 export interface HarvestOptions {
   /**
@@ -359,7 +439,22 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // (no re-dispatch, no claim retention). `harvest --integrate` owns the cycle.
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
-      if (laneAssignment) closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
+      if (laneAssignment) {
+        // pln#630 PR3a — a TURN-OWNED review lane (reservation + turn-keyed evidence) is finalized
+        // ONLY by reconcileTurn on the `--integrate` path (which owns claim/worktree teardown). The
+        // report path must NOT pre-empt it with a legacy close (which would terminalize the loop and
+        // strand the turn-owned run). So skip the legacy review-close for such a lane. Kill-switch
+        // (=0), a legacy lane (no reservation), OR a reservation WITHOUT evidence (review Finding 1:
+        // an inbox_only/non-ack-wrapped dispatch that never wrote a sentinel) → false → the lane
+        // takes the unchanged legacy close so it still converges. Ideation stays legacy (review-only).
+        const laneIsTurnOwned = turnOwnedReviewEnabled() && !!turnOwnedLaneEvidence(lane, cwd);
+        if (!laneIsTurnOwned) {
+          closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
+        }
+        // pln#521 P2-bis — the ideation analog: a critic lane records its critique +
+        // advances the ideation loop. Returns undefined for non-ideate scopes (no-op here).
+        closeIdeationLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+      }
     } catch { /* never block harvest on loop-close */ }
 
     const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
@@ -605,52 +700,114 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         // next_turn) unless the iteration cap is hit. This is the --integrate
         // path, so it MAY cycle (it can re-dispatch AND retain the claim). No-op
         // for non-review lanes / lanes without a verdict; never throws.
-        const loopClose = closeReviewLoopFromLaneResult(assignment, lane, actor, cwd);
-        if (loopClose) {
-          entry.review_loop = loopClose;
-          reasons.push(`review-loop ${loopClose.loop_id}: ${loopClose.action} — ${loopClose.reason}`);
-          if (loopClose.next_turn) {
-            result.next_turns.push({ loop_id: loopClose.loop_id, ...loopClose.next_turn });
-          }
+        // pln#521 P2-bis — the ideation analog (record critique + advance the ideation
+        // loop). Turn-owned is REVIEW-ONLY (pln#630), so ideation always uses the legacy
+        // path. It is independent of the review-loop close (a lane's scope is review-loop
+        // XOR ideate-loop), so it runs once here regardless of the branch below.
+        const ideationClose = closeIdeationLoopFromLaneResult(assignment, lane, actor, cwd);
+        if (ideationClose) {
+          reasons.push(`ideate-loop ${ideationClose.loop_id}: ${ideationClose.action} — ${ideationClose.reason}`);
         }
 
-        // PR2 claim-teardown gate. Skip the release when either:
-        //  (a) keep_claim — the symmetric fix cycle reuses the claim/worktree for
-        //      the re-dispatched turn (commits accumulate on one branch); or
-        //  (b) Codex review P0 — an idempotent re-harvest of an OLD lane whose
-        //      loop is still OPEN returns a `noop` (the reviewer slot is now bound
-        //      to a NEWER assignment under an active cycle). Releasing here would
-        //      tear down the reused claim/worktree out from under the live turn
-        //      and strand the fix cycle. The loop machinery owns the lifecycle
-        //      while it is open; only a terminal close (approve/blocked, action
-        //      'closed') or an asymmetric hand-off ('advanced' without keep_claim)
-        //      releases here. A `noop` on a TERMINAL loop still releases (safe —
-        //      the closing pass already released, so this is a no-op).
-        const loopStillOpen =
-          loopClose?.loop_status !== undefined &&
-          !['completed', 'cancelled', 'blocked'].includes(loopClose.loop_status);
-        const keepClaimAlive =
-          loopClose?.keep_claim === true || (loopClose?.action === 'noop' && loopStillOpen);
-        if (keepClaimAlive) {
-          // The next_turn spawn (async) is awaited by runHarvestLane. The
-          // assignment for THIS turn is still completed above.
-          entry.claim_released = false;
-          reasons.push(
-            loopClose?.keep_claim
-              ? 'claim kept alive for review fix-cycle re-dispatch (PR2)'
-              : 'claim left intact — idempotent re-harvest on an active review loop (no strand)',
-          );
+        // pln#630 PR3a — a TURN-OWNED review lane finalizes via the exactly-once
+        // reconcileTurn, which REPLACES the legacy closer + teardown gate for this lane
+        // (exactly-one finalizer per lane). Kill-switch (=0), a legacy (non-reserved) lane, OR a
+        // reservation with NO turn-keyed evidence (review Finding 1) → `turnOwned` is undefined
+        // and the unchanged legacy `else` block runs so the loop still converges.
+        const turnOwned = turnOwnedReviewEnabled()
+          ? reconcileTurnOwnedReviewLane(lane, cwd)
+          : undefined;
+        if (turnOwned) {
+          const { reservation, result: rr } = turnOwned;
+          entry.review_loop = reconcileToReviewLoopResult(reservation, rr, lane);
+          reasons.push(`turn-owned reconcile ${reservation.loop_id}: ${entry.review_loop.action} — ${rr.reason}${rr.conflict ? ' [CONFLICT — held]' : ''}`);
+          // pln#630 PR3b — a symmetric request_changes bumped the round + retained the claim
+          // and handed back the next fix-cycle turn. Push it exactly like the legacy path so
+          // the existing async re-dispatch loop spawns round N+1 into the reused worktree. The
+          // fresh iteration means deriveTurnId mints a new turn_id → the launch fence admits
+          // exactly one spawn (a stale re-emit of the same turn_id is denied).
+          if (rr.next_turn) {
+            result.next_turns.push({ loop_id: reservation.loop_id, ...rr.next_turn });
+          }
+          // Claim/run/assignment settling is OWNED by reconcileTurn, so we do NOT run the
+          // legacy teardown gate — just reflect the resulting claim state. Settlement
+          // semantics (reconcile-turn.ts, review #1): an ACCEPTED lane — approve OR
+          // request_changes, both settle the slot 'done' — completes the assignment AND
+          // releases the claim; only a REJECTED/superseded lane (evidence mismatch/absent,
+          // §13 R4 conflict) leaves the claim intact for a retry. No next_turns push: the
+          // request_changes fix-cycle re-dispatch — AND re-establishing the claim/worktree
+          // that the release above implies — is pln#630 PR3b (deferred; the loop stays open
+          // awaiting its next turn, so nothing is corrupted, only not-yet-autonomous).
+          try { entry.claim_released = loadClaim(assignment.claim_id, cwd)?.status === 'released'; }
+          catch { entry.claim_released = false; }
+          // A turn-owned lane that reached here HAS turn-keyed evidence (turnOwnedLaneEvidence
+          // gated on a present nonce — the missing-sentinel/non-spawn case already fell back to
+          // legacy, review Finding 1). So a non-convergence here means the evidence MISMATCHED
+          // the live attempt (stale/superseded generation) — which must NOT fall back to legacy
+          // (that would converge on evidence for a DIFFERENT generation). Emit an observable
+          // event so an operator/doctor sees the (correctly) withheld convergence. (An R4
+          // conflict already journals its own event, so it is excluded here.)
+          if (!rr.reconciled && !rr.conflict && lane.review_verdict) {
+            try {
+              createRuntimeEvent({
+                agent: actor,
+                event_type: 'run_blocked',
+                text: `harvest: turn-owned review lane ${lane.assignment_id} carried verdict '${lane.review_verdict}' but reconcile did not converge (${rr.reason}); loop ${reservation.loop_id} left OPEN — needs the completion sentinel or a manual turn`,
+                tags: ['harvest', 'reconcile', 'turn-owned', 'unconverged'],
+                assignment_id: lane.assignment_id,
+                run_id: reservation.child_ids.run_id,
+                status_reason: 'turn_owned_evidence_unaccepted',
+              }, cwd);
+            } catch { /* observability best-effort */ }
+          }
         } else {
-          // trp#928 — use the cascade helper (was releaseClaimWithCascade — same
-          // logic for the last-claim rule but the cascade wrapper LOGS per-claim,
-          // so a silent ownership failure is observable in the runtime event log
-          // rather than only in this in-memory `reasons` string).
-          const cascade = releaseClaimsCascade([assignment.claim_id], { cwd, planStatus: 'done' });
-          logCascadeReleaseResult({ actor, trigger: 'harvest_integrate', assignment_id: lane.assignment_id, claim_id: assignment.claim_id, cascade, cwd });
-          const claimEntry = cascade.entries[0];
-          entry.claim_released = claimEntry?.released === true;
-          if (claimEntry && !claimEntry.released) {
-            reasons.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
+          const loopClose = closeReviewLoopFromLaneResult(assignment, lane, actor, cwd);
+          if (loopClose) {
+            entry.review_loop = loopClose;
+            reasons.push(`review-loop ${loopClose.loop_id}: ${loopClose.action} — ${loopClose.reason}`);
+            if (loopClose.next_turn) {
+              result.next_turns.push({ loop_id: loopClose.loop_id, ...loopClose.next_turn });
+            }
+          }
+
+          // PR2 claim-teardown gate. Skip the release when either:
+          //  (a) keep_claim — the symmetric fix cycle reuses the claim/worktree for
+          //      the re-dispatched turn (commits accumulate on one branch); or
+          //  (b) Codex review P0 — an idempotent re-harvest of an OLD lane whose
+          //      loop is still OPEN returns a `noop` (the reviewer slot is now bound
+          //      to a NEWER assignment under an active cycle). Releasing here would
+          //      tear down the reused claim/worktree out from under the live turn
+          //      and strand the fix cycle. The loop machinery owns the lifecycle
+          //      while it is open; only a terminal close (approve/blocked, action
+          //      'closed') or an asymmetric hand-off ('advanced' without keep_claim)
+          //      releases here. A `noop` on a TERMINAL loop still releases (safe —
+          //      the closing pass already released, so this is a no-op).
+          const loopStillOpen =
+            loopClose?.loop_status !== undefined &&
+            !['completed', 'cancelled', 'blocked'].includes(loopClose.loop_status);
+          const keepClaimAlive =
+            loopClose?.keep_claim === true || (loopClose?.action === 'noop' && loopStillOpen);
+          if (keepClaimAlive) {
+            // The next_turn spawn (async) is awaited by runHarvestLane. The
+            // assignment for THIS turn is still completed above.
+            entry.claim_released = false;
+            reasons.push(
+              loopClose?.keep_claim
+                ? 'claim kept alive for review fix-cycle re-dispatch (PR2)'
+                : 'claim left intact — idempotent re-harvest on an active review loop (no strand)',
+            );
+          } else {
+            // trp#928 — use the cascade helper (was releaseClaimWithCascade — same
+            // logic for the last-claim rule but the cascade wrapper LOGS per-claim,
+            // so a silent ownership failure is observable in the runtime event log
+            // rather than only in this in-memory `reasons` string).
+            const cascade = releaseClaimsCascade([assignment.claim_id], { cwd, planStatus: 'done' });
+            logCascadeReleaseResult({ actor, trigger: 'harvest_integrate', assignment_id: lane.assignment_id, claim_id: assignment.claim_id, cascade, cwd });
+            const claimEntry = cascade.entries[0];
+            entry.claim_released = claimEntry?.released === true;
+            if (claimEntry && !claimEntry.released) {
+              reasons.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
+            }
           }
         }
       } else {

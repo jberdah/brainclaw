@@ -1037,8 +1037,8 @@ const MCP_WRITE_TOOLS = [
           // created a loop structure without dispatching the first turn, so
           // nothing ever ran. Loops are opened via
           // bclaw_coordinate(intent='review', open_loop=true) or intent='ideate'.
-          enum: ['get', 'list', 'turn', 'complete_turn', 'advance', 'add_artifact', 'pause', 'resume', 'close'],
-          description: 'Loop lifecycle intent for driving turns inside a loop that was already opened via the coordinate facade. To START a loop, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` or `intent="ideate"` — that opens the loop AND dispatches the first turn. See docs/concepts/loop-engine.md.',
+          enum: ['get', 'list', 'turn', 'complete_turn', 'advance', 'add_artifact', 'pause', 'resume', 'close', 'bind'],
+          description: 'Loop lifecycle intent for driving turns inside a loop that was already opened via the coordinate facade. To START a loop, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` or `intent="ideate"` — that opens the loop AND dispatches the first turn. `bind` (implementation loops only) dispatches the loop\'s linked sequence and advances bind→execute — the engine action for the `bind` phase. See docs/concepts/loop-engine.md.',
         },
         loop_id: { type: 'string', description: 'Target loop id (lop_…). Required for every intent except open and list.' },
         kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
@@ -1061,6 +1061,11 @@ const MCP_WRITE_TOOLS = [
         outcome: { type: 'string', enum: ['done', 'failed', 'cancelled'], description: 'complete_turn outcome (default done).' },
         failure_reason: { type: 'string', description: 'complete_turn: optional failure/cancel reason.' },
         artifact: { type: 'object', description: 'complete_turn / add_artifact payload: { phase, type, body?, produced_by?, ref? }.' },
+        dry_run: { type: 'boolean', description: 'bind: analyze + report what would dispatch; no spawn, no advance.' },
+        lanes: { type: 'array', items: { type: 'string' }, description: 'bind: restrict the dispatch to specific sequence lanes.' },
+        auto_execute: { type: 'boolean', description: 'bind: deliver briefs without spawning (→ manual launch commands).' },
+        model: { type: 'string', description: 'bind: model override for the dispatched agents.' },
+        max_assignments: { type: 'number', description: 'bind: cap assignments made in this bind.' },
         to_phase: { type: 'string', description: 'advance: explicit target phase (otherwise the next phase).' },
         force: { type: 'boolean', description: 'advance: allow going backwards (increments iteration_count).' },
         reason: { type: 'string', description: 'advance / pause / close: optional reason string.' },
