@@ -18,7 +18,10 @@ import {
 } from '../../src/core/claim-scope.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
-describe('claim scope grammar — classification', () => {
+// concurrency:false — see claim-liveness-file-evidence.test.ts: under
+// --test-isolation=none a suite's tests run concurrently, so a shared
+// `workspace` reassigned in beforeEach can be stomped mid-test.
+describe('claim scope grammar — classification', { concurrency: false }, () => {
   let workspace: TestWorkspace;
 
   beforeEach(() => {
@@ -82,7 +85,7 @@ describe('claim scope grammar — classification', () => {
   });
 });
 
-describe('claim scope conformity — SILENT on doubt (inverted default)', () => {
+describe('claim scope conformity — SILENT on doubt (inverted default)', { concurrency: false }, () => {
   let workspace: TestWorkspace;
 
   beforeEach(() => {

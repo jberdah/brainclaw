@@ -24,7 +24,10 @@ function git(cwd: string, ...args: string[]): void {
   assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
 }
 
-describe('claim base_sha — recorded at creation', () => {
+// concurrency:false — a shared `workspace` reassigned in beforeEach is unsafe
+// under --test-isolation=none, where node runs a suite's tests concurrently.
+// These passed by luck; the guard makes that not matter.
+describe('claim base_sha — recorded at creation', { concurrency: false }, () => {
   let workspace: TestWorkspace;
 
   beforeEach(() => {
@@ -91,7 +94,7 @@ describe('claim base_sha — recorded at creation', () => {
   });
 });
 
-describe('claim base_sha — degrades silently, never blocks acquisition', () => {
+describe('claim base_sha — degrades silently, never blocks acquisition', { concurrency: false }, () => {
   let workspace: TestWorkspace;
 
   beforeEach(() => {
