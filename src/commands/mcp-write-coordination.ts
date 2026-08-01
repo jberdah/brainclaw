@@ -33,6 +33,13 @@ import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
 import { validateLoopProjectResolution, type LoopProjectResolved } from '../core/loops/project-resolution.js';
 import { coordinateNextActions, dispatchNextActions } from '../core/next-actions.js';
+import {
+  agentValidationFailedWarning,
+  planAlreadyAssignedWarning,
+  pushStructuredWarning,
+  scopeAlreadyClaimedWarning,
+} from '../core/warnings.js';
+import type { WarningDetail } from '../core/facade-schema.js';
 import { ackMessage, getThread, hasActiveAssignment, sendMessage } from '../core/messaging.js';
 import { dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
 import { CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
@@ -372,6 +379,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   // for the intents that actually spawn a worktree worker). See the
   // assessDirtyDispatchGuard call after the cross-project block.
   const warnings: string[] = [];
+  // pln#635 — structured sibling of `warnings`. Deliberately a SUBSET: the
+  // codes that carry a recovery path write here, prose advisories stay
+  // string-only for now (`warnings` remains the complete channel — see
+  // core/warnings.ts for the reference-threading reason).
+  const warningDetails: WarningDetail[] = [];
   const artifacts: Array<{ type: string; id: string; path?: string }> = [];
   const side_effects: Array<{ action: string; entity: string; id: string }> = [];
 
@@ -812,8 +824,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       // retry loops can react (e.g. fall back to a different agent).
       const check = validateAgentForDispatch(agentName, { requireSpawnable: true });
       if (!check.valid) {
-        warnings.push(JSON.stringify({
-          warning: 'agent_validation_failed',
+        pushStructuredWarning(warnings, warningDetails, agentValidationFailedWarning({
           agent: agentName,
           code: check.code,
           reason: check.reason,
@@ -826,10 +837,9 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
 
       // Guard: warn if there is already a non-archived assign message for this agent+scope
       if (hasActiveAssignment(agentName, assignScope, dispatchCwd)) {
-        warnings.push(JSON.stringify({
-          warning: 'plan_already_assigned',
-          plan_id: assignScope,
-          existing_agent: agentName,
+        pushStructuredWarning(warnings, warningDetails, planAlreadyAssignedWarning({
+          planId: assignScope,
+          existingAgent: agentName,
         }));
       }
 
@@ -839,11 +849,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       );
       if (conflictingClaims.length > 0) {
         const existing = conflictingClaims[0];
-        warnings.push(JSON.stringify({
-          warning: 'scope_already_claimed',
+        pushStructuredWarning(warnings, warningDetails, scopeAlreadyClaimedWarning({
           scope: assignScope,
-          existing_agent: existing.agent,
-          existing_claim_id: existing.id,
+          existingAgent: existing.agent,
+          existingClaimId: existing.id,
         }));
       }
 
@@ -1436,8 +1445,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       // trp#51: validate target agent before creating a new claim.
       const check = validateAgentForDispatch(newAgentName, { requireSpawnable: true });
       if (!check.valid) {
-        warnings.push(JSON.stringify({
-          warning: 'agent_validation_failed',
+        pushStructuredWarning(warnings, warningDetails, agentValidationFailedWarning({
           agent: newAgentName,
           code: check.code,
           reason: check.reason,
@@ -1844,8 +1852,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
           // behind that only fails later at spawn time.
           const critCheck = validateAgentForDispatch(slot.agent, { requireSpawnable: true });
           if (!critCheck.valid) {
-            warnings.push(JSON.stringify({
-              warning: 'agent_validation_failed',
+            pushStructuredWarning(warnings, warningDetails, agentValidationFailedWarning({
               agent: slot.agent,
               code: critCheck.code,
               reason: critCheck.reason,
@@ -2148,6 +2155,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     ...(resultExecReason ? { execution_reason: resultExecReason } : {}),
     ...(verifyWith ? { verify_with: verifyWith } : {}),
     ...(coordinateActions.length ? { next_actions: coordinateActions } : {}),
+    ...(warningDetails.length ? { warning_details: warningDetails } : {}),
   };
 
   const summaryParts: string[] = [`✔ bclaw_coordinate [${req.intent}] targets=${resolvedAgents.length}`];
