@@ -166,6 +166,63 @@ Without claims, multiple agents can easily touch the same area at once and gener
 Claims are not necessarily hard file locks.
 They are a shared coordination signal.
 
+### Scope grammar and conformity (v1.19.0+)
+
+A claim's `scope` is a free string, and in practice it is used three ways. Measured
+over the 613 real claims in the dogfood store:
+
+| Shape | Share | Example |
+|---|---|---|
+| Path-like | 57.6% | `src/core/auth.ts`, `docs/` |
+| Loop reference | 22.8% | `review-loop:lop_…`, `ideate-loop:lop_…:lsl_…` |
+| Free prose | 19.6% | `Loop engine residuals #1-4` |
+
+So **42.4% of real scopes cannot be matched to a file path at all** — and the
+non-matchable share is *growing*, because coordinator-created lane claims are the
+ones being minted. Any check built naively on path matching would false-accuse on
+nearly one claim in two.
+
+brainclaw therefore classifies a scope into `paths` / `loop_ref` / `prose` / `empty`
+and reports conformity as `in_scope`, `out_of_scope`, or **`unverifiable`** — a
+first-class verdict that every consumer renders as **silence**. Only a
+path-resolvable scope with concrete stray files can ever produce an accusation.
+`.brainclaw/` and `.git/` are never counted as out of scope: every brainclaw call
+rewrites them, so counting them would accuse every agent on every claim.
+
+The reserved loop prefixes are **enumerated**, not inferred from shape — so
+`project-resolution: the gate` reads as prose, and a Windows absolute path
+(`C:/Users/…`) stays a path rather than being read as a `C:` prefix.
+
+### `base_sha` and declared `paths[]`
+
+A new claim records **`base_sha`**, the commit its work started from, resolved once
+at creation and never moved. This is the baseline any "what did this claim actually
+touch?" comparison needs: neither `git diff HEAD` nor the worktree's dirty set is
+authoritative, because a lane that commits mid-work moves the ground under both —
+each would report "touched nothing" the instant it committed.
+
+Optionally a creator can declare **`paths[]`**, a machine-readable footprint that
+raises conformity coverage above what classifying a free-string `scope` can reach.
+
+Both are additive and never backfilled. A claim with no baseline is `unverifiable`,
+never guessed, and acquiring a claim **never fails or blocks** because a baseline
+could not be computed — outside a git repo the claim is simply created without one.
+
+> `paths[]` is currently settable through the core and the CLI, but is not yet
+> exposed in `bclaw_claim`'s published MCP inputSchema.
+
+### Liveness: file evidence, not just a session
+
+A spawned sandboxed worker cannot reach MCP, so it cannot maintain any server-side
+liveness record — which is why proof-of-life lives in filesystem sentinels the
+worker writes into its own worktree. Since v1.19.0 claim liveness reads that same
+evidence (worktree/project heartbeat plus filesystem activity) **before** consulting
+any session record, with the same 30-minute freshness window an assignment gets.
+
+Previously a demonstrably-alive worker kept its *assignment* while its *claim* aged
+out on wall-clock alone — and a coordinator-created claim, which carries no
+`session_id`, fell straight through to `never-adopted`.
+
 ## Policy checks
 
 Before editing a scope, agents can verify governance compliance using `check-policy`:
