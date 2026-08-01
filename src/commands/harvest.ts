@@ -427,6 +427,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
 
     // Assignment filter (when harvesting a specific lane).
     if (options.assignmentId && lane.assignment_id !== options.assignmentId) continue;
+    let ideationLoop: ReturnType<typeof closeIdeationLoopFromLaneResult> = undefined;
 
     // pln#628 Focus 4B (Codex review of #87 BLOCKING 1) — a review lane must
     // close/advance its loop on the plain report-only harvest path too, not only
@@ -453,7 +454,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
         }
         // pln#521 P2-bis — the ideation analog: a critic lane records its critique +
         // advances the ideation loop. Returns undefined for non-ideate scopes (no-op here).
-        closeIdeationLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+        ideationLoop = closeIdeationLoopFromLaneResult(laneAssignment, lane, agent, cwd);
       }
     } catch { /* never block harvest on loop-close */ }
 
@@ -475,6 +476,9 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
             assignment_id: lane.assignment_id,
             status: lane.status,
             artifacts: lane.artifacts ?? [],
+            body: lane.body ?? null,
+            artifact_type: lane.artifact_type ?? null,
+            ideation_loop: ideationLoop ?? null,
             files_changed: lane.files_changed ?? [],
             source_worktree: worktreePath,
           },
@@ -586,6 +590,8 @@ export interface LaneIntegrateEntry {
   reason: string;
   /** pln#628 Focus 4B — set when this lane closed/advanced a review loop. */
   review_loop?: ReviewLoopCloseResult;
+  /** pln#638 — set when this lane recorded/reconciled a critic artifact. */
+  ideation_loop?: Exclude<ReturnType<typeof closeIdeationLoopFromLaneResult>, undefined>;
 }
 
 export interface LaneIntegrateResult {
@@ -707,6 +713,7 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         const ideationClose = closeIdeationLoopFromLaneResult(assignment, lane, actor, cwd);
         if (ideationClose) {
           reasons.push(`ideate-loop ${ideationClose.loop_id}: ${ideationClose.action} — ${ideationClose.reason}`);
+          entry.ideation_loop = ideationClose;
         }
 
         // pln#630 PR3a — a TURN-OWNED review lane finalizes via the exactly-once
@@ -846,6 +853,9 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
             files_changed: entry.files_changed,
             assignment_completed: entry.assignment_completed,
             claim_released: entry.claim_released,
+            body: lane.body ?? null,
+            artifact_type: lane.artifact_type ?? null,
+            ideation_loop: entry.ideation_loop ?? null,
           },
         }, cwd);
       } catch { /* event is best-effort */ }

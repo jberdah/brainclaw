@@ -41,11 +41,21 @@ import type { Assignment, LaneResult } from './schema.js';
 import { getLoop } from './loops/store.js';
 import { complete_turn, advance } from './loops/verbs.js';
 import { withLoopLock } from './loops/lock.js';
+import { LOOP_ARTIFACT_BODY_MAX_BYTES } from './loops/types.js';
 import type { LoopArtifact, LoopSlot, LoopThread } from './loops/types.js';
 
 /** review-loop:lop_xxx → the loop id (mirrors assignment-reconciler.ts). */
 const REVIEW_LOOP_SCOPE_RE = /^review-loop:(lop_[0-9a-z]+)/;
 const LOOP_TERMINAL = new Set(['completed', 'cancelled', 'blocked']);
+
+/** Keep the loop-facing verdict valid while the full worker body stays durable in harvest metadata. */
+function capVerdictBody(prefix: string, detail: string): string {
+  const full = `${prefix}${detail ? `: ${detail}` : ''}`;
+  if (Buffer.byteLength(full, 'utf8') <= LOOP_ARTIFACT_BODY_MAX_BYTES) return full;
+  const marker = '…[truncated; full body retained in lane harvest event]';
+  const room = LOOP_ARTIFACT_BODY_MAX_BYTES - Buffer.byteLength(prefix, 'utf8') - Buffer.byteLength(': ', 'utf8') - Buffer.byteLength(marker, 'utf8');
+  return `${prefix}: ${Buffer.from(detail, 'utf8').subarray(0, Math.max(0, room)).toString('utf8').replace(/�+$/, '')}${marker}`;
+}
 
 /**
  * pln#628 Focus 4B PR2 — the next turn the coordinator should dispatch to keep
@@ -192,7 +202,7 @@ export function closeReviewLoopFromLaneResult(
 
         const slot = resolveReviewerSlot(loop, assignment);
         const acceptedVerdictExists = loop.artifacts.some(isAcceptedVerdict);
-        const summary = (lane.review_summary ?? '').trim();
+        const detail = ((lane as Pick<LaneResult, 'body'>).body ?? lane.review_summary ?? '').trim();
 
         // ── approve → close on reviewer_green ───────────────────────────────
         if (verdict === 'approve') {
@@ -201,7 +211,7 @@ export function closeReviewLoopFromLaneResult(
             complete_turn(
               {
                 id: loopId, slot_id: slot.slot_id, actor,
-                artifact: { phase: loop.current_phase, type: 'verdict', body: `accepted${summary ? `: ${summary}` : ''}` },
+                artifact: { phase: loop.current_phase, type: 'verdict', body: capVerdictBody('accepted', detail) },
               },
               cwd,
             );
@@ -250,7 +260,7 @@ export function closeReviewLoopFromLaneResult(
         complete_turn(
           {
             id: loopId, slot_id: slot.slot_id, actor,
-            artifact: { phase: loop.current_phase, type: 'verdict', body: `changes-requested${summary ? `: ${summary}` : ''}` },
+            artifact: { phase: loop.current_phase, type: 'verdict', body: capVerdictBody('changes-requested', detail) },
           },
           cwd,
         );
@@ -296,7 +306,7 @@ export function closeReviewLoopFromLaneResult(
             agent_id: slot.agent_id,
             phase: advanced.loop.current_phase,
             iteration: advanced.loop.iteration_count,
-            task: buildFixCycleTask(summary, advanced.loop.iteration_count),
+            task: buildFixCycleTask(detail, advanced.loop.iteration_count),
           },
         };
       },

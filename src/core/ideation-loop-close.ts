@@ -138,7 +138,13 @@ export function closeIdeationLoopFromLaneResult(
         // A critic's LANE-RESULT carries free-form summary/notes (no structured
         // critiques[] field) → ONE critique artifact. A bare lane with no critique
         // content FAILS the slot (mirror ideationReducer: no fake gate progress).
-        const critique = [lane.summary, lane.notes]
+        const expectedArtifactType = 'critique';
+        // Prefer the typed envelope, but honor the legacy artifacts labels too:
+        // coverage_gap used to be silently invisible to a critique gate.
+        const reportedArtifactType = (lane as Pick<LaneResult, 'artifact_type' | 'artifacts'>).artifact_type?.trim()
+          ?? (lane as Pick<LaneResult, 'artifacts'>).artifacts?.find((label) => /^[a-z][a-z0-9_]*$/.test(label) && label !== expectedArtifactType);
+        const body = (lane as Pick<LaneResult, 'body'>).body?.trim();
+        const critique = body || [lane.summary, lane.notes]
           .map((s) => (s ?? '').trim())
           .filter(Boolean)
           .join('\n\n')
@@ -148,13 +154,19 @@ export function closeIdeationLoopFromLaneResult(
             { id: loopId, slot_id: slot.slot_id, actor, outcome: 'failed', failure_reason: 'critic lane produced no critique content (bare summary)' },
             cwd,
           );
-          return { loop_id: loopId, action: 'failed', reason: 'bare critic lane → slot failed; critique gate unchanged', loop_status: getLoop(loopId, cwd)?.status };
+          return { loop_id: loopId, action: 'failed', reason: reportedArtifactType && reportedArtifactType !== expectedArtifactType
+            ? `reported artifact type "${reportedArtifactType}" has no usable body; expected "${expectedArtifactType}"`
+            : 'bare critic lane → slot failed; critique gate unchanged',
+          loop_status: getLoop(loopId, cwd)?.status };
         }
         complete_turn(
           { id: loopId, slot_id: slot.slot_id, actor, outcome: 'done', artifact: { phase: loop.current_phase, type: 'critique', body: capCritique(critique) } },
           cwd,
         );
-        return tryAdvance(true);
+        const advanced = tryAdvance(true);
+        return reportedArtifactType && reportedArtifactType !== expectedArtifactType
+          ? { ...advanced, reason: `reconciled reported artifact type "${reportedArtifactType}" to expected "${expectedArtifactType}"; ${advanced.reason}` }
+          : advanced;
       },
     });
   } catch (err) {
