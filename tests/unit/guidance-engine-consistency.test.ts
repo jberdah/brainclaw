@@ -201,31 +201,86 @@ describe('guidance ↔ engine — generated hooks respect their host contract', 
  * ambiguity: whatever the renderer returns is, by definition, what an agent
  * reads.
  */
-function renderedGuidanceSurfaces(): Array<{ label: string; text: string }> {
+/**
+ * The state fixture, in the shape the renderer ACTUALLY reads
+ * (`instruction-templates.ts` lines 342-471: active_constraints, known_traps,
+ * plan_items, open_handoffs, recent_decisions).
+ *
+ * THIS WAS WRONG WHEN THE SUITE SHIPPED, and it silently gutted the guard. The
+ * fixture used plausible-but-nonexistent names (traps, decisions, constraints,
+ * handoffs), every renderer that touched one threw, and the `try/catch` below
+ * swallowed it. Measured after the fix: 7 of 19 stable surfaces and 0 of 16 live
+ * surfaces were being checked — the highest-leverage item in the guidance
+ * backlog was covering ~18% of its target, and the "renders at least one
+ * surface" guard passed happily on the 7 survivors.
+ *
+ * A guard that silently checks less than it claims is the very failure class this
+ * suite exists to prevent, one level up. Hence: no swallowing, and a coverage
+ * assertion with real numbers.
+ */
+const RENDER_STATE_FIXTURE = {
+  active_constraints: [],
+  known_traps: [],
+  plan_items: [],
+  open_handoffs: [],
+  recent_decisions: [],
+};
+
+interface RenderedSurfaces {
+  surfaces: Array<{ label: string; text: string }>;
+  /** Render failures, which are now FAILURES rather than silent skips. */
+  errors: string[];
+  profileCount: number;
+  liveCount: number;
+}
+
+function renderedGuidanceSurfacesDetailed(): RenderedSurfaces {
   const surfaces: Array<{ label: string; text: string }> = [];
-  for (const profile of Object.values(DEFAULT_CAPABILITY_PROFILES)) {
+  const errors: string[] = [];
+  const profiles = Object.values(DEFAULT_CAPABILITY_PROFILES);
+  let liveCount = 0;
+  for (const profile of profiles) {
     const input = {
       profile,
-      state: { plan_items: [], traps: [], decisions: [], constraints: [], handoffs: [], runtime_notes: [] },
+      state: RENDER_STATE_FIXTURE,
       projectName: 'consistency-fixture',
       brainclawVersion: '0.0.0-test',
       resolvedInstructions: [],
     } as unknown as Parameters<typeof renderStableSection>[0];
     try {
       surfaces.push({ label: `stable:${profile.name}`, text: renderStableSection(input).content });
-    } catch { /* a profile that cannot render a stable section is out of scope */ }
+    } catch (err) {
+      errors.push(`stable:${profile.name} — ${err instanceof Error ? err.message : String(err)}`);
+    }
     try {
       const live = renderLiveSection(input);
-      if (live) surfaces.push({ label: `live:${profile.name}`, text: live.content });
-    } catch { /* same */ }
+      // undefined is legitimate: not every profile has a live-companion tier.
+      if (live) { surfaces.push({ label: `live:${profile.name}`, text: live.content }); liveCount += 1; }
+    } catch (err) {
+      errors.push(`live:${profile.name} — ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
-  return surfaces;
+  return { surfaces, errors, profileCount: profiles.length, liveCount };
+}
+
+function renderedGuidanceSurfaces(): Array<{ label: string; text: string }> {
+  return renderedGuidanceSurfacesDetailed().surfaces;
 }
 
 describe('guidance ↔ engine — RENDERED guidance, not source text', () => {
-  it('renders at least one real surface (guard against checking nothing)', () => {
-    const surfaces = renderedGuidanceSurfaces();
-    assert.ok(surfaces.length >= 1, 'no guidance surface could be rendered — the fixture input shape drifted');
+  it('renders EVERY profile without swallowing a single failure', () => {
+    // The guard this suite needed and did not have. "At least one surface" was
+    // satisfiable by 7 of 35 possible renders.
+    const { errors } = renderedGuidanceSurfacesDetailed();
+    assert.deepEqual(errors, [], `a guidance surface failed to render (the fixture or the renderer drifted):\n${errors.join('\n')}`);
+  });
+
+  it('checks a stable surface for every profile, and the live companions too', () => {
+    const { surfaces, profileCount, liveCount } = renderedGuidanceSurfacesDetailed();
+    const stable = surfaces.filter((s) => s.label.startsWith('stable:')).length;
+    assert.equal(stable, profileCount, 'every capability profile must contribute a stable surface');
+    assert.ok(liveCount > 0, 'no live companion surface was checked — 2a/2b guidance would be unguarded');
+    assert.equal(surfaces.length, stable + liveCount);
   });
 
   it('no RENDERED surface names a tool absent from the published catalog', () => {
