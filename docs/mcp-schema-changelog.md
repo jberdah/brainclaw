@@ -8,7 +8,81 @@ guarantees this changelog follows.
 
 ---
 
-## Unreleased
+## [1.19.0] — 2026-08-01
+
+**Added — `warning_details` on the facade response contract (pln#635)**
+- Additive sibling of `warnings: string[]`, which keeps both its type and its
+  byte-identical historical contents. Each record carries `code` / `message` /
+  optional `data` / optional `next_actions`, so a consumer no longer has to
+  sniff-parse a string that may or may not be JSON to recover structure.
+- The legacy string is DERIVED from the record, and only for an **enumerated**
+  set of codes that historically shipped a JSON blob (`agent_validation_failed`,
+  `plan_already_assigned`, `scope_already_claimed`). Enumerated rather than
+  inferred so a NEW code can never start emitting JSON at a consumer that has
+  only ever seen prose.
+- Read contract, not input: no tool added/removed/renamed, no inputSchema change,
+  **no surface-fingerprint movement**. `warnings` remains the complete channel;
+  `warning_details` is a structured subset (see `src/core/warnings.ts` for why).
+
+**Added — `next_actions` emitted by the write surfaces (pln#634 PR1)**
+- `FacadeResponseSchema.next_actions` already existed and was optional; the write
+  facades simply never populated it. They now do, derived from the OUTCOME rather
+  than from a static table — and omit the key entirely when there is no genuine
+  follow-up, so its presence stays meaningful. Response-only; no fingerprint move.
+
+**Added — new structured warning codes**
+- `wrote_outside_claim_scope` (pln#636 C2) — emitted on `bclaw_release_claim`, on
+  assignment→`completed`, at LANE-RESULT harvest ingestion and at `session-end`.
+  Carries `claim_id`, `scope`, `declared_pathspecs`, `unexpected_paths`,
+  `base_sha`, and two recovery actions. Advisory: the write already happened.
+- `generated_surfaces_stale` (pln#638 2b) — surfaced on `session-start` as
+  `stale_surfaces` when a generated guidance surface on disk was stamped by an
+  older brainclaw than the running one. Deliberately carries **no**
+  `next_actions`: the recovery is `brainclaw export --write` and no MCP tool
+  performs it, so the command travels in `message` + `data.refresh_command`
+  rather than as an action whose args the engine would reject.
+
+**Added — `ClaimSchema.base_sha` / `ClaimSchema.paths` (pln#636 C0-b)**
+- Both optional and never backfilled; legacy claims parse unchanged and a missing
+  baseline is treated as `unverifiable`, never guessed.
+- Record shape only. `paths` is NOT exposed in `bclaw_claim`'s published
+  inputSchema — settable via the core and CLI, readable by the conformity
+  reconcile — so this moves **no** surface fingerprint. Widening the published
+  input belongs in its own governed change (tracked as a known gap in
+  CHANGELOG 1.19.0).
+
+**Added — `SessionEndResult.scope_warnings`, `LaneHarvestResult.warnings`**
+- Both are `WarningDetail[]`, born structured (hence `toWarningDetail`, which
+  builds the record without inventing a throwaway legacy string array). Additive
+  result fields on non-MCP surfaces; `LaneHarvestResult.warnings` is always
+  present (empty when nothing was ingested), which is an exact-shape change for
+  any caller asserting `deepEqual` on that result.
+
+**Changed — a content-less loop artifact no longer satisfies a gate (pln#639)**
+- Behavioural, not schema: `artifact.body` stays optional (ref-based artifacts
+  legitimately have none), but an artifact with neither a non-empty `body` nor a
+  `ref` no longer counts toward `min_artifacts_by_type`. The unmet-gate reason
+  string now names how many artifacts of that type were discarded as empty.
+- Verified against the live corpus before shipping (219 loops / 321 artifacts,
+  zero content-less), so no running loop can be stalled by the stricter rule.
+
+**Changed — loop artifacts are attributed to their DISPATCH phase (pln#639)**
+- The ideation and review closers recorded `phase: loop.current_phase` (close
+  time); they now use the phase stamped on the slot at dispatch. A lane returning
+  after a phase advance is filed under the phase it was asked to work in.
+- No gate in the engine keys on `type: 'verdict'` and `reviewer_green` scans all
+  phases, so review-loop outcomes are unaffected — attribution changes, verdicts
+  do not.
+
+---
+
+## [1.18.0] — 2026-07-31
+
+> These entries sat under an `Unreleased` heading THROUGH the 1.18.0 release and
+> are rolled retroactively here. pln#630 / pln#627 / pln#628 shipped in 1.18.0
+> (see CHANGELOG.md); the pln#625 Phase 3 entry below predates it and was never
+> rolled either. Rolling the section is part of cutting a release — the 1.19.0
+> prep found it still open.
 
 **Added — turn-attempt evidence-correlation fields (pln#630 PR2b-a)**
 - Additive, backward-compatible: `LaneResultSchema` gains optional `turn_id` /

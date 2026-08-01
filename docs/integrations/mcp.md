@@ -141,6 +141,51 @@ See [code map](../code-map.md) for the full Code Map reference (CLI, freshness m
 | `bclaw_update_memory` | memory | Update a memory item's text or metadata |
 | `bclaw_compact` | memory | LLM-driven semantic memory compaction (two-phase) |
 
+### What a response tells you to do next (v1.19.0+)
+
+Responses are self-teaching: rather than requiring you to memorise the API, they
+carry the follow-up derived from **what actually happened**.
+
+**`next_actions`** — an array of `{tool, args?, when?}`. Present only when there is
+a genuine follow-up, so its presence is meaningful; a handler with nothing to add
+omits the key entirely rather than padding it. It is derived from the outcome, not
+from a static table: releasing a claim proposes something different depending on
+whether the plan cascade fired or refused. Fan-out is capped at 3, with an explicit
+note when more were available.
+
+**`warning_details`** — the structured sibling of `warnings: string[]`. Each entry
+carries a stable `code`, human `message`, the `data` the prose mentions, and — the
+part a bare string could never hold — `next_actions` naming the way out.
+
+```jsonc
+{
+  "code": "wrote_outside_claim_scope",
+  "message": "Claim clm_… declared 'src/core' but 2 touched file(s) sit outside it: …",
+  "data": { "claim_id": "clm_…", "scope": "src/core", "unexpected_paths": ["docs/x.md"] },
+  "next_actions": [{ "tool": "bclaw_update", "args": { "entity": "claim", "…": "…" } }]
+}
+```
+
+`warnings` keeps its type **and** its byte-identical historical contents, so a
+consumer that ignores `warning_details` sees no change. Read `warnings` for
+completeness and `warning_details` for the codes that carry a recovery path — the
+structured channel is a subset, not a mirror.
+
+Codes you may see today:
+
+| Code | Emitted by | Meaning |
+|---|---|---|
+| `scope_already_claimed` | `bclaw_coordinate` | Another agent holds the scope |
+| `plan_already_assigned` | `bclaw_coordinate` | A second assignment on one plan |
+| `agent_validation_failed` | `bclaw_coordinate` | Target is not dispatchable |
+| `wrote_outside_claim_scope` | release / assignment-completed / harvest / session-end | Files were written outside the claim's declared scope. **Advisory** — the write already happened |
+| `generated_surfaces_stale` | `session-start` | Generated guidance on disk was written by an older brainclaw. Recovery is `brainclaw export --write`; no MCP tool performs it, so no `next_actions` is offered rather than one the engine would reject |
+
+Conformity warnings are **silent on doubt** by construction: a claim whose scope is
+a loop reference, free prose or a glob — 42.4% of the real corpus — yields
+`unverifiable` and emits nothing. An accuser that is wrong that often teaches
+agents to ignore the channel, which is worse than shipping no check at all.
+
 ### Canonical grammar (standard tier, v1.0+)
 
 Phase 3 shipped a unified grammar that replaces the per-entity tools
