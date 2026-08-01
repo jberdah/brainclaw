@@ -40,6 +40,7 @@ import { assessBootstrapNeed, resolveEmptyMemoryRecommendation, type EmptyMemory
 import { WorkRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
 import { sweepDeadPidRunningAgentRunsAtRead, sweepTurnOwnedPreRunLeaseAtRead } from '../core/agentrun-reconciler.js';
+import { extractSuggestedTools, observeToolCall, recordSuggestion } from '../core/guidance-telemetry.js';
 import { bumpActiveAssignmentHeartbeat } from '../core/assignments.js';
 import {
   handleBclawAckMessage,
@@ -2255,6 +2256,14 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     try { sweepTurnOwnedPreRunLeaseAtRead(cwd); } catch { /* best-effort */ }
   }
 
+  // pln#634 PR2 — guidance adherence. Judge the PREVIOUS response's suggestion
+  // against the call actually being made now, before delegating. Tool names
+  // only, never arguments or content. Best-effort: telemetry may not break a
+  // tool call.
+  try {
+    observeToolCall({ sessionId: effectiveConnectionSessionId, tool: payload.name, cwd });
+  } catch { /* never break the tool path */ }
+
   // ── Delegate to inner handler ───────────────────────────────────────────────
   const outcome = await _executeMcpToolCallInner({
     ...payload,
@@ -2262,6 +2271,15 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     connectionSessionId: effectiveConnectionSessionId,
     effectiveScope: effective,
   });
+
+  // Remember what THIS response suggested, so the next call can be judged.
+  try {
+    recordSuggestion({
+      sessionId: effectiveConnectionSessionId,
+      tool: payload.name,
+      suggested: extractSuggestedTools(outcome.response),
+    });
+  } catch { /* never break the tool path */ }
 
   // Apply legacy deprecation warning uniformly (Phase 3 slice 3g). Read tools
   // already get it at line 2560; write tools historically did not. This
