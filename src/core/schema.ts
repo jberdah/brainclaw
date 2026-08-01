@@ -810,6 +810,28 @@ export const ClaimSchema = z.object({
   assignment_message_id: z.string().optional(),
   /** Assignment ID from the Agent SDK runtime protocol. Links claim to its Assignment lifecycle entity. */
   assignment_id: z.string().optional(),
+  /**
+   * pln#636 C0-b — commit the claim's work started FROM, recorded at creation.
+   *
+   * This is the immutable baseline any "what did this claim actually touch?"
+   * comparison needs. The design review settled the question by rejecting both
+   * options it offered: neither `git diff` against HEAD nor the worktree's dirty
+   * set is authoritative, because a lane that commits mid-work moves the ground
+   * under both. A fixed point recorded up front is the only honest basis.
+   *
+   * Optional and never backfilled: the 613 claims that predate this field simply
+   * have no baseline, and a conformity check must treat that as `unverifiable`
+   * rather than guessing one (see core/claim-scope.ts on the inverted default).
+   */
+  base_sha: z.string().optional(),
+  /**
+   * pln#636 C0-b — file footprint the claim DECLARES, when its creator knows it.
+   *
+   * Raises conformity coverage above what classifying a free-string `scope` can
+   * reach (57.6% of the live corpus is path-resolvable). Purely additive: absent
+   * means "fall back to classifying `scope`", never "no files allowed".
+   */
+  paths: z.array(z.string()).optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 
