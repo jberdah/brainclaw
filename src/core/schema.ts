@@ -1122,6 +1122,13 @@ export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
  * environment, e.g. a genuinely MCP-less agent). The coordinator ingests it with
  * `brainclaw harvest <assignment_id>`.
  */
+/**
+ * Largest inline worker body accepted in a LANE-RESULT. This is deliberately
+ * larger than a loop artifact body: harvest persists the original body in its
+ * durable runtime event before a loop closer applies its smaller display cap.
+ */
+export const LANE_RESULT_BODY_MAX_BYTES = 64 * 1024;
+
 export const LaneResultSchema = z.object({
   assignment_id: z.string(),
   /**
@@ -1142,6 +1149,18 @@ export const LaneResultSchema = z.object({
   files_changed: z.array(z.string()).optional(),
   /** Free-form notes (blockers, follow-ups). */
   notes: z.string().optional(),
+  /**
+   * Full worker reasoning or review content. Unlike `summary`, this is the
+   * durable handoff payload and is copied into the coordinator-side harvest
+   * event, so it survives worktree cleanup. Optional for legacy workers.
+   */
+  body: z.string().refine((body) => Buffer.byteLength(body, 'utf8') <= LANE_RESULT_BODY_MAX_BYTES, `LANE-RESULT.body must be ≤ ${LANE_RESULT_BODY_MAX_BYTES} bytes`).optional(),
+  /**
+   * Type the worker associated with `body`. Optional because legacy
+   * `artifacts` remains a list of opaque labels/refs. A loop harvester may
+   * reconcile this to its phase's required artifact type.
+   */
+  artifact_type: z.string().min(1).optional(),
   /**
    * pln#628 Focus 4B — review-loop verdict. A worker running a review-loop turn
    * sets this to signal whether the change is good to merge (`approve`) or needs
