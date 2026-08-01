@@ -32,6 +32,7 @@ import { validateMcpField } from '../core/input-validation.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
 import { validateLoopProjectResolution, type LoopProjectResolved } from '../core/loops/project-resolution.js';
+import { coordinateNextActions, dispatchNextActions } from '../core/next-actions.js';
 import { ackMessage, getThread, hasActiveAssignment, sendMessage } from '../core/messaging.js';
 import { dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
 import { CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
@@ -214,12 +215,26 @@ export async function handleBclawDispatch(args: Record<string, unknown>, ctx: Mc
       scope: `${dispatchResult.messages_sent.length} assignments`,
     }, cwd);
 
+    // pln#634 — the text body already tells a human what to do next; the
+    // structured payload told an agent nothing. Derived from the real cycle
+    // outcome: verification targets for what spawned, analysis for what is
+    // blocked, and a re-run hint for a dry run. Manual launch commands are
+    // deliberately NOT mirrored here — they are not MCP-callable.
+    const dispatchActions = dispatchNextActions({
+      spawnedTargets: spawned
+        .map((m) => m.assignment_id ?? m.run_id ?? m.claim_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      blockedCount: analysis.blocked.length,
+      dryRun: !!args.dryRun,
+    });
+
     return {
       response: toolResponse({
         content: [{ type: 'text', text: lines.join('\n') }],
         ...dispatchResult,
         sequence_id: analysis.sequence.id,
         dry_run: !!args.dryRun,
+        ...(dispatchActions.length ? { next_actions: dispatchActions } : {}),
       }),
     };
   } catch (err: unknown) {
@@ -2080,8 +2095,17 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   // attach a self-documenting `verify_with` hint pointing at the assignment
   // record. Callers should not take delivered_and_started at face value —
   // it only attests the brief-ack sentinel was touched, not that the worker
-  // is doing useful work. The hint tells them exactly which canonical-
-  // grammar call to make next to verify spawn liveness.
+  // is doing useful work.
+  //
+  // pln#634 — the hint used to tell callers to expect "OS pid alive", which
+  // directly contradicts the protocol every instruction file ships
+  // (instruction-templates.ts: trust dispatch_status, NEVER the tracked pid).
+  // On Windows an ack-wrapped spawn runs under cmd.exe, so agent_run.pid is
+  // the wrapper — it exits by design and reads dead while the worker is alive
+  // and committing (trp_7fc3e3c4). An obedient agent following the old text
+  // killed healthy workers. The field shape is unchanged (retro-compat), the
+  // expectation no longer lies, and the authoritative call now also ships in
+  // `next_actions` below as bclaw_dispatch_status.
   let verifyWith: FacadeResponse['verify_with'] | undefined;
   if (resultExecStatus === 'delivered_and_started') {
     const firstAssignment = artifacts.find((a) => a.type === 'assignment');
@@ -2090,11 +2114,27 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
         action: 'bclaw_find',
         entity: 'agent_run',
         filter: { assignment_id: firstAssignment.id },
-        expected_when_alive: 'agent_run with status="running" AND OS pid alive AND last_event_at within the last few minutes',
+        expected_when_alive:
+          'agent_run with status="running" AND last_event_at within the last few minutes. '
+          + 'Do NOT judge liveness from agent_run.pid — on an ack-wrapped spawn that pid is the '
+          + `wrapper, not the worker. Prefer bclaw_dispatch_status(target_id: "${firstAssignment.id}") `
+          + 'for a sentinel-based verdict.',
         see_also: 'docs/concepts/dispatch-lifecycle.md',
       };
     }
   }
+
+  // pln#634 — outcome-derived affordances on the coordinate facade. Derived
+  // from what actually happened (did anything spawn? was a loop opened?), not
+  // from the intent alone; empty means the key is omitted rather than shipping
+  // an empty array for an agent to parse.
+  const coordinateActions = coordinateNextActions({
+    intent: req.intent,
+    assignmentIds: artifacts.filter((a) => a.type === 'assignment').map((a) => a.id),
+    loopId: artifacts.find((a) => a.type === 'loop')?.id,
+    candidateId: artifacts.find((a) => a.type === 'candidate')?.id,
+    executionStatus: resultExecStatus,
+  });
 
   const facadeResponse: FacadeResponse = {
     status: facadeStatus,
@@ -2107,6 +2147,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     ...(resultExecStatus ? { execution_status: resultExecStatus } : {}),
     ...(resultExecReason ? { execution_reason: resultExecReason } : {}),
     ...(verifyWith ? { verify_with: verifyWith } : {}),
+    ...(coordinateActions.length ? { next_actions: coordinateActions } : {}),
   };
 
   const summaryParts: string[] = [`✔ bclaw_coordinate [${req.intent}] targets=${resolvedAgents.length}`];
