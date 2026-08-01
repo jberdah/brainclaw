@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -128,6 +129,36 @@ export interface AcquireClaimScopeInput {
   session_id?: string;
   plan_id?: string;
   model?: string;
+  /** pln#636 C0-b — declared file footprint, when the creator knows it. */
+  paths?: string[];
+}
+
+/**
+ * pln#636 C0-b — resolve the commit a claim starts from.
+ *
+ * Recorded once, at creation, and never updated: it is the fixed point a later
+ * "what did this claim actually touch?" comparison needs. The design review
+ * rejected both alternatives — neither HEAD-at-read-time nor the worktree dirty
+ * set is authoritative once a lane commits mid-work.
+ *
+ * BEST-EFFORT BY CONSTRUCTION. A non-git project, a detached state, or a missing
+ * git binary yields `undefined`, and a claim without a baseline is simply
+ * `unverifiable` downstream. Claim acquisition must never fail because a
+ * conformity nicety could not be computed.
+ */
+export function resolveClaimBaseSha(cwd?: string): string | undefined {
+  try {
+    const result = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: cwd ?? process.cwd(),
+      encoding: 'utf-8',
+      windowsHide: true,
+    });
+    if (result.status !== 0) return undefined;
+    const sha = result.stdout.trim();
+    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface AcquireClaimScopeResult {
@@ -146,6 +177,10 @@ export interface AcquireClaimScopeResult {
  * the mutation-pipeline mutex serializes filesystem writes on the claims store.
  */
 export function acquireClaimScope(input: AcquireClaimScopeInput, cwd?: string): AcquireClaimScopeResult {
+  // Resolved OUTSIDE the mutate callback: one git call per acquisition, and it
+  // stays off the critical section (mutate serializes filesystem writes on the
+  // claims store, so a subprocess spawn inside it would widen the lock window).
+  const baseSha = resolveClaimBaseSha(cwd);
   return mutate({ cwd }, () => {
     const conflictingClaim = listClaims(cwd).find(
       (claim) => claim.status === 'active' && claim.scope === input.scope,
@@ -166,6 +201,10 @@ export function acquireClaimScope(input: AcquireClaimScopeInput, cwd?: string): 
       status: 'active',
       plan_id: input.plan_id,
       model: input.model,
+      // pln#636 C0-b — capture the baseline while we know it. Absent when the
+      // project is not a git repo; downstream treats that as unverifiable.
+      ...(baseSha ? { base_sha: baseSha } : {}),
+      ...(input.paths?.length ? { paths: input.paths } : {}),
     };
 
     saveClaimUnlocked(claim, cwd);
