@@ -20,6 +20,9 @@ import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, renderBr
 import { loadConfig } from '../core/config.js';
 import { generateClaimId, loadClaim, saveClaim, adoptClaimSession, releaseClaimWithCascade } from '../core/claims.js';
 import { releaseClaimNextActions } from '../core/next-actions.js';
+import { reconcileClaimConformity } from '../core/claim-conformity.js';
+import { pushStructuredWarning } from '../core/warnings.js';
+import type { WarningDetail } from '../core/facade-schema.js';
 import { checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree, sanitizeBranchComponent } from '../core/worktree.js';
 import { startSession } from './session-start.js';
@@ -318,6 +321,13 @@ export async function handleBclawReleaseClaim(payload: McpToolExecutionPayload, 
     session_id: connectionSessionId,
     override: coordinatorOverrideRequested,
   };
+  // pln#636 C2 — read the claim BEFORE the cascade: release is what closes it,
+  // and the conformity comparison needs its baseline + declared footprint.
+  // Best-effort by construction; a missing claim just means no advisory.
+  let claimBeforeRelease;
+  try {
+    claimBeforeRelease = loadClaim(claimId, cwd);
+  } catch { /* conformity is advisory — never block a release on it */ }
   let cascadeResult;
   try {
     cascadeResult = releaseClaimWithCascade(claimId, {
@@ -344,12 +354,26 @@ export async function handleBclawReleaseClaim(payload: McpToolExecutionPayload, 
     planWarning,
     requestedPlanStatus: typeof args.planStatus === 'string' ? args.planStatus : undefined,
   });
+  // pln#636 C2 — release is the natural reconcile point: the work is finished, so
+  // the footprint is final. Emits ONLY on a concrete, path-resolvable violation;
+  // every doubt (no baseline, prose scope, reaped worktree) stays silent.
+  const conformityWarnings: string[] = [];
+  const conformityDetails: WarningDetail[] = [];
+  if (claimBeforeRelease) {
+    try {
+      const conformity = reconcileClaimConformity(claimBeforeRelease, cwd);
+      if (conformity.warning) {
+        pushStructuredWarning(conformityWarnings, conformityDetails, conformity.warning);
+      }
+    } catch { /* advisory only */ }
+  }
   return {
     response: toolResponse({
       content: [{ type: 'text', text: summaryText }],
       claim_id: claimId,
       ...(planTransitioned ? { plan_id: cascadePlanId, plan_status: cascadeNewStatus } : {}),
       ...(planWarning ? { plan_warning: planWarning, plan_id: cascadePlanId } : {}),
+      ...(conformityWarnings.length ? { warnings: conformityWarnings, warning_details: conformityDetails } : {}),
       ...(releaseActions.length ? { next_actions: releaseActions } : {}),
     }),
   };
@@ -626,6 +650,23 @@ export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPaylo
       actor_id: resolved.identity!.agent_id,
     }, cwd);
 
+    // pln#636 C2 — reconcile the linked claim's scope BEFORE the cascade below
+    // releases it (after release there is no claim left to read). This is the
+    // lifecycle boundary a worker crosses when it reports its own completion.
+    const asgnConformityWarnings: string[] = [];
+    const asgnConformityDetails: WarningDetail[] = [];
+    if (status === 'completed' && assignment.claim_id) {
+      try {
+        const linkedClaim = loadClaim(assignment.claim_id, cwd);
+        if (linkedClaim) {
+          const conformity = reconcileClaimConformity(linkedClaim, cwd);
+          if (conformity.warning) {
+            pushStructuredWarning(asgnConformityWarnings, asgnConformityDetails, conformity.warning);
+          }
+        }
+      } catch { /* advisory only — never block a completion report */ }
+    }
+
     // trp#928 — cascade-release the assignment's linked claim on completion.
     // Before this landing an obedient worker had to make TWO calls to close
     // the loop (bclaw_assignment_update status=completed AND
@@ -715,6 +756,9 @@ export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPaylo
           ...(result.assignment.completed_at && { completed_at: result.assignment.completed_at }),
           last_heartbeat_at: result.assignment.last_heartbeat_at,
           ...(createdActionId ? { action_id: createdActionId } : {}),
+          ...(asgnConformityWarnings.length
+            ? { warnings: asgnConformityWarnings, warning_details: asgnConformityDetails }
+            : {}),
         },
       },
     };

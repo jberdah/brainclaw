@@ -58,6 +58,23 @@ export function renderLegacyWarning(detail: WarningDetail): string {
 }
 
 /**
+ * Build the structured record without touching any legacy channel.
+ *
+ * Used by surfaces that have NO historical `warnings: string[]` to stay
+ * compatible with — a field introduced already-structured (pln#636 C2's
+ * `LaneHarvestResult.warnings`, for one) should not have to invent a throwaway
+ * string array just to reach this shape.
+ */
+export function toWarningDetail(input: StructuredWarningInput): WarningDetail {
+  return {
+    code: input.code,
+    message: input.message,
+    ...(input.data ? { data: input.data } : {}),
+    ...(input.next_actions?.length ? { next_actions: input.next_actions } : {}),
+  };
+}
+
+/**
  * Record a structured warning into BOTH channels at once.
  *
  * Taking the two arrays as parameters (rather than owning them) is what keeps
@@ -69,12 +86,7 @@ export function pushStructuredWarning(
   details: WarningDetail[],
   input: StructuredWarningInput,
 ): void {
-  const detail: WarningDetail = {
-    code: input.code,
-    message: input.message,
-    ...(input.data ? { data: input.data } : {}),
-    ...(input.next_actions?.length ? { next_actions: input.next_actions } : {}),
-  };
+  const detail = toWarningDetail(input);
   details.push(detail);
   warnings.push(renderLegacyWarning(detail));
 }
