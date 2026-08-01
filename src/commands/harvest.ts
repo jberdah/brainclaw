@@ -29,6 +29,9 @@ import { dispatchReviewLoopTurn, turnOwnedReviewEnabled } from '../core/review-l
 import { reconcileTurn, type ReconcileTurnResult } from '../core/loops/reconcile-turn.js';
 import { findReservationByAssignmentId, type TurnReservation } from '../core/loops/attempt-reservation.js';
 import { readCompletionSignals } from '../core/runtime-signals.js';
+import { reconcileClaimConformity } from '../core/claim-conformity.js';
+import { toWarningDetail } from '../core/warnings.js';
+import type { WarningDetail } from '../core/facade-schema.js';
 
 /**
  * pln#630 PR3a — finalize a TURN-OWNED review lane via the exactly-once `reconcileTurn`
@@ -397,6 +400,14 @@ export interface LaneHarvestResult {
   /** assignment_ids skipped because already harvested. */
   skipped: string[];
   errors: string[];
+  /**
+   * pln#636 C2 — scope-conformity advisories raised while ingesting.
+   *
+   * This is the path that reaches the tier C1's hook cannot: a sandboxed lane
+   * that never saw MCP and reported through `LANE-RESULT.json`. Advisory only,
+   * and additive — a caller that ignores this field sees unchanged behaviour.
+   */
+  warnings: WarningDetail[];
 }
 
 /**
@@ -409,7 +420,7 @@ export interface LaneHarvestResult {
 export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarvestResult {
   const cwd = options.cwd ?? process.cwd();
   const agent = options.agent ?? 'coordinator';
-  const result: LaneHarvestResult = { harvested: [], skipped: [], errors: [] };
+  const result: LaneHarvestResult = { harvested: [], skipped: [], errors: [], warnings: [] };
 
   const worktreePaths = resolveLaneScanPaths(options, cwd);
 
@@ -455,6 +466,23 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
         // pln#521 P2-bis — the ideation analog: a critic lane records its critique +
         // advances the ideation loop. Returns undefined for non-ideate scopes (no-op here).
         ideationLoop = closeIdeationLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+
+        // pln#636 C2 (review F3) — the universal net's most important trigger.
+        // A file-fallback worker declares its own footprint in `files_changed`,
+        // which is BOTH cheaper and more reliable than a git diff here: by
+        // harvest time the lane's worktree may already have been reaped, so
+        // trusting the worker's declaration is the only thing that still works.
+        if (laneAssignment.claim_id && lane.files_changed?.length) {
+          const laneClaim = loadClaim(laneAssignment.claim_id, cwd);
+          if (laneClaim) {
+            const conformity = reconcileClaimConformity(laneClaim, cwd, {
+              touchedPaths: lane.files_changed,
+            });
+            if (conformity.warning) {
+              result.warnings.push(toWarningDetail(conformity.warning));
+            }
+          }
+        }
       }
     } catch { /* never block harvest on loop-close */ }
 

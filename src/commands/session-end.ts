@@ -22,6 +22,9 @@ import { memoryExists } from '../core/io.js';
 import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.js';
 import { buildContextDiff } from '../core/context-diff.js';
 import { listClaims, releaseClaim } from '../core/claims.js';
+import { reconcileClaimConformity } from '../core/claim-conformity.js';
+import { toWarningDetail } from '../core/warnings.js';
+import type { WarningDetail } from '../core/facade-schema.js';
 import { listRuntimeNotes, saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { loadState, persistState } from '../core/state.js';
 import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
@@ -90,6 +93,12 @@ export interface SessionEndResult {
   };
   /** Hint about memory compaction opportunities. */
   compaction_hint?: string;
+  /**
+   * pln#636 C2 — scope-conformity advisories for the claims this session held.
+   * Present only when a claim's declared path scope genuinely excludes files
+   * that were written; every ambiguity stays silent by design.
+   */
+  scope_warnings?: WarningDetail[];
   handoff?: {
     handoff_id: string;
     plan_id?: string;
@@ -230,6 +239,17 @@ export async function endSession(options: SessionEndOptions = {}): Promise<Sessi
   const inProgressPlans = state.plan_items.filter(
     (p) => p.status === 'in_progress' && (p.assignee === registered.agent_name || claimPlanIds.has(p.id))
   );
+
+  // pln#636 C2 — sweep this session's own claims before auto-release closes
+  // them. session-end is the backstop trigger: it catches a claim whose worker
+  // neither released it via MCP nor reported through a LANE-RESULT.
+  const conformityWarnings: WarningDetail[] = [];
+  for (const c of activeClaims) {
+    try {
+      const conformity = reconcileClaimConformity(c, options.cwd ?? process.cwd());
+      if (conformity.warning) conformityWarnings.push(toWarningDetail(conformity.warning));
+    } catch { /* advisory only — a session must always be able to end */ }
+  }
 
   let openWorkWarning: OpenWorkWarning | undefined;
   if (activeClaims.length > 0 || inProgressPlans.length > 0) {
@@ -463,6 +483,7 @@ export async function endSession(options: SessionEndOptions = {}): Promise<Sessi
     open_work_warning: openWorkWarning,
     session_stats: sessionStats,
     compaction_hint: compactionHint,
+    ...(conformityWarnings.length ? { scope_warnings: conformityWarnings } : {}),
     ...(reflectedHandoff ? { handoff: reflectedHandoff } : {}),
   };
 

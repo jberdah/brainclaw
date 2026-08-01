@@ -5,6 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { LaneResultSchema } from '../../src/core/schema.js';
 import { harvestLaneResults, getLaneResultPath } from '../../src/commands/harvest.js';
+import { acquireClaimScope } from '../../src/core/claims.js';
+import { createAssignment } from '../../src/core/assignments.js';
 
 // pln#526 — LANE-RESULT convention: a worker writes LANE-RESULT.json at its
 // worktree root; `brainclaw harvest <assignment_id>` ingests it.
@@ -88,6 +90,80 @@ describe('harvestLaneResults (pln#526)', () => {
     }
   });
 
+  it('pln#636 C2 — raises a scope advisory from the lane\'s own files_changed', () => {
+    // The trigger that reaches the tier C1's hook cannot: a sandboxed worker that
+    // never saw MCP and reported through a file. Its `files_changed` declaration
+    // is the footprint — no git diff is attempted, because by harvest time the
+    // worktree may already have been reaped.
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-conf-'));
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-conf-wt-'));
+    fs.mkdirSync(path.join(cwd, 'src', 'core'), { recursive: true });
+    fs.mkdirSync(path.join(cwd, 'docs'), { recursive: true });
+    try {
+      const claim = acquireClaimScope(
+        { scope: 'src/core', agent: 'codex', description: 'core work' },
+        cwd,
+      ).claim!;
+      const assignment = createAssignment({
+        claim_id: claim.id,
+        agent: 'codex',
+        dispatcher_agent: 'coordinator',
+        scope: 'src/core',
+        description: 'core work',
+        worktree_path: wt,
+      }, cwd);
+      writeLane(wt, {
+        assignment_id: assignment.id,
+        status: 'completed',
+        summary: 'done',
+        files_changed: ['src/core/a.ts', 'docs/stray.md'],
+      });
+
+      const res = harvestLaneResults({ worktreePaths: [wt], dryRun: true, cwd });
+      assert.equal(res.harvested.length, 1);
+      assert.equal(res.warnings.length, 1, `expected one advisory, got ${JSON.stringify(res.warnings)}`);
+      assert.equal(res.warnings[0].code, 'wrote_outside_claim_scope');
+      assert.deepEqual(res.warnings[0].data?.unexpected_paths, ['docs/stray.md']);
+      assert.ok(res.warnings[0].next_actions?.length, 'the advisory must carry a recovery path');
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  it('pln#636 C2 — stays silent when the lane reported only in-scope files', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-conf2-'));
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-conf2-wt-'));
+    fs.mkdirSync(path.join(cwd, 'src', 'core'), { recursive: true });
+    try {
+      const claim = acquireClaimScope(
+        { scope: 'src/core', agent: 'codex', description: 'core work' },
+        cwd,
+      ).claim!;
+      const assignment = createAssignment({
+        claim_id: claim.id,
+        agent: 'codex',
+        dispatcher_agent: 'coordinator',
+        scope: 'src/core',
+        description: 'core work',
+        worktree_path: wt,
+      }, cwd);
+      writeLane(wt, {
+        assignment_id: assignment.id,
+        status: 'completed',
+        summary: 'done',
+        files_changed: ['src/core/a.ts', 'src/core/nested/b.ts'],
+      });
+
+      const res = harvestLaneResults({ worktreePaths: [wt], dryRun: true, cwd });
+      assert.equal(res.harvested.length, 1);
+      assert.deepEqual(res.warnings, [], 'in-scope work must emit nothing');
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
   it('records a parse error for malformed LANE-RESULT.json', () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-cwd-'));
     const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-bad-'));
@@ -107,7 +183,9 @@ describe('harvestLaneResults (pln#526)', () => {
     const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-empty-'));
     try {
       const res = harvestLaneResults({ worktreePaths: [wt], dryRun: true, cwd });
-      assert.deepEqual(res, { harvested: [], skipped: [], errors: [] });
+      // `warnings` is the pln#636 C2 conformity channel — always present, empty
+      // when nothing was ingested.
+      assert.deepEqual(res, { harvested: [], skipped: [], errors: [], warnings: [] });
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(wt, { recursive: true, force: true });
