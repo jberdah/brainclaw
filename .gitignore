@@ -167,3 +167,8 @@ kilo.jsonc
 
 # Cygwin/MSYS bash crash dumps
 *.stackdump
+
+AGENTS.md
+.agents/skills/brainclaw-session/SKILL.md
+.agents/skills/brainclaw-memory-capture/SKILL.md
+.agents/skills/brainclaw-multi-agent/SKILL.md
