@@ -19,6 +19,7 @@ import { buildContext } from '../core/context.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { generateClaimId, loadClaim, saveClaim, adoptClaimSession, releaseClaimWithCascade } from '../core/claims.js';
+import { releaseClaimNextActions } from '../core/next-actions.js';
 import { checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree, sanitizeBranchComponent } from '../core/worktree.js';
 import { startSession } from './session-start.js';
@@ -333,12 +334,23 @@ export async function handleBclawReleaseClaim(payload: McpToolExecutionPayload, 
     planTransitioned ? ` — plan ${cascadePlanId} → ${cascadeNewStatus}` : '',
     planWarning ? ` ⚠ ${planWarning}` : '',
   ].join('');
+  // pln#634 — release is the single most protocol-loaded moment of the daily
+  // loop (it is where the plan cascade either fires or refuses), and it shipped
+  // pure data. Derived from what the cascade actually decided.
+  const releaseActions = releaseClaimNextActions({
+    claimId,
+    planId: cascadePlanId,
+    planTransitioned,
+    planWarning,
+    requestedPlanStatus: typeof args.planStatus === 'string' ? args.planStatus : undefined,
+  });
   return {
     response: toolResponse({
       content: [{ type: 'text', text: summaryText }],
       claim_id: claimId,
       ...(planTransitioned ? { plan_id: cascadePlanId, plan_status: cascadeNewStatus } : {}),
       ...(planWarning ? { plan_warning: planWarning, plan_id: cascadePlanId } : {}),
+      ...(releaseActions.length ? { next_actions: releaseActions } : {}),
     }),
   };
 }

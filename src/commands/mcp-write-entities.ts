@@ -24,6 +24,7 @@ import type { PlanType, Priority } from '../core/schema.js';
 import { loadCandidate } from '../core/candidates.js';
 import { resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
 import { hasMinimumTrustLevel } from '../core/agent-registry.js';
+import { createEntityNextActions, transitionNextActions } from '../core/next-actions.js';
 import type { ResolvedEffectiveCwd } from '../core/store-resolution.js';
 import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
@@ -504,6 +505,10 @@ export function handleBclawCreate(payload: McpToolExecutionPayload, ctx: McpWrit
     const createContent = autoRepair
       ? [{ type: 'text' as const, text: createText }, { type: 'text' as const, text: renderAutoRepairWarning(autoRepair, actor ?? 'unknown') }]
       : [{ type: 'text' as const, text: createText }];
+    // pln#634 — a freshly created plan whose steps are never added is the most
+    // common half-finished shape in the store; a sequence with no readiness
+    // check is the second. Only those two emit a follow-up.
+    const createActions = createEntityNextActions({ entity, id: result.id });
     return {
       response: appendSecurityWarnings(toolResponse({
         content: createContent,
@@ -513,6 +518,7 @@ export function handleBclawCreate(payload: McpToolExecutionPayload, ctx: McpWrit
           active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
           ...(autoSwitched ? { auto_switched: true } : {}),
           ...(autoRepair ? { auto_repair: autoRepair } : {}),
+          ...(createActions.length ? { next_actions: createActions } : {}),
         },
       }), createScan.warnings),
     };
@@ -681,6 +687,10 @@ export function handleBclawTransition(payload: McpToolExecutionPayload, ctx: Mcp
     const transitionContent = auto_repair
       ? [{ type: 'text' as const, text: transitionText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
       : [{ type: 'text' as const, text: transitionText }];
+    // pln#634 — only the two transitions that imply an unambiguous next call
+    // emit anything (plan → in_progress / blocked); everything else is terminal
+    // for the caller and returns nothing rather than inventing busywork.
+    const transitionActions = transitionNextActions({ entity, id, to });
     return {
       response: toolResponse({
         content: transitionContent,
@@ -690,6 +700,7 @@ export function handleBclawTransition(payload: McpToolExecutionPayload, ctx: Mcp
           active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
           ...(autoSwitched ? { auto_switched: true } : {}),
           ...(auto_repair ? { auto_repair } : {}),
+          ...(transitionActions.length ? { next_actions: transitionActions } : {}),
         },
       }),
     };
