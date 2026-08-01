@@ -47,14 +47,128 @@ export function runInstallHooks(options: InstallHooksOptions = {}): void {
   if (!fs.existsSync(claudeHookPath) || options.force) {
     fs.writeFileSync(claudeHookPath, generateClaudePreToolScript(), { encoding: 'utf-8', mode: 0o755 });
     console.log(`✔ Claude Code preToolUse hook generated at ${claudeHookPath}`);
-    // pln#638 — this instruction was itself stale guidance: it printed a flat
-    // { "PreToolUse": "<path>" } shape that Claude Code does not accept. The real
-    // shape is a matcher array. Automatic activation is pln#636 C1's second half;
-    // until then the operator needs an instruction that actually works.
-    console.log('  Advisory-only (never blocks). To activate, add to .claude/settings.json:');
-    console.log('    { "hooks": { "PreToolUse": [ { "matcher": "Edit|Write|MultiEdit|NotebookEdit",');
-    console.log(`        "hooks": [ { "type": "command", "command": "${claudeHookPath.split('\\').join('/')}" } ] } ] } }`);
   }
+  // pln#636 C1 second half (review F2) — GENERATION IS NOT ACTIVATION. This step
+  // used to only print instructions, which is why the hook was dead even for
+  // operators who ran the command: a repaired script nobody wires up is still
+  // dead. The Codex writer has owned `.codex/hooks.json` since v1.17.0; this
+  // brings the Claude surface to the same standard.
+  const activation = activateClaudePreToolHook(gitRoot, claudeHookPath);
+  switch (activation.status) {
+    case 'activated':
+      console.log(`✔ PreToolUse hook activated in ${activation.settingsPath}`);
+      console.log('  Advisory-only (never blocks): it adds context, it cannot deny a write.');
+      break;
+    case 'already_active':
+      console.log(`✔ PreToolUse hook already active in ${activation.settingsPath}`);
+      break;
+    case 'failed':
+      console.log(`⚠ Could not activate the PreToolUse hook automatically: ${activation.reason}`);
+      console.log('  Add this to .claude/settings.json by hand:');
+      console.log('    { "hooks": { "PreToolUse": [ { "matcher": "Edit|Write|MultiEdit|NotebookEdit",');
+      console.log(`        "hooks": [ { "type": "command", "command": "${toPosixPath(claudeHookPath)}" } ] } ] } }`);
+      break;
+  }
+}
+
+/** Hook scripts are invoked through a shell, so the command is always POSIX-style. */
+function toPosixPath(p: string): string {
+  return p.split('\\').join('/');
+}
+
+/**
+ * The tools whose `tool_input` exposes a concrete file path.
+ *
+ * `Bash` is deliberately absent: a shell command's file footprint is not
+ * statically knowable, so it is `unverifiable`, never a guess. The pre-repair
+ * matcher included it, which was one source of the noise that made the hook
+ * worth ignoring.
+ */
+const CLAUDE_PRE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit';
+
+interface ClaudeHookEntry {
+  type?: string;
+  command?: string;
+}
+
+interface ClaudeMatcherEntry {
+  matcher?: string;
+  hooks?: ClaudeHookEntry[];
+}
+
+export type ActivateHookResult =
+  | { status: 'activated' | 'already_active'; settingsPath: string }
+  | { status: 'failed'; reason: string; settingsPath: string };
+
+/**
+ * Merge the PreToolUse entry into `.claude/settings.json`, additively.
+ *
+ * NON-DESTRUCTIVE BY CONSTRUCTION, which matters more here than anywhere else in
+ * this file: that file holds the operator's own permission allow-list, and
+ * clobbering it would be a far worse outcome than an unactivated advisory. So
+ * every unknown key is preserved, a pre-existing PreToolUse array is appended
+ * to rather than replaced, and anything unparseable is left strictly untouched
+ * with a manual instruction printed instead (trp_5f342186: a hook mechanism may
+ * never be the thing that destroys work).
+ *
+ * Idempotent: re-running finds the existing command and reports `already_active`.
+ */
+export function activateClaudePreToolHook(gitRoot: string, hookPath: string): ActivateHookResult {
+  const settingsPath = path.join(gitRoot, '.claude', 'settings.json');
+  const command = toPosixPath(hookPath);
+
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { status: 'failed', reason: 'settings.json is not a JSON object', settingsPath };
+      }
+      settings = parsed as Record<string, unknown>;
+    } catch (err) {
+      // Refusing to touch a file we cannot parse is the whole point: rewriting it
+      // would silently drop the operator's permission list.
+      return {
+        status: 'failed',
+        reason: `settings.json is not valid JSON (${err instanceof Error ? err.message : String(err)})`,
+        settingsPath,
+      };
+    }
+  }
+
+  const hooksSection = (typeof settings.hooks === 'object' && settings.hooks !== null && !Array.isArray(settings.hooks))
+    ? settings.hooks as Record<string, unknown>
+    : {};
+  const preToolUse: ClaudeMatcherEntry[] = Array.isArray(hooksSection.PreToolUse)
+    ? hooksSection.PreToolUse as ClaudeMatcherEntry[]
+    : [];
+
+  const alreadyActive = preToolUse.some((entry) =>
+    entry?.hooks?.some((h) => typeof h?.command === 'string' && toPosixPath(h.command) === command));
+  if (alreadyActive) return { status: 'already_active', settingsPath };
+
+  const next = {
+    ...settings,
+    hooks: {
+      ...hooksSection,
+      PreToolUse: [
+        ...preToolUse,
+        { matcher: CLAUDE_PRE_TOOL_MATCHER, hooks: [{ type: 'command', command }] },
+      ],
+    },
+  };
+
+  try {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, `${JSON.stringify(next, null, 2)}\n`, 'utf-8');
+  } catch (err) {
+    return {
+      status: 'failed',
+      reason: err instanceof Error ? err.message : String(err),
+      settingsPath,
+    };
+  }
+  return { status: 'activated', settingsPath };
 }
 
 /**
