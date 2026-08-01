@@ -256,10 +256,18 @@ function renderHeader(input: InstructionTemplateInput): string {
   ].join('\n');
 }
 
-function renderLiveHeader(_input: InstructionTemplateInput): string {
+function renderLiveHeader(input: InstructionTemplateInput): string {
+  // pln#638 volet 2a — HONESTY FIX. This header used to say "auto-refreshed",
+  // but regeneration is EXPLICIT: it happens on session-end, handoff, and
+  // `export --write`. An agent tier that never fires those events (no hooks, no
+  // MCP) read a file claiming to be fresh while being arbitrarily stale. A claim
+  // that is false for half the tiers is worse than no claim, so the header now
+  // names the actual triggers and tells the reader how to force a refresh.
+  // Guarded by tests/unit/guidance-engine-consistency.test.ts.
   return [
-    `> Brainclaw live state — auto-refreshed, do not edit.`,
-    `> Last updated: ${new Date().toISOString().slice(0, 19)}`,
+    `> Brainclaw live state — do not edit. Regenerated on: session-end, handoff, \`brainclaw export --write\`.`,
+    `> Written by brainclaw v${input.brainclawVersion} at ${new Date().toISOString().slice(0, 19)}`,
+    `> Older than your last session? It is stale — run \`brainclaw export --write\` to refresh.`,
   ].join('\n');
 }
 
