@@ -14,6 +14,7 @@ import { refreshLiveCompanions } from '../commands/export.js';
 import { loadSessionById } from './identity.js';
 import { loadState, persistState } from './state.js';
 import { createRuntimeEvent } from './events.js';
+import { latestActivityMs, readHeartbeat } from './runtime-signals.js';
 import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
 import { maybeEnqueueClaimTransition, isFederationEnqueueActive } from './federation-outbox.js';
 
@@ -705,6 +706,11 @@ export interface ClaimLivenessAssessment {
   ageMs: number;
   /** Session's last_seen_at age in milliseconds, if a session was found. */
   sessionAgeMs?: number;
+  /**
+   * pln#636 — age of the freshest FILE evidence (heartbeat sentinel or worktree
+   * / log filesystem activity) when that is what proved the claim alive.
+   */
+  evidenceAgeMs?: number;
 }
 
 export interface AssessClaimLivenessOptions {
@@ -716,13 +722,88 @@ export interface AssessClaimLivenessOptions {
   nowMs?: number;
   /** brainclaw store root (for session file reads). */
   cwd?: string;
+  /**
+   * pln#636 — how fresh file evidence must be to prove life. Defaults to the
+   * same window an assignment gets: `heartbeat_ttl_ms` (schema.ts) defaults to
+   * 30 min, so by default a claim and its assignment cannot disagree about
+   * whether the same worker is alive. Pass this explicitly when a caller knows
+   * the assignment's TTL was overridden by policy.
+   */
+  evidenceTtlMs?: number;
+}
+
+/** Default freshness window for file evidence — matches the default `heartbeat_ttl_ms`. */
+const DEFAULT_EVIDENCE_TTL_MS = 30 * 60_000;
+
+/**
+ * How far into the future a file timestamp may sit before we stop trusting it.
+ *
+ * WHY THIS TOLERANCE EXISTS, and why the naive `age < 0 → ignore` was wrong.
+ * `fs.stat().mtimeMs` is sub-millisecond on NTFS while `Date.now()` is coarser,
+ * so a heartbeat written microseconds ago routinely stats as *newer than now* —
+ * i.e. the freshest evidence possible was the evidence most likely to be thrown
+ * away. That reproduced as a nondeterministic liveness verdict: the same claim
+ * read `live` on an idle machine and `never-adopted` under load.
+ *
+ * A file dated slightly ahead is therefore clamped to age 0 (maximally fresh),
+ * while one dated grossly ahead is discarded — that is a genuinely wrong clock or
+ * a hand-forged timestamp, and inventing liveness from it would let a dead
+ * worker hold a claim forever.
+ */
+const FUTURE_EVIDENCE_TOLERANCE_MS = 5 * 60_000;
+
+/**
+ * pln#636 — age of the freshest FILE evidence that this claim's worker is alive.
+ *
+ * WHY FILE EVIDENCE AND NOT A SESSION. A sandboxed spawned worker cannot reach
+ * MCP, so it cannot maintain any server-side liveness record — which is exactly
+ * why the project moved proof-of-life to filesystem sentinels: the dispatcher
+ * injects a "Liveness — DO THIS FIRST" step into every brief, and the worker
+ * writes/refreshes a heartbeat in the ONE location a sandbox can write (its own
+ * worktree). `assignment-sweeper` already honours that evidence; claims did not,
+ * which meant a demonstrably-alive sandboxed worker kept its assignment but had
+ * its CLAIM aged out on wall-clock alone (trp_4d0fc2ef). This closes that
+ * asymmetry by reading the same signals.
+ *
+ * Deliberately reads the leaf `runtime-signals` module rather than
+ * `collectEvidence`: agentrun-reconciler imports `loadClaim` from here, so
+ * importing it back would create a cycle.
+ *
+ * Returns undefined when there is nothing to read — no assignment, no signals —
+ * and never throws.
+ */
+function freshestEvidenceAgeMs(claim: Claim, nowMs: number, cwd?: string): number | undefined {
+  if (!claim.assignment_id) return undefined;
+  const root = cwd ?? process.cwd();
+  let freshest: number | undefined;
+  const consider = (ms: number | undefined): void => {
+    if (ms === undefined) return;
+    const age = nowMs - ms;
+    // Slightly-future timestamps are a clock-granularity artefact, not skew —
+    // clamp them to "just now". Grossly-future ones are untrustworthy: ignore
+    // rather than invent liveness. See FUTURE_EVIDENCE_TOLERANCE_MS.
+    if (age < -FUTURE_EVIDENCE_TOLERANCE_MS) return;
+    const normalised = age < 0 ? 0 : age;
+    if (freshest === undefined || normalised < freshest) freshest = normalised;
+  };
+  try {
+    const hb = readHeartbeat(root, claim.assignment_id, claim.worktree_path);
+    if (hb.exists) consider(hb.mtimeMs);
+  } catch { /* evidence is best-effort */ }
+  try {
+    consider(latestActivityMs(root, claim.assignment_id, claim.worktree_path));
+  } catch { /* evidence is best-effort */ }
+  return freshest;
 }
 
 /**
- * Assess the liveness of an active claim against session state.
+ * Assess the liveness of an active claim.
  *
  * Decision tree:
- *  1. Young (< 30 min) → never auto-release — dispatcher may not have sent the worker yet.
+ *  0. Young (< 30 min) → never auto-release — dispatcher may not have sent the worker yet.
+ *  1. FRESH FILE EVIDENCE → 'live', whatever the session says. This branch comes
+ *     first because it is the only proof a sandboxed, MCP-less worker can
+ *     produce, and it is the same evidence the assignment sweeper trusts.
  *  2. Has session_id + session alive → 'live' — long-running work; do NOT release.
  *  3. Has session_id + adopted_at + session dead → 'orphaned' — crash recovery scenario.
  *  4. Has session_id + no adopted_at + session dead → 'stale' — direct agent claim, session ended.
@@ -743,6 +824,22 @@ export function assessClaimLiveness(
       status: 'young',
       reason: 'Claim is less than 30 minutes old — too new to classify',
       ageMs,
+    };
+  }
+
+  // 1. FILE EVIDENCE FIRST (pln#636, trp_4d0fc2ef). A sandboxed worker proves
+  //    life by writing a heartbeat into its worktree — the only place it can
+  //    write — and by touching files there. That evidence outranks any session
+  //    reasoning: a worker actively committing is alive whether or not a session
+  //    record exists, and a coordinator-created claim has no session_id at all.
+  const evidenceAgeMs = freshestEvidenceAgeMs(claim, nowMs, options.cwd);
+  const evidenceTtlMs = options.evidenceTtlMs ?? DEFAULT_EVIDENCE_TTL_MS;
+  if (evidenceAgeMs !== undefined && evidenceAgeMs < evidenceTtlMs) {
+    return {
+      status: 'live',
+      reason: `File evidence is fresh (${Math.round(evidenceAgeMs / 60_000)}min ago) — the worker is demonstrably active`,
+      ageMs,
+      evidenceAgeMs,
     };
   }
 
