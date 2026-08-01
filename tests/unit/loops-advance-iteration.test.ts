@@ -82,7 +82,7 @@ describe('advance() — phase_advance_blocked on unmet gate (pln#492 phase 2.b)'
         {
           id: loop.id,
           actor: 'agt_test',
-          artifact: { phase: 'critique', type: 'critique' },
+          artifact: { phase: 'critique', type: 'critique', body: 'critique content' },
         },
         cwd,
       );
@@ -115,7 +115,7 @@ describe('advance() — iteration cycle (pln#492 phase 2.b)', () => {
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
         cwd,
       );
     }
@@ -131,14 +131,14 @@ describe('advance() — iteration cycle (pln#492 phase 2.b)', () => {
     advance({ id: loop.id, actor: 'agt_test' }, cwd);
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
         cwd,
       );
     }
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // iterate → critique, iteration=1
     add_artifact(
-      { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique' } },
+      { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
       cwd,
     );
     const events = listLoopEvents(loop.id, cwd);
@@ -168,7 +168,7 @@ describe('advance() — max_iterations event (pln#492 phase 2.b)', () => {
   function fillCritique(loopId: string, cwd: string, n: number) {
     for (let i = 0; i < n; i++) {
       add_artifact(
-        { id: loopId, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique' } },
+        { id: loopId, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
         cwd,
       );
     }
@@ -223,7 +223,7 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique iter 0
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
         cwd,
       );
     }
@@ -233,7 +233,7 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     // to leave critique → advance to revision still works.
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
         cwd,
       );
     }

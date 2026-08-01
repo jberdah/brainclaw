@@ -79,6 +79,31 @@ function isVerdictAccepted(artifact: LoopArtifact): boolean {
   return /^accepted(?:\b|[:\s])/.test(body);
 }
 
+/**
+ * pln#639 BUG-1 — does this artifact carry anything a reader could USE?
+ *
+ * `body` is optional in both the input schema (loops/facade-schema.ts) and
+ * `LoopArtifactSchema`, so `{phase, type}` alone is schema-valid. Without this
+ * predicate such an artifact counted toward `min_artifacts_by_type`, which means
+ * a phase gate — the mechanism whose entire job is to prove the phase produced
+ * real work — could be opened by producing nothing at all.
+ *
+ * THE INVARIANT ALREADY EXISTED, one layer too low. `ideationReducer` states it
+ * verbatim: "a bare summary with no critique body → slot failed, gate stays shut
+ * (correct: no fake progress from a lane that produced no critiques)". That guard
+ * only covers the LANE-RESULT reducer path; a direct `add_artifact` /
+ * `complete_turn` MCP call bypassed it entirely. Enforcing it in the evaluator
+ * makes it hold for every entry path.
+ *
+ * A `ref` counts as content: ref-based artifacts legitimately carry no inline
+ * body (the payload lives in the referenced entity), so the rule is "no usable
+ * content" — NOT "body required", which would break them.
+ */
+function hasUsableContent(artifact: LoopArtifact): boolean {
+  if ((artifact.body ?? '').trim().length > 0) return true;
+  return artifact.ref !== undefined;
+}
+
 export function evaluateStopCondition(thread: LoopThread, condition?: StopCondition): boolean {
   if (!condition) return false;
   switch (condition.kind) {
@@ -105,6 +130,8 @@ export function evaluateStopCondition(thread: LoopThread, condition?: StopCondit
       // and all iterations.
       const matches = thread.artifacts.filter((artifact) => {
         if (artifact.type !== condition.type) return false;
+        // pln#639 BUG-1 — an artifact with no usable content never counts.
+        if (!hasUsableContent(artifact)) return false;
         if (condition.scope === 'phase') {
           if (artifact.phase !== thread.current_phase) return false;
           // pln#492 phase 2.b — iteration-window awareness. If either the
@@ -193,6 +220,10 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
         thread.artifacts.some((a) => a.iteration !== undefined);
       const matches = thread.artifacts.filter((artifact) => {
         if (artifact.type !== gate.type) return false;
+        // pln#639 BUG-1 — same content filter as the evaluator, for the same
+        // reason the iteration filter is mirrored here: a message reporting a
+        // count the evaluator never saw sends the operator hunting a phantom.
+        if (!hasUsableContent(artifact)) return false;
         if (gate.scope === 'phase') {
           if (artifact.phase !== thread.current_phase) return false;
           if (iterationAware) {
@@ -203,7 +234,15 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
         }
         return true;
       });
-      return `min_artifacts_by_type unmet: ${gate.scope}-scope count of type "${gate.type}" = ${matches.length} < n=${gate.n}`;
+      // Name the empty-artifact case explicitly: "count = 2 < n = 3" is baffling
+      // when the operator can see three artifacts of the right type in the thread.
+      const emptyOfType = thread.artifacts.filter(
+        (a) => a.type === gate.type && !hasUsableContent(a),
+      ).length;
+      const emptyNote = emptyOfType > 0
+        ? ` (${emptyOfType} artifact(s) of this type carry no usable content and do not count)`
+        : '';
+      return `min_artifacts_by_type unmet: ${gate.scope}-scope count of type "${gate.type}" = ${matches.length} < n=${gate.n}${emptyNote}`;
     }
     case 'phase_reached':
       return `phase_reached unmet: current_phase="${thread.current_phase}" expected="${gate.phase}"`;
