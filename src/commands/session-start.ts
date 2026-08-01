@@ -18,6 +18,10 @@ import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
 import { checkMemoryPressure, enforceRuntimeNoteRetention, parkClosedAutoHandoffs, type MemoryPressureResult } from '../core/gc-semantic.js';
 import { sweepAssignments } from '../core/assignment-sweeper.js';
+import { getInstalledBrainclawVersion } from '../core/brainclaw-version.js';
+import { reconcileSurfaceFreshness, staleSurfaceWarning } from '../core/surface-freshness.js';
+import { toWarningDetail, type StructuredWarningInput } from '../core/warnings.js';
+import type { WarningDetail } from '../core/facade-schema.js';
 import { loadHygienePolicy } from '../core/hygiene-policy.js';
 import { maybeCreateCheckpoint } from '../core/events/checkpoint.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
@@ -76,6 +80,12 @@ export interface SessionStartResult extends SessionSnapshot {
   shared_checkout_warning?: SharedCheckoutWarning;
   stale_claims_released?: Array<{ id: string; agent: string; scope: string }>;
   memory_pressure?: MemoryPressureResult;
+  /**
+   * pln#638 volet 2b — present when generated guidance surfaces on disk were
+   * stamped by an older brainclaw than the running one. Advisory: nothing was
+   * regenerated.
+   */
+  stale_surfaces?: WarningDetail;
   /** True when the agent identity was auto-registered during this session start. */
   auto_registered?: boolean;
 }
@@ -344,6 +354,21 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
     } catch { /* non-fatal */ }
   }
 
+  // pln#638 volet 2b — LAZY freshness reconcile of the generated guidance
+  // surfaces. session-start is the right trigger because it is the moment the
+  // agent is about to READ that guidance, and it is a path we already visit — no
+  // daemon, no watcher (feedback_lazy_reconcile_pattern). Advisory only: nothing
+  // is regenerated here, because regeneration is an explicit act and silently
+  // rewriting a file the operator may have edited would be worse than a warning.
+  let staleSurfaces: StructuredWarningInput | undefined;
+  if (maintenanceMode === 'full') {
+    try {
+      const currentVersion = getInstalledBrainclawVersion();
+      const freshness = reconcileSurfaceFreshness(options.cwd ?? process.cwd(), currentVersion);
+      staleSurfaces = staleSurfaceWarning(freshness, currentVersion);
+    } catch { /* non-fatal */ }
+  }
+
   // Materialize incoming federation signals from linked projects (Phase 0 — local)
   if (maintenanceMode === 'full') {
     try {
@@ -398,6 +423,7 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
     ...(sharedCheckoutWarning ? { shared_checkout_warning: sharedCheckoutWarning } : {}),
     ...(staleClaimsReleased ? { stale_claims_released: staleClaimsReleased } : {}),
     ...(memoryPressure ? { memory_pressure: memoryPressure } : {}),
+    ...(staleSurfaces ? { stale_surfaces: toWarningDetail(staleSurfaces) } : {}),
     ...(autoRegistered ? { auto_registered: true } : {}),
   };
 }
