@@ -159,8 +159,24 @@ export function closeIdeationLoopFromLaneResult(
             : 'bare critic lane → slot failed; critique gate unchanged',
           loop_status: getLoop(loopId, cwd)?.status };
         }
+        // pln#639 BUG-2 — attribute the artifact to the phase the slot was
+        // DISPATCHED in, not the loop's phase at close time.
+        //
+        // `turn()` stamps `slot.phase = current_phase` when the slot is handed
+        // out (loops/verbs.ts). Using `loop.current_phase` here instead means a
+        // lane that returns AFTER a phase advance has its work filed under the
+        // new phase: a critique landing 90 seconds late is recorded in
+        // `revision`, where the critique gate cannot see it and where it
+        // misrepresents what the agent was asked to do. Reproduced in the
+        // pln#638 1a/1b ideation, which advanced ~90s after its last critic.
+        //
+        // Truthful attribution is also the fix for "don't count it": the gate
+        // filters on `artifact.phase === current_phase`, so an out-of-phase
+        // artifact stops satisfying the current gate by construction — no
+        // separate refusal path, and the content is preserved rather than lost.
+        const dispatchPhase = slot.phase ?? loop.current_phase;
         complete_turn(
-          { id: loopId, slot_id: slot.slot_id, actor, outcome: 'done', artifact: { phase: loop.current_phase, type: 'critique', body: capCritique(critique) } },
+          { id: loopId, slot_id: slot.slot_id, actor, outcome: 'done', artifact: { phase: dispatchPhase, type: 'critique', body: capCritique(critique) } },
           cwd,
         );
         const advanced = tryAdvance(true);

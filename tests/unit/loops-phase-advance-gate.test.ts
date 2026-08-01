@@ -45,6 +45,13 @@ function critiqueArtifact(id: string, phase = 'critique'): LoopThread['artifacts
     artifact_id: id,
     phase,
     type: 'critique',
+    // pln#639 BUG-1 — a counted artifact must carry usable content. This fixture
+    // originally omitted `body`, which meant these tests asserted that EMPTY
+    // artifacts open a gate — encoding the bug rather than the intent. The intent
+    // of every test using this helper is artifact COUNTING, so giving it a body
+    // preserves them; the empty case is now covered explicitly in
+    // loops-gate-content-integrity.test.ts.
+    body: `critique body for ${id}`,
     produced_at: '2026-05-06T12:00:00.000Z',
   };
 }

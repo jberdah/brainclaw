@@ -211,7 +211,14 @@ export function closeReviewLoopFromLaneResult(
             complete_turn(
               {
                 id: loopId, slot_id: slot.slot_id, actor,
-                artifact: { phase: loop.current_phase, type: 'verdict', body: capVerdictBody('accepted', detail) },
+                // pln#639 BUG-2 — the phase the slot was DISPATCHED in, not the
+                // loop's phase at close time. Same defect as the ideation closer;
+                // fixed here too because this is the far more travelled path.
+                // Safe for the approve flow: `reviewer_green` scans every artifact
+                // via isVerdictAccepted regardless of phase, and no gate in the
+                // engine keys on `type: 'verdict'` — so this changes attribution
+                // truth without changing a single gate outcome.
+                artifact: { phase: slot.phase ?? loop.current_phase, type: 'verdict', body: capVerdictBody('accepted', detail) },
               },
               cwd,
             );
@@ -260,7 +267,8 @@ export function closeReviewLoopFromLaneResult(
         complete_turn(
           {
             id: loopId, slot_id: slot.slot_id, actor,
-            artifact: { phase: loop.current_phase, type: 'verdict', body: capVerdictBody('changes-requested', detail) },
+            // pln#639 BUG-2 — dispatch phase, not close-time phase (see above).
+            artifact: { phase: slot.phase ?? loop.current_phase, type: 'verdict', body: capVerdictBody('changes-requested', detail) },
           },
           cwd,
         );
