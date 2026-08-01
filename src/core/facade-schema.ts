@@ -181,6 +181,28 @@ export const NextActionSchema = z.object({
 });
 export type NextAction = z.infer<typeof NextActionSchema>;
 
+/**
+ * pln#635 — structured warning. ADDITIVE sibling of `warnings: string[]`, which
+ * keeps its type and its exact historical contents (the legacy string is
+ * derived from this record — see core/warnings.ts). Five handler sites were
+ * already encoding structure into a string via JSON.stringify because there was
+ * nowhere else to put it; this is that nowhere.
+ *
+ * `next_actions` is what the string channel could never carry: the recovery
+ * path. A warning an agent cannot act on is just noise it learns to skip.
+ */
+export const WarningDetailSchema = z.object({
+  /** Stable machine-readable identifier, e.g. "scope_already_claimed". */
+  code: z.string(),
+  /** Human-readable prose. Also the legacy string for non-JSON codes. */
+  message: z.string(),
+  /** Structured payload (ids, agents, scopes) the prose mentions. */
+  data: z.record(z.string(), z.unknown()).optional(),
+  /** How to resolve it — same contract as the response-level next_actions. */
+  next_actions: z.array(NextActionSchema).optional(),
+});
+export type WarningDetail = z.infer<typeof WarningDetailSchema>;
+
 export const FacadeResponseSchema = z.object({
   status: z.enum(['ok', 'error', 'partial']),
   intent: z.string(),
@@ -236,6 +258,18 @@ export const FacadeResponseSchema = z.object({
    * remains for the bootstrap hint; new consumers should read this array.
    */
   next_actions: z.array(NextActionSchema).optional(),
+  /**
+   * pln#635 — structured warnings carrying a stable `code`, the `data` the prose
+   * refers to, and the recovery `next_actions`. Optional and additive:
+   * `warnings` keeps byte-identical contents, so a consumer ignoring this field
+   * is unaffected.
+   *
+   * This is a structured **SUBSET**, not a mirror — `warnings` remains the
+   * complete channel (see core/warnings.ts for why: handlers thread the string
+   * array into helpers by reference). Read `warnings` for completeness; read
+   * `warning_details` for the codes that carry a recovery path.
+   */
+  warning_details: z.array(WarningDetailSchema).optional(),
   /**
    * Code Map P0 (spec §10): opt-in, present ONLY when the project's Code Map
    * manifest carries `code_map_enabled: true`. Absent for every project that
