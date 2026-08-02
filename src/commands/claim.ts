@@ -1,7 +1,7 @@
 import { buildOperationalIdentity } from '../core/identity.js';
 import { memoryExists } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
-import { saveClaim, generateClaimId, listClaims } from '../core/claims.js';
+import { saveClaim, generateClaimId, listClaims, claimBaselineFields } from '../core/claims.js';
 import { rebuildProjectMd } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
 import { nowISO } from '../core/ids.js';
@@ -80,6 +80,10 @@ export function runClaim(description: string, options: ClaimOptions): void {
     status: 'active',
     expires_at: options.ttl ? parseTtl(options.ttl) : undefined,
     model: resolveCurrentModel(options.cwd),
+    // pln#636 C0-b / trp#1292 — resolved here, OUTSIDE the mutate() below, so the
+    // git subprocess never widens the critical section that serializes writes on
+    // the claims store.
+    ...claimBaselineFields(options.cwd),
   };
 
   try {
