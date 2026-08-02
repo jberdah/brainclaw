@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS. 2a made the live header HONEST: it stopped claiming
  * "auto-refreshed" and started naming its real triggers (session-end, handoff,
- * `export --write`) plus the version and timestamp that wrote it. Honesty alone
+ * `brainclaw refresh`) plus the version and timestamp that wrote it. Honesty alone
  * does not help an agent tier that never fires any of those triggers, though — it
  * just tells that tier, truthfully, that the file might be arbitrarily old. 2b
  * closes the loop by USING the stamp: compare it against the running version and
@@ -76,23 +76,41 @@ export function assessSurfaceFreshness(content: string, currentVersion: string):
   return { kind: 'stale', stampedVersion: version, currentVersion };
 }
 
+/**
+ * Which regeneration path owns a surface. The two kinds have DIFFERENT recovery
+ * commands (trp_6a49f976): stable surfaces are rewritten by `export`, live
+ * companions only by `refresh` (or session-end/handoff/state changes) — an
+ * `export` run leaves every live companion exactly as stale as it was.
+ */
+export type SurfaceKind = 'stable' | 'live';
+
+/** The command that regenerates every stable surface. `export --write` alone is rejected by the CLI (a mode flag is required — see runExport). */
+export const STABLE_SURFACE_REFRESH_COMMAND = 'brainclaw export --all --write';
+
+/** The command that regenerates every live companion. */
+export const LIVE_SURFACE_REFRESH_COMMAND = 'brainclaw refresh';
+
 /** One generated surface found on disk with a stamp older than the running version. */
 export interface StaleSurface {
   /** Path relative to the project root. */
   relativePath: string;
   stampedVersion: string;
+  kind: SurfaceKind;
 }
 
 /**
  * The set of surfaces this project could have on disk, derived from the export
  * registries rather than listed here. Deduplicated because several agents share
- * a target (four of them write AGENTS.md).
+ * a target (four of them write AGENTS.md); a path claimed by both registries
+ * counts as stable, since `export` regenerates it.
  */
-function candidateSurfacePaths(): string[] {
-  return [...new Set([
-    ...AGENT_EXPORT_REGISTRY.map((t) => t.relativePath),
-    ...LIVE_COMPANION_EXPORT_REGISTRY.map((t) => t.relativePath),
-  ])];
+function candidateSurfaces(): Array<{ relativePath: string; kind: SurfaceKind }> {
+  const stable = new Set(AGENT_EXPORT_REGISTRY.map((t) => t.relativePath));
+  const live = new Set(LIVE_COMPANION_EXPORT_REGISTRY.map((t) => t.relativePath));
+  return [
+    ...[...stable].map((relativePath) => ({ relativePath, kind: 'stable' as const })),
+    ...[...live].filter((p) => !stable.has(p)).map((relativePath) => ({ relativePath, kind: 'live' as const })),
+  ];
 }
 
 export interface ReconcileSurfaceFreshnessResult {
@@ -114,7 +132,7 @@ export interface ReconcileSurfaceFreshnessResult {
  */
 export function reconcileSurfaceFreshness(cwd: string, currentVersion: string): ReconcileSurfaceFreshnessResult {
   const result: ReconcileSurfaceFreshnessResult = { stale: [], freshCount: 0, unknownCount: 0 };
-  for (const relativePath of candidateSurfacePaths()) {
+  for (const { relativePath, kind } of candidateSurfaces()) {
     const full = path.join(cwd, relativePath);
     let head: string;
     try {
@@ -132,7 +150,7 @@ export function reconcileSurfaceFreshness(cwd: string, currentVersion: string): 
       continue; // unreadable → not reported, never a crash
     }
     const verdict = assessSurfaceFreshness(head, currentVersion);
-    if (verdict.kind === 'stale') result.stale.push({ relativePath, stampedVersion: verdict.stampedVersion });
+    if (verdict.kind === 'stale') result.stale.push({ relativePath, stampedVersion: verdict.stampedVersion, kind });
     else if (verdict.kind === 'fresh') result.freshCount += 1;
     else result.unknownCount += 1;
   }
@@ -143,13 +161,19 @@ export function reconcileSurfaceFreshness(cwd: string, currentVersion: string): 
  * Build the advisory for a stale-surface scan, or `undefined` when there is
  * nothing to say.
  *
- * NO `next_actions`, deliberately. The recovery is `brainclaw export --write`,
- * and there is no MCP tool that performs it — `bclaw_setup` is the onboarding
- * wizard and takes no write flag. Pointing at it anyway would ship a next_action
- * whose args the engine rejects, which is the precise class of drift this plan
- * exists to eliminate; and per pln#634's own rule, a builder with no genuine
- * follow-up returns nothing rather than inventing one. The command therefore
- * travels in the message, where it is true.
+ * NO `next_actions`, deliberately. The recovery is a CLI command, and there is
+ * no MCP tool that performs it — `bclaw_setup` is the onboarding wizard and
+ * takes no write flag. Pointing at it anyway would ship a next_action whose
+ * args the engine rejects, which is the precise class of drift this plan exists
+ * to eliminate; and per pln#634's own rule, a builder with no genuine follow-up
+ * returns nothing rather than inventing one. The command therefore travels in
+ * the message, where it is true.
+ *
+ * WHICH command depends on what is stale (trp_6a49f976): this advisory shipped
+ * in 1.20.0 recommending `brainclaw export --write`, which the CLI rejects
+ * (a mode flag is required) and which — even corrected to `--all` — never
+ * touches live companions, the very files the first real-world firing listed.
+ * The recovery must be per kind, and only for the kinds actually stale.
  */
 export function staleSurfaceWarning(
   result: ReconcileSurfaceFreshnessResult,
@@ -158,6 +182,14 @@ export function staleSurfaceWarning(
   if (result.stale.length === 0) return undefined;
   const shown = result.stale.slice(0, 8);
   const overflow = result.stale.length - shown.length;
+  const kinds = new Set(result.stale.map((s) => s.kind));
+  const commands = [
+    ...(kinds.has('stable') ? [STABLE_SURFACE_REFRESH_COMMAND] : []),
+    ...(kinds.has('live') ? [LIVE_SURFACE_REFRESH_COMMAND] : []),
+  ];
+  const recovery = kinds.size === 2
+    ? ` Run \`${STABLE_SURFACE_REFRESH_COMMAND}\` (stable surfaces) and \`${LIVE_SURFACE_REFRESH_COMMAND}\` (live companions) to refresh them.`
+    : ` Run \`${commands[0]}\` to refresh them.`;
   return {
     code: 'generated_surfaces_stale',
     message:
@@ -165,12 +197,15 @@ export function staleSurfaceWarning(
       + shown.map((s) => `${s.relativePath} (v${s.stampedVersion})`).join(', ')
       + (overflow > 0 ? ` (+${overflow} more)` : '')
       + '. An agent tier that never triggers a regeneration is reading them as-is.'
-      + ' Run `brainclaw export --write` to refresh them.',
+      + recovery,
     data: {
       current_version: currentVersion,
-      stale_surfaces: shown.map((s) => ({ path: s.relativePath, stamped_version: s.stampedVersion })),
+      stale_surfaces: shown.map((s) => ({ path: s.relativePath, stamped_version: s.stampedVersion, kind: s.kind })),
       ...(overflow > 0 ? { stale_surfaces_omitted: overflow } : {}),
-      refresh_command: 'brainclaw export --write',
+      // Kept as a single runnable string for consumers that shipped against
+      // 1.20.0; refresh_commands is the structured form.
+      refresh_command: commands.join(' && '),
+      refresh_commands: commands,
     },
   };
 }

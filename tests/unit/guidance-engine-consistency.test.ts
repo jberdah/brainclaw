@@ -365,7 +365,7 @@ describe('guidance ↔ engine — load-bearing claims are DERIVED, not enumerate
 
 describe('guidance ↔ engine — generated surfaces do not claim a freshness they lack', () => {
   it('the live header does not assert "auto-refreshed" without naming the real triggers', () => {
-    // Regeneration is EXPLICIT (session-end / handoff / export --write). A tier
+    // Regeneration is EXPLICIT (session-end / handoff / `brainclaw refresh`). A tier
     // that never fires those reads a file claiming to be fresh while being
     // arbitrarily stale — a claim that is false for half the tiers is worse than
     // no claim (pln#638 volet 2a).
