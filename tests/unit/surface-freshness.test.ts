@@ -213,12 +213,19 @@ describe('surface freshness — the advisory', { concurrency: false }, () => {
     );
   });
 
-  it('the export command it recommends is one the CLI actually accepts', () => {
+  it('the commands it recommends are ones the CLI actually accepts', () => {
     // The 2c-class tripwire this file was missing: runExport (export.ts) exits
     // with "--format, --detect, or --all is required" unless a mode flag is
     // present. A recovery command the engine itself rejects is the exact drift
-    // pln#638 exists to eliminate — and it shipped in 1.20.0 anyway.
-    assert.match(STABLE_SURFACE_REFRESH_COMMAND, /--(all|detect|format)\b/);
+    // pln#638 exists to eliminate — and it shipped in 1.20.0 anyway. Exact
+    // token contract rather than a mode-flag regex (codex review, PR #163):
+    // a loose match would accept `--format` with no argument, or a command
+    // that lost its `--write` and silently became a stdout dump.
+    assert.deepEqual(
+      STABLE_SURFACE_REFRESH_COMMAND.split(' '),
+      ['brainclaw', 'export', '--all', '--write'],
+    );
+    assert.deepEqual(LIVE_SURFACE_REFRESH_COMMAND.split(' '), ['brainclaw', 'refresh']);
   });
 
   it('carries NO next_actions — there is no MCP tool that regenerates', () => {
