@@ -190,6 +190,13 @@ export async function runSessionEnd(options: SessionEndOptions = {}): Promise<vo
     if (result.compaction_hint) {
       console.log(`  💡 ${result.compaction_hint}`);
     }
+    // pln#636 C2 backstop — computed since 1.19.0, printed nowhere until the
+    // Fable audit (P1): the human output skipped it, so it was --json only.
+    if (result.scope_warnings?.length) {
+      for (const w of result.scope_warnings) {
+        console.warn(`⚠ ${w.message}`);
+      }
+    }
     if (result.reflection_prompt) {
       console.log('\n📝 Session reflection:');
       for (let i = 0; i < result.reflection_prompt.questions.length; i++) {

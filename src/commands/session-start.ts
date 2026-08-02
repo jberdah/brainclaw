@@ -156,6 +156,21 @@ export async function runSessionStart(options: SessionStartOptions = {}): Promis
         console.warn(`  ${c.agent} → ${c.scope}`);
       }
     }
+    // pln#638 2b, wired for humans too (Fable audit P0.3): the field existed on
+    // the result but the human output never printed it — visible only via --json.
+    if (snapshot.stale_surfaces) {
+      console.warn(`⚠ ${snapshot.stale_surfaces.message}`);
+    }
+    // Fifth instance of the computed-then-dropped class, caught by the new seam
+    // guard on its first run: built since the shared-checkout detection landed,
+    // read by nothing. Two agents editing one checkout is precisely what a human
+    // at the terminal needs to hear about.
+    if (snapshot.shared_checkout_warning) {
+      const others = snapshot.shared_checkout_warning.other_sessions
+        .map((s) => `${s.agent} (${s.session_id}${s.branch ? `, ${s.branch}` : ''})`)
+        .join(', ');
+      console.warn(`⚠ Shared checkout: ${others} ${snapshot.shared_checkout_warning.other_sessions.length === 1 ? 'is' : 'are'} also working in ${snapshot.shared_checkout_warning.worktree_path}. Claim your scope before editing.`);
+    }
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     if (options.hook) {
@@ -360,14 +375,19 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
   // daemon, no watcher (feedback_lazy_reconcile_pattern). Advisory only: nothing
   // is regenerated here, because regeneration is an explicit act and silently
   // rewriting a file the operator may have edited would be worse than a warning.
+  // NOT gated on maintenanceMode — deliberately, and this is a fix, not an
+  // oversight (Fable audit P0). The check is ~25 existsSync + a few 4KB head
+  // reads, nothing like the sweeps/federation/GC that justify the 'full' gate.
+  // Gating it on 'full' made it unreachable from `bclaw_work`, which calls
+  // startSession without maintenanceMode (→ 'fast') and is the entry point the
+  // session protocol tells every agent to use — so the warning shipped in
+  // 1.19.0 and never fired for the population it was built for.
   let staleSurfaces: StructuredWarningInput | undefined;
-  if (maintenanceMode === 'full') {
-    try {
-      const currentVersion = getInstalledBrainclawVersion();
-      const freshness = reconcileSurfaceFreshness(options.cwd ?? process.cwd(), currentVersion);
-      staleSurfaces = staleSurfaceWarning(freshness, currentVersion);
-    } catch { /* non-fatal */ }
-  }
+  try {
+    const currentVersion = getInstalledBrainclawVersion();
+    const freshness = reconcileSurfaceFreshness(options.cwd ?? process.cwd(), currentVersion);
+    staleSurfaces = staleSurfaceWarning(freshness, currentVersion);
+  } catch { /* non-fatal */ }
 
   // Materialize incoming federation signals from linked projects (Phase 0 — local)
   if (maintenanceMode === 'full') {

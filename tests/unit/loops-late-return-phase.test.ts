@@ -28,8 +28,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
-import { advance } from '../../src/core/loops/verbs.js';
+import { advance, turn } from '../../src/core/loops/verbs.js';
 import { closeIdeationLoopFromLaneResult } from '../../src/core/ideation-loop-close.js';
+import { closeReviewLoopFromLaneResult } from '../../src/core/review-loop-close.js';
 import type { LaneResult } from '../../src/core/schema.js';
 
 const cleanup: string[] = [];
@@ -117,5 +118,57 @@ describe('pln#639 BUG-2 — late lane return keeps its dispatch phase', () => {
 
     const critique = getLoop(loopId, cwd)!.artifacts.find((a) => a.type === 'critique');
     assert.equal(critique?.phase, 'critique');
+  });
+});
+
+/**
+ * The REVIEW closer's twin — added after the Fable audit (P2) found it unpinned.
+ *
+ * The BUG-2 fix landed in BOTH closers, and the commit called review "the far
+ * more travelled path" — yet only the ideation side had a late-return test.
+ * Reverting `slot.phase ?? loop.current_phase` in review-loop-close.ts left the
+ * whole suite green. This pins it.
+ */
+describe('pln#639 BUG-2 — late REVIEW lane return keeps its dispatch phase', () => {
+  it('a verdict arriving after an advance is filed under the phase the reviewer was dispatched in', () => {
+    const cwd = ws();
+    const loop = openLoop(
+      {
+        kind: 'review',
+        title: 'late verdict',
+        created_by: 'coord',
+        mode: 'symmetric',
+        slots: [
+          { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
+          { role: 'reviewer', agent: 'codex', agent_id: 'agt_reviewer', assignment_id: 'asgn_rev' },
+        ],
+      },
+      cwd,
+    );
+    // Mirror the real dispatch flow: advance to findings, hand the reviewer its
+    // turn there (turn() stamps slot.phase = 'findings').
+    advance({ id: loop.id, actor: 'coord' }, cwd); // change_summary → findings
+    const reviewer = getLoop(loop.id, cwd)!.slots.find((s) => s.role === 'reviewer')!;
+    turn({ id: loop.id, slot_id: reviewer.slot_id, actor: 'coord', assignment_id: 'asgn_rev' }, cwd);
+
+    // The loop moves on while the reviewer is still working.
+    advance({ id: loop.id, actor: 'coord', to_phase: 'author_response', force: true }, cwd);
+    assert.equal(getLoop(loop.id, cwd)!.current_phase, 'author_response', 'precondition: the loop advanced');
+
+    closeReviewLoopFromLaneResult(
+      { id: 'asgn_rev', scope: `review-loop:${loop.id}`, agent: 'codex' },
+      { review_verdict: 'approve', review_summary: 'ship it' } as LaneResult,
+      'coord',
+      cwd,
+    );
+
+    const verdict = getLoop(loop.id, cwd)!.artifacts.find((a) => a.type === 'verdict');
+    assert.ok(verdict, 'the verdict must still be recorded — never dropped');
+    assert.equal(
+      verdict.phase, 'findings',
+      'the verdict belongs to the phase the reviewer was dispatched in, not the phase the loop reached',
+    );
+    // Attribution changes; the outcome must not: reviewer_green scans all phases.
+    assert.match(verdict.body ?? '', /^accepted/);
   });
 });

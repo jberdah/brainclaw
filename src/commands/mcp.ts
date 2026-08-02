@@ -37,7 +37,7 @@ import { loadAllSessions } from '../core/identity.js';
 import { findOutermostBrainclawRoot, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef } from '../core/store-resolution.js';
 import { switchProject } from './switch.js';
 import { assessBootstrapNeed, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation } from '../core/setup-flow.js';
-import { WorkRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
+import { WorkRequestSchema, type FacadeResponse, type WarningDetail } from '../core/facade-schema.js';
 import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
 import { sweepDeadPidRunningAgentRunsAtRead, sweepTurnOwnedPreRunLeaseAtRead } from '../core/agentrun-reconciler.js';
 import { extractSuggestedTools, observeToolCall, recordSuggestion } from '../core/guidance-telemetry.js';
@@ -1582,6 +1582,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const targetCwd = resolveProjectCwd(workReq.project, cwd);
       const useCompact = workReq.compact !== false; // default true
       const warnings: string[] = [];
+      // pln#635 structured channel — populated alongside `warnings` and attached
+      // to the response only when non-empty.
+      const warningDetails: WarningDetail[] = [];
 
       // Step 1: implicit session start (handles auto-registration internally)
       let sessionResult: Awaited<ReturnType<typeof startSession>>;
@@ -1597,6 +1600,21 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
       if (sessionResult.auto_registered) {
         warnings.push(`Agent '${sessionResult.agent}' was auto-registered (first use). Run \`brainclaw register-agent ${sessionResult.agent}\` to set capabilities and trust level.`);
+      }
+      // pln#638 2b — surface the stale-surfaces advisory on the CANONICAL entry
+      // point. Until the Fable audit, bclaw_work could never even compute this
+      // (startSession defaulted to 'fast' and the check was gated on 'full'),
+      // so the feature shipped in 1.19.0 unreachable from the one call the
+      // session protocol tells every agent to make first.
+      if (sessionResult.stale_surfaces) {
+        warnings.push(sessionResult.stale_surfaces.message);
+        warningDetails.push(sessionResult.stale_surfaces);
+      }
+      // Same seam, same fix: other live sessions on this checkout is exactly
+      // what an agent entering via bclaw_work must hear before it edits.
+      if (sessionResult.shared_checkout_warning) {
+        const others = sessionResult.shared_checkout_warning.other_sessions.map((s) => s.agent).join(', ');
+        warnings.push(`Shared checkout: ${others} also working in ${sessionResult.shared_checkout_warning.worktree_path} — claim your scope before editing.`);
       }
 
       // Step 2: build context for requested scope. The "what's new" diff is
@@ -1888,6 +1906,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         claim_status: claimStatus,
         session_id: sessionResult.session_id,
         warnings,
+        ...(warningDetails.length ? { warning_details: warningDetails } : {}),
         duration_ms: Date.now() - startMs,
         bootstrap_recommended: bootstrapRecommended,
         bootstrap_verdict: bootstrapVerdict,
