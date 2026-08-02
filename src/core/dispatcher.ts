@@ -463,6 +463,73 @@ export function buildWorkingDefaultsSection(opts: { canCommit: boolean }): strin
   ].join('\n');
 }
 
+/**
+ * pln#638 PR-4 — the transport section, for BOTH declared-MCP and MCP-less agents.
+ *
+ * WHY THIS EXISTS AS ONE FUNCTION. The MCP-less block was duplicated verbatim in
+ * `generateBrief` and `generateDispatchBrief`; that duplication is exactly what
+ * lets two brief paths drift, which is the class of bug PR-3 just fixed one layer
+ * up. One function, two callers.
+ *
+ * WHY A DECLARED-MCP AGENT ALSO GETS A SECTION — the part that was missing. A
+ * profile's `runtime.mcp_direct` is a STATIC flag: it asserts nothing about
+ * whether the config exists on this machine, whether the server started, or
+ * whether stdio came up. Proven in production during pln#638's own ideation: a
+ * codex critic ran with `mcp_direct=true` and NO reachable MCP. Its 3654-character
+ * critique survived only because the brief happened to spell out a file fallback
+ * by hand. So the brief must never ASSERT the capability — it states the
+ * expectation and names the fallback, and the worker decides from what it
+ * actually observes.
+ *
+ * The store path is deliberately NOT mentioned. `.brainclaw/` is gitignored
+ * (.gitignore:10), so it does not exist in a worker's worktree — the previous
+ * wording told workers to write candidates into a directory they cannot see.
+ */
+/**
+ * The ONE LANE-RESULT shape every brief quotes.
+ *
+ * There used to be two. `buildProtocolSection` has emitted a fallback since
+ * pln#526 with `{summary, files_changed, artifacts}` and NO `body`, while the
+ * transport section below asked for `body`. A full-mode worker with an assignment
+ * id received both and had to pick — and a worker that followed the older one
+ * recreated trp_8efdbf9d (a substantial review collapsed into a one-line summary
+ * because the contract had nowhere to put the reasoning). Caught in review by
+ * Fable before this shipped.
+ */
+export function laneResultShape(assignmentId?: string): string {
+  const asgn = assignmentId ?? '<assignment_id>';
+  return `{"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<one line>","body":"<your full output — the reasoning, not just a label>","files_changed":["..."],"artifacts":["..."]}`;
+}
+
+export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: string }): string {
+  const laneResult = `write LANE-RESULT.json at the worktree ROOT: ${laneResultShape(opts.assignmentId)}`;
+
+  if (!opts.hasMcp) {
+    return [
+      '## ⚠ Transport: no MCP (file protocol only)',
+      'Your runtime has no brainclaw MCP access — any `bclaw_*` instruction above does NOT apply to you. Report your outcome via the FILE protocol only; it is authoritative for this run:',
+      `- When done, ${laneResult}.`,
+      // RESTORED after review. Removing this orphaned a real, shipped consumer:
+      // `collectWorktreeCandidateFiles` (harvest.ts:191-205) scans exactly this
+      // directory inside WORKER worktrees, and `bclaw_harvest_candidates` exposes
+      // it. My removal rested on a wrong inference — `.gitignore:10` means the
+      // path is not CHECKED OUT, not that a worker cannot create it. Being
+      // gitignored is the feature: candidates never pollute worker commits.
+      '- Capture decisions/traps as candidate JSON under `.brainclaw/coordination/inbox/` in your worktree — create the directory if it does not exist (it is gitignored, so a fresh worktree will not have it). The coordinator harvests them.',
+      '- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates it.',
+      '',
+    ].join('\n');
+  }
+
+  return [
+    '## Transport: MCP expected, file fallback if not',
+    'Your profile declares brainclaw MCP access, but that is a DECLARATION, not a verified fact — the config may be absent on this machine or the server may not have started. Decide from what you actually observe:',
+    '- If `bclaw_*` tools respond: use them, as instructed above.',
+    `- If they are unavailable or error: do not stop and do not discard your work — ${laneResult}. The coordinator harvests it.`,
+    '',
+  ].join('\n');
+}
+
 export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string; assignmentId?: string }): string {
   const parts: string[] = [];
 
@@ -531,7 +598,9 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     // fails in your environment. pln#628 Focus 4A: sandbox is NO LONGER a reason
     // MCP is unavailable (dec#133), so this is framed as a generic fallback, not a
     // sandbox instruction. The coordinator ingests it with `brainclaw harvest`.
-    parts.push(`Final fallback (if bclaw_assignment_update / MCP is unavailable in your environment): write LANE-RESULT.json at the worktree root — {"assignment_id":"${options.assignmentId}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."],"artifacts":["..."]}. The coordinator harvests it via \`brainclaw harvest ${options.assignmentId}\`.`);
+    // Quotes the SHARED shape (laneResultShape) so this and the transport section
+    // cannot disagree about what a worker should write — they used to.
+    parts.push(`Final fallback (if bclaw_assignment_update / MCP is unavailable in your environment): write LANE-RESULT.json at the worktree root — ${laneResultShape(options.assignmentId)}. The coordinator harvests it via \`brainclaw harvest ${options.assignmentId}\`.`);
   } else if (options?.claimId) {
     parts.push('1. Call bclaw_session_start to register your session');
     if (options.worktreePath) {
@@ -713,14 +782,19 @@ export function generateBrief(
   // call bclaw_*" note: their coherent message is carried by the Protocol section
   // (MCP primary + LANE-RESULT.json fallback) and working-defaults (canCommit=
   // false → the coordinator commits their worktree at harvest).
-  if (briefProfile && !dispatchHasMcp(briefProfile)) {
-    parts.push('## ⚠ Transport: no MCP (file protocol only)');
-    parts.push('Your runtime has no brainclaw MCP access — any `bclaw_*` instruction above does NOT apply to you. Report your outcome via the FILE protocol only; it is authoritative for this run:');
-    const asgn = options?.assignmentId ?? '<assignment_id>';
-    parts.push(`- When done, write LANE-RESULT.json at the worktree root: {"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."]}.`);
-    parts.push('- Capture decisions/traps as candidate JSON under .brainclaw/coordination/inbox/ (the coordinator harvests them).');
-    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates it.');
-    parts.push('');
+  // pln#638 PR-4 — emitted for EVERY agent, not only MCP-less ones: a declared-MCP
+  // worker needs the conditional fallback too (see buildTransportSection for the
+  // production incident that proved it).
+  //
+  // An UNRESOLVED profile gets the conditional form rather than silence — review
+  // caught that gating on a truthy profile left an unknown agent with a
+  // fully-MCP-asserting brief and no fallback, which is the case the principle
+  // "never assert an unverifiable capability" exists for.
+  if (options?.agent) {
+    parts.push(buildTransportSection({
+      hasMcp: briefProfile ? dispatchHasMcp(briefProfile) : true,
+      assignmentId: options.assignmentId,
+    }));
   }
 
   // Codex-specific constraints: focus and speed guidance for sandboxed runs.
@@ -793,14 +867,14 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
   // (see generateBrief for the full rationale + dec#133). Fires only for
   // genuinely MCP-less agents; sandboxed-but-MCP-capable codex no longer gets a
   // self-contradictory "no MCP / Do NOT call bclaw_*" note.
-  if (taskBriefProfile && !dispatchHasMcp(taskBriefProfile)) {
-    parts.push('## ⚠ Transport: no MCP (file protocol only)');
-    parts.push('Your runtime has no brainclaw MCP access — any `bclaw_*` instruction above does NOT apply to you. Report your outcome via the FILE protocol only; it is authoritative for this run:');
-    const asgn = options.assignmentId ?? '<assignment_id>';
-    parts.push(`- When done, write LANE-RESULT.json at the worktree root: {"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."]}.`);
-    parts.push('- Capture decisions/traps as candidate JSON under .brainclaw/coordination/inbox/ (the coordinator harvests them).');
-    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates it.');
-    parts.push('');
+  // pln#638 PR-4 — same shared section as generateBrief; the wording used to be
+  // duplicated verbatim in both builders, which is how they drift. Unresolved
+  // profile → conditional form, never silence (see generateBrief for why).
+  if (options.agent) {
+    parts.push(buildTransportSection({
+      hasMcp: taskBriefProfile ? dispatchHasMcp(taskBriefProfile) : true,
+      assignmentId: options.assignmentId,
+    }));
   }
 
   // Codex-specific constraints: focus and speed guidance for sandboxed runs
