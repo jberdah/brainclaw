@@ -688,7 +688,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     + 'to close the review loop on approve, or continue it on request_changes.';
 
   /** Build a coordinate brief: delegates to shared generateDispatchBrief(). */
-  const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string; assignmentId?: string }): string => {
+  const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string; assignmentId?: string; contextEnvelope?: boolean }): string => {
     return generateDispatchBrief({
       task,
       agent: agentName,
@@ -696,6 +696,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       scope: options?.scope,
       worktreePath: options?.worktreePath,
       assignmentId: options?.assignmentId,
+      // pln#638 PR-6b — the envelope must read the TARGET project's store: on a
+      // cross-project dispatch, defaulting to process.cwd() would inline the
+      // WRONG project's constraints/traps into the worker's brief.
+      cwd: dispatchCwd,
+      contextEnvelope: options?.contextEnvelope,
     });
   };
   type CoordinateDeliveryEntry = {
@@ -1952,6 +1957,12 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               scope: criticScope,
               worktreePath: claimResult.worktreePath,
               assignmentId: criticAssignmentId,
+              // The ideation brief above already inlines a BM25-selected,
+              // budget-managed memory bundle (with its own truncation warning).
+              // The generic context envelope would double-carry the same traps
+              // and break the documented ~48K content cap + dispatch-envelope
+              // math pinned by ideation-loop-e2e.
+              contextEnvelope: false,
             });
             const queued = queueCoordinateMessage({
               agent: slot.agent,

@@ -530,6 +530,25 @@ export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: st
   ].join('\n');
 }
 
+/**
+ * pln#638 PR-6 — lane lifecycle doctrine (settled by loop lop_2d838a638b1e2956):
+ *
+ *   Native hooks = interactive agents. Dispatched workers = dispatcher-owned
+ *   lifecycle. A lane's unit of identity is assignment + claim + AgentRun —
+ *   NEVER a session. Sessions carry interactive side-effects (auto-release
+ *   frees ALL of an agent's claims at session_end) that would leak across
+ *   lanes, and N parallel lanes would contend on the session lock (observed:
+ *   a worker's global hook stalled 5s on a session LOCK, not on a missing
+ *   store).
+ *
+ *   The three lifecycle needs hooks used to cover are met elsewhere:
+ *   - shared context at start  → inlined ContextEnvelope in the brief
+ *     (buildContextEnvelopeSection — MCP is a refresh, not a prerequisite);
+ *   - progress/closure         → bclaw_assignment_update + the wrapper's
+ *     mechanical completed/failed sentinels (see attemptExecution);
+ *   - business closure         → the coordinator's harvest/report path.
+ *     Transport completion never releases claims or triggers review.
+ */
 export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string; assignmentId?: string }): string {
   const parts: string[] = [];
 
@@ -717,6 +736,10 @@ export function generateBrief(
   // pln#554 step 4 — working defaults (incremental commits + validation bar).
   parts.push(buildWorkingDefaultsSection({ canCommit: briefProfile ? dispatchCanCommit(briefProfile) : true }));
 
+  // pln#638 PR-6b — survival context rides in the brief; MCP is a refresh.
+  const envelope = buildContextEnvelopeSection(cwd);
+  if (envelope) parts.push(envelope);
+
   // Steps if any
   if (plan.steps?.length) {
     parts.push('## Steps');
@@ -835,6 +858,85 @@ export interface DispatchBriefOptions {
   scope?: string;
   /** Pre-created worktree path */
   worktreePath?: string;
+  /** Project root for the inlined context envelope (pln#638 PR-6b). */
+  cwd?: string;
+  /**
+   * Set false when the task content already curates its own project memory
+   * (the ideation brief inlines a BM25-selected, budget-managed bundle with
+   * an explicit truncation warning). Injecting the generic envelope on top
+   * would double-carry the same traps and blow the documented content cap.
+   * Default: true — the envelope exists precisely for briefs that would
+   * otherwise carry no context at all.
+   */
+  contextEnvelope?: boolean;
+}
+
+/** Character budget for the inlined context envelope — bounded by design
+ *  (trp#179: oversized payloads), and deliberately small: this is the survival
+ *  kit, not the library. */
+const CONTEXT_ENVELOPE_MAX_CHARS = 3000;
+const CONTEXT_ENVELOPE_ITEM_MAX_CHARS = 220;
+const CONTEXT_ENVELOPE_TOP_K = 6;
+
+/**
+ * pln#638 PR-6b — the ContextEnvelope: constraints/traps/decisions INLINED into
+ * the dispatch brief, bounded and deterministic.
+ *
+ * Why inline instead of "call bclaw_context": that instruction assumes the MCP
+ * is reachable, and the whole PR-6 design was forced by a production run where
+ * the declared-MCP flag was true and the server was not there (critic A of
+ * lop_2d838a638b1e2956 lost its context channel and worked blind). The brief is
+ * the ONE artifact every tier demonstrably receives — so the survival context
+ * rides in it, and MCP remains an optional refresh, never a precondition.
+ *
+ * Deterministic: newest-first by created_at (tie-broken by id), fixed caps, no
+ * clock reads — the same store state always renders the same envelope.
+ * NOT scope-filtered, deliberately: relevance guessing risks hiding the one
+ * trap that mattered (the inverted-default lesson of claim-scope, applied to
+ * context selection). Bounded instead.
+ */
+export function buildContextEnvelopeSection(cwd?: string): string {
+  let state: ReturnType<typeof loadState>;
+  try {
+    state = loadState(cwd);
+  } catch {
+    return ''; // no store, no envelope — never block a brief on context
+  }
+
+  const newestFirst = <T extends { created_at?: string; id?: string }>(items: T[]): T[] =>
+    [...items].sort((a, b) =>
+      (b.created_at ?? '').localeCompare(a.created_at ?? '') || (a.id ?? '').localeCompare(b.id ?? ''));
+
+  const clip = (text: string): string =>
+    text.length > CONTEXT_ENVELOPE_ITEM_MAX_CHARS ? `${text.slice(0, CONTEXT_ENVELOPE_ITEM_MAX_CHARS - 1)}…` : text;
+
+  const constraints = newestFirst(state.active_constraints ?? []);
+  const traps = newestFirst(state.known_traps ?? []).slice(0, CONTEXT_ENVELOPE_TOP_K);
+  const decisions = newestFirst(state.recent_decisions ?? []).slice(0, CONTEXT_ENVELOPE_TOP_K);
+  if (constraints.length === 0 && traps.length === 0 && decisions.length === 0) return '';
+
+  const lines: string[] = [
+    '## Project context (inlined — MCP is a refresh, not a prerequisite)',
+    `Snapshot: ${constraints.length} constraint(s), ${traps.length}/${(state.known_traps ?? []).length} trap(s), ${decisions.length}/${(state.recent_decisions ?? []).length} decision(s), newest-first.`,
+  ];
+  const push = (title: string, items: Array<{ id?: string; text?: string }>): void => {
+    if (items.length === 0) return;
+    lines.push(`### ${title}`);
+    for (const item of items) lines.push(`- [${item.id ?? '?'}] ${clip((item.text ?? '').replace(/\s+/g, ' ').trim())}`);
+  };
+  push('Active constraints (binding)', constraints);
+  push('Known traps', traps);
+  push('Recent decisions', decisions);
+  lines.push('');
+
+  // Enforce the total budget by dropping whole trailing lines — a clipped list
+  // stays valid markdown, a mid-line cut does not.
+  let text = lines.join('\n');
+  while (text.length > CONTEXT_ENVELOPE_MAX_CHARS && lines.length > 2) {
+    lines.splice(lines.length - 2, 1); // drop the last content line, keep the trailing ''
+    text = lines.join('\n');
+  }
+  return text;
 }
 
 export function generateDispatchBrief(options: DispatchBriefOptions): string {
@@ -859,6 +961,13 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
 
   // pln#554 step 4 — working defaults (incremental commits + validation bar).
   parts.push(buildWorkingDefaultsSection({ canCommit: taskBriefProfile ? dispatchCanCommit(taskBriefProfile) : true }));
+
+  // pln#638 PR-6b — same envelope as generateBrief (see buildContextEnvelopeSection).
+  // Suppressed only when the content curates its own memory (contextEnvelope: false).
+  if (options.contextEnvelope !== false) {
+    const taskEnvelope = buildContextEnvelopeSection(options.cwd);
+    if (taskEnvelope) parts.push(taskEnvelope);
+  }
 
   if (briefMode === 'full') {
     parts.push(buildProtocolSection({

@@ -213,6 +213,31 @@ describe('reconciler/reconcileAgentRun', () => {
     assert.match(result.reason, /post-start commit/);
   });
 
+  it('pln#638 6c — TRANSPORT completion is not BUSINESS completion: the claim stays active', () => {
+    // The effects boundary the ideation loop demanded ("un exit 0 n'est qu'une
+    // fin de processus ; sans preuve métier, ni release ni review"), audited and
+    // found ALREADY TRUE in the code — but unpinned, so a future "tidy-up" could
+    // wire cascadeReleaseOnFailure's twin onto the completed path and nothing
+    // would fail. Inference marks the RUN completed (observability); releasing
+    // the claim belongs to the worker's own release call or to harvest, both of
+    // which carry business proof (report + artifacts). The failure cascade
+    // (trp#433, pinned below) is deliberately asymmetric.
+    makeClaim({ status: 'active' });
+    const repoDir = bootstrapGitWorktree();
+    const run = makeRun({ worktree_path: repoDir });
+    const sleepUntil = Date.now() + 1100;
+    while (Date.now() < sleepUntil) { /* spin */ }
+    commitInWorktree(repoDir, 'WORK.md', 'work');
+    const result = reconcileAgentRun(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 90_000,
+    });
+    assert.equal(result.action, 'inferred_completed');
+    assert.equal(
+      loadClaim('clm_test', ws.dir).status, 'active',
+      'an inferred completion must NOT release the claim — that is harvest\'s job, on business proof',
+    );
+  });
+
   it('health_check_unverified past grace, no evidence, process unknown', () => {
     const run = makeRun(); // no PID, no completion evidence
     const result = reconcileAgentRun(run.id, ws.dir, {

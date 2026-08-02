@@ -23,8 +23,15 @@ function iso(minutesAgo: number): string {
 describe('core/context', () => {
   let workspace: TestWorkspace;
   let restoreCwd: (() => void) | undefined;
+  let previousTestMode: string | undefined;
 
   beforeEach(() => {
+    // pln#640 — buildContext short-circuits ALL bootstrap machinery when
+    // BRAINCLAW_TEST_MODE=1 (context.ts). CI never sets it; agent shells set it
+    // to protect the real store. Scrub it so this file behaves like CI
+    // regardless of the runner's ambient environment.
+    previousTestMode = process.env.BRAINCLAW_TEST_MODE;
+    delete process.env.BRAINCLAW_TEST_MODE;
     workspace = createTestWorkspace({
       prefix: 'bclaw-context-',
       projectId: 'prj_ctx_test',
@@ -35,6 +42,8 @@ describe('core/context', () => {
   });
 
   afterEach(() => {
+    if (previousTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE;
+    else process.env.BRAINCLAW_TEST_MODE = previousTestMode;
     restoreCwd?.();
     workspace.cleanup();
   });
