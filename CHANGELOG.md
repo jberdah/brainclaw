@@ -5,6 +5,20 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.1] — 2026-08-02
+
+1.20.0's freshness advisory was caught by its own first real-world firing, minutes after an upgrade: it recommended a recovery command the CLI rejects outright — and even corrected, that command never touched the live companions the advisory was listing. The exact drift class pln#638 shipped to eliminate, shipped by pln#638. Both halves fixed, adversarially reviewed (codex, reviewer_green), and pinned by tests that were first watched failing on the pre-fix code.
+
+### Fixed
+
+- **The stale-surface advisory now names commands that actually work** (trp_6a49f976, #163). `generated_surfaces_stale` recommended `brainclaw export --write`, which `runExport` rejects ("--format, --detect, or --all is required") — a recovery command the engine itself refuses, shipped after being "verified" against the wrong surface (the MCP schema, not the CLI). Stale surfaces are now partitioned by WHICH regeneration path owns them — `kind: stable | live`, derived from the export registries, never enumerated — and the advisory recommends per-kind recovery: `brainclaw export --all --write` for stable surfaces, `brainclaw refresh` for live companions, both joined into one runnable string when both kinds are stale. `data.refresh_command` keeps its type for 1.20.0 consumers (its value simply becomes true); `data.refresh_commands` is the structured form. `renderLiveHeader` stops citing the invalid command too — the honest recovery for a live companion is `brainclaw refresh`. The missing tripwire now exists as an exact token contract, not a mode-flag regex that would accept `--format` with no argument.
+
+- **`brainclaw refresh` reaches every registered live companion** (codex review F1, #163). `refreshLiveCompanions` deduplicated its targets by STABLE EXPORT FORMAT, silently dropping every `agents-md` agent after codex — including mistral-vibe, whose registered live companion (`.vibe/live.md`) was therefore never rewritten by the very command the advisory names as the live recovery. Targets are now deduplicated by RESOLVED LIVE PATH, and a path only counts as taken once a live section was actually rendered for it, so a no-companion tier (codex, Tier A) cannot shadow a rendering agent that shares its default path (hermes now deterministically owns `AGENTS.live.md`, first renderer in registry order). The load-bearing regression derives its coverage from `LIVE_COMPANION_EXPORT_REGISTRY` itself and was verified counterfactually: run against the pre-fix code, it fails with ENOENT on exactly `.vibe/live.md`.
+
+### Security
+
+- **js-yaml 4.2.0 → 4.3.1 in the vscode-extension packaging toolchain** (Dependabot #11, CVE-2026-59869, #164). YAML merge-key chains could force quadratic CPU in js-yaml < 4.3.0. Development scope only — it reaches the tree through `@vscode/vsce` → `@secretlint` and is never loaded at extension runtime, nor by the CLI/MCP (which depend on `yaml`, not `js-yaml`). Lockfile-only change.
+
 ## [1.20.0] — 2026-08-02
 
 A dispatched lane now works from what it demonstrably HAS, not from what its profile declares. The brief carries the project's constraints/traps/decisions inline (MCP becomes a refresh, never a prerequisite), states the gate's deliverable contract instead of hoping the worker infers it, never asserts MCP access it cannot verify, and stops prescribing a session lifecycle that was never the lane's to own. Underneath, the guard rails watching all of this were rebuilt from regex prose to AST structure after two of them were shown to hold nothing — and every guard in this release was watched failing on an induced violation before being trusted.

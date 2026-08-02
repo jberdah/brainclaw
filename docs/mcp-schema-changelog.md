@@ -8,6 +8,21 @@ guarantees this changelog follows.
 
 ---
 
+## [1.20.1] — 2026-08-02
+
+**Changed — `generated_surfaces_stale` recovery data is now true, and structured (#163)**
+- The VALUE of `data.refresh_command` changes: it was `brainclaw export --write`,
+  which the CLI rejects (a mode flag is required), and is now a runnable command
+  derived from what is actually stale — `brainclaw export --all --write` (stable
+  surfaces), `brainclaw refresh` (live companions), or both joined with ` && `
+  when both kinds are stale. The field keeps its type (string); consumers that
+  displayed it verbatim now display something that works.
+- Additive fields on the same warning's `data`: `refresh_commands: string[]`
+  (the structured form of the above) and `kind: "stable" | "live"` on each
+  `stale_surfaces[]` entry.
+- Read contract only: no tool added/removed/renamed, no inputSchema change,
+  no surface-fingerprint movement.
+
 ## [1.20.0] — 2026-08-02
 
 **Fixed — 1.19.0 contract entries now actually emitted (#158)**
