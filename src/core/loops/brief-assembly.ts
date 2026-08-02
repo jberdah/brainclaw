@@ -25,6 +25,7 @@ import type {
   LoopContextCategory,
   LoopThread,
 } from './types.js';
+import { deriveWorkerReplyContract, renderWorkerReplyProse } from './worker-reply-contract.js';
 
 export interface BriefMemoryItem {
   /** Stable id (e.g. trp_xxx, dec_xxx, runtime_note path). */
@@ -156,10 +157,19 @@ export function buildIdeationBrief(input: IdeationBriefInput): IdeationBriefResu
   const memoryBlock = renderMemoryBlock(fetchedItemsByCategory);
   const closing = renderClosingInstructions(slotRole, thread.current_phase);
 
-  // Compose with truncation. The proposal seed and header are fixed;
-  // memory + prior artifacts share the remaining budget. Memory before
-  // prior-artifacts so the critic always sees fresh adversarial pressure.
-  const fixedParts = [header, proposalBlock, closing];
+  // pln#638 PR-5 — the deliverable contract, derived from the CURRENT phase's
+  // gate and frozen into the brief at dispatch time. This is the structural fix
+  // for proof #1 (a critic typed `coverage_gap`, invisible to the critique gate):
+  // the expected type was always known here; it just never travelled. FIXED
+  // part, never truncated — a brief that keeps its memory bundle but loses its
+  // reply contract would recreate the bug the section exists to prevent.
+  const contract = deriveWorkerReplyContract(thread);
+  const contractBlock = contract ? renderWorkerReplyProse(contract) : '';
+
+  // Compose with truncation. The proposal seed, header, closing and contract
+  // are fixed; memory + prior artifacts share the remaining budget. Memory
+  // before prior-artifacts so the critic always sees fresh adversarial pressure.
+  const fixedParts = [header, proposalBlock, closing, contractBlock];
   const fixedSize = fixedParts.reduce((n, s) => n + s.length, 0);
   const remainingBudget = Math.max(0, maxChars - fixedSize);
 
@@ -169,7 +179,9 @@ export function buildIdeationBrief(input: IdeationBriefInput): IdeationBriefResu
     remainingBudget,
   );
 
-  const text = [header, proposalBlock, truncatedMemory, closing]
+  // The contract closes the brief: the last thing a worker reads is how to
+  // reply so its work counts.
+  const text = [header, proposalBlock, truncatedMemory, closing, contractBlock]
     .filter((s) => s.length > 0)
     .join('\n\n');
 
