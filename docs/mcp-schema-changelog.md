@@ -8,6 +8,20 @@ guarantees this changelog follows.
 
 ---
 
+## [1.20.0] — 2026-08-02
+
+**Fixed — 1.19.0 contract entries now actually emitted (#158)**
+- `generated_surfaces_stale` (surfaced as `stale_surfaces`) and session-end
+  `scope_warnings` were documented below in 1.19.0 but computed-then-dropped
+  before the MCP boundary on the surfaces agents actually call. They now reach
+  `bclaw_session_start`, `bclaw_session_end` and `bclaw_work` responses as
+  `warnings` + `warning_details`. `shared_checkout_warning` (session-start)
+  rides the same seam.
+- Read contract only: no tool added/removed/renamed, no inputSchema change,
+  no surface-fingerprint movement. The dispatch-brief changes this release
+  (transport section, context envelope, worker reply contract, lane session
+  prohibition) are payload text, not protocol.
+
 ## [1.19.0] — 2026-08-01
 
 **Added — `warning_details` on the facade response contract (pln#635)**
