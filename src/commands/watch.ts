@@ -4,7 +4,7 @@ import { loadState } from '../core/state.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { listCandidates } from '../core/candidates.js';
 import { readAuditLog } from '../core/audit.js';
-import { listClaims, saveClaim, generateClaimId, ensureClaimsDir } from '../core/claims.js';
+import { listClaims, saveClaim, generateClaimId, ensureClaimsDir, claimBaselineFields } from '../core/claims.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import type { Claim } from '../core/schema.js';
 
@@ -212,6 +212,11 @@ export function runWatch(options: WatchOptions = {}): void {
           description: `auto-claim: ${filename}`,
           created_at: new Date().toISOString(),
           status: 'active',
+          // pln#636 C0-b / trp#1292 — the FIFTH creation path, missed by the
+          // 1.19.1 fix and invisible to its guard test: this one assigns the
+          // literal to a variable, so a scan looking for `saveClaim({` never saw
+          // it. Found by the ideation critic that reviewed the guard.
+          ...claimBaselineFields(),
         };
         try {
           saveClaim(claim);

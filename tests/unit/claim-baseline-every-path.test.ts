@@ -1,25 +1,40 @@
 /**
- * trp#1292 — every claim-creation path must stamp the baseline.
+ * trp#1292 — every claim-CREATION path must stamp the baseline.
  *
- * WHAT WENT WRONG. `base_sha` shipped in 1.19.0 and was stamped from exactly ONE
- * place: inside `acquireClaimScope`. Nothing user-facing calls that function. All
- * four real creation paths build their claim literal inline and call `saveClaim`
- * directly, so NO real claim ever got a baseline — and the whole pln#636 C2
- * conformity reconcile, which returns `unverifiable` without one, was inert in
- * production. Two shipped feature PRs did nothing.
+ * ## Round 1 (1.19.1): the defect
  *
- * WHY THE TESTS MISSED IT. `claim-base-sha.test.ts` calls `acquireClaimScope`
- * directly. It was green while the surface an agent actually calls was never
- * exercised. That is the ideation critic's V6 finding — "test the DELIVERED brief
- * after buildCoordinateBrief, not just the assembler" — reproduced one level up,
- * on the same day it was raised.
+ * `base_sha` was stamped from exactly one function — `acquireClaimScope` — that
+ * nothing user-facing calls. Real creation paths build their claim inline and call
+ * `saveClaim` directly, so no real claim had a baseline and the pln#636 C2
+ * conformity reconcile was inert. Two shipped feature PRs did nothing.
  *
- * SO THIS SUITE IS STRUCTURAL, not example-based: it enumerates the creation sites
- * from the SOURCE and fails when one of them does not stamp. A new fifth path
- * added next year fails here instead of silently shipping a third inert feature.
+ * ## Round 2: the GUARD I shipped for it was also holed
+ *
+ * An ideation critic reviewed the round-1 guard and found four escapes. It was a
+ * regex over `saveClaim({`, so:
+ *
+ *  1. `const c = {…}; saveClaim(c)` — an identifier argument — was invisible.
+ *  2. Worse, the scan SKIPPED the four already-listed files, so a fifth creator
+ *     added inside `mcp.ts` or `claims.ts` would never be seen.
+ *  3. The "does this module call the helper?" assertion was module-wide, so
+ *     `core/claims.ts` passed merely because `claimBaselineFields` is DEFINED there.
+ *  4. It ignored `{...defaults, …}` creation, aliased imports, and non-`.ts` files.
+ *
+ * And the hole was not theoretical: `commands/watch.ts` turned out to be a FIFTH
+ * creation path (auto-claim on file change) that assigns its literal to a variable
+ * — missed by the round-1 fix AND by its guard.
+ *
+ * ## So this version parses the AST
+ *
+ * Every `saveClaim` / `saveClaimUnlocked` call in `src/` is located, its first
+ * argument RESOLVED (object literal, or identifier traced back to its
+ * declaration), classified `create` vs `update`, and matched against an explicit
+ * inventory below. A new or reclassified callsite fails until someone states what
+ * it is — which is the property the regex version only pretended to have.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -35,99 +50,232 @@ function findRepoRoot(): string {
 }
 
 const SRC = path.join(findRepoRoot(), 'src');
+const PERSIST_FNS = new Set(['saveClaim', 'saveClaimUnlocked']);
+
+type Kind = 'create' | 'update';
+
+interface Callsite {
+  file: string;
+  line: number;
+  fn: string;
+  kind: Kind;
+  /** True when the resolved claim object carries the baseline spread. */
+  stamped: boolean;
+}
+
+/** Walk every .ts file under src/. */
+function sourceFiles(dir: string = SRC): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) return sourceFiles(full);
+    return e.isFile() && e.name.endsWith('.ts') ? [full] : [];
+  });
+}
+
+/** Nearest enclosing function-like scope, for scope-aware variable resolution. */
+function enclosingScope(node: ts.Node): ts.Node {
+  let cur: ts.Node | undefined = node.parent;
+  while (cur) {
+    if (
+      ts.isFunctionDeclaration(cur) || ts.isFunctionExpression(cur)
+      || ts.isArrowFunction(cur) || ts.isMethodDeclaration(cur)
+    ) return cur;
+    cur = cur.parent;
+  }
+  return node.getSourceFile();
+}
+
+/** Find `name`'s initializer, searching the nearest scope first, then the file.
+ *  WHY SCOPE-FIRST: `core/claims.ts` has ten `saveClaimUnlocked(claim, cwd)` calls
+ *  in different functions, all using the name `claim`. A file-wide search resolves
+ *  every one of them to whichever declaration the walk happened to visit last —
+ *  which silently misclassified acquireClaimScope's creation as an update in the
+ *  first draft of this very test. */
+function findInitializer(name: string, from: ts.Node): ts.Expression | undefined {
+  const search = (root: ts.Node): ts.Expression | undefined => {
+    let hit: ts.Expression | undefined;
+    const visit = (n: ts.Node): void => {
+      if (hit) return;
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name && n.initializer) {
+        hit = n.initializer;
+        return;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(root);
+    return hit;
+  };
+  return search(enclosingScope(from)) ?? search(from.getSourceFile());
+}
+
+/** Is this expression (or the variable it names) a `claimBaselineFields(...)` result? */
+function isBaselineExpression(expr: ts.Expression, from: ts.Node): boolean {
+  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+    return expr.expression.text === 'claimBaselineFields';
+  }
+  if (ts.isIdentifier(expr)) {
+    const init = findInitializer(expr.text, from);
+    return init !== undefined && ts.isCallExpression(init) && ts.isIdentifier(init.expression)
+      && init.expression.text === 'claimBaselineFields';
+  }
+  return false;
+}
+
+/** Does this object literal apply the baseline?
+ *  Accepts BOTH `...claimBaselineFields(cwd)` and `...baseline` where `baseline`
+ *  was pre-computed from it — `createCoordinatorClaim` deliberately hoists the
+ *  call out of the lock, so refusing the hoisted form would flag correct code. */
+function stampsBaseline(obj: ts.ObjectLiteralExpression, from: ts.Node): boolean {
+  return obj.properties.some((p) =>
+    (ts.isSpreadAssignment(p) && isBaselineExpression(p.expression, from))
+    || (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'base_sha'));
+}
+
+/** Does this literal spread an EXISTING claim (→ update rather than creation)? */
+function spreadsExistingClaim(obj: ts.ObjectLiteralExpression, from: ts.Node): boolean {
+  return obj.properties.some((p) =>
+    ts.isSpreadAssignment(p)
+    && ts.isIdentifier(p.expression)
+    && !isBaselineExpression(p.expression, from));
+}
 
 /**
- * Every module that PERSISTS a newly-created claim. Listed with intent: the point
- * is that adding a path here (or a new `saveClaim` site anywhere) forces the
- * baseline question to be answered rather than skipped.
+ * Resolve a call's first argument to the object literal that produced it.
+ *
+ * Handles the form the regex guard could not see: an identifier traced back to
+ * its declaration. That is exactly how `watch.ts` and `acquireClaimScope` build
+ * their claims — and how they stayed invisible.
  */
-const CREATION_SITES = [
-  { file: 'commands/mcp.ts', what: 'bclaw_work(intent="execute") — the entry point the session protocol mandates' },
-  { file: 'commands/mcp-write-claims.ts', what: 'bclaw_claim' },
-  { file: 'commands/claim.ts', what: 'CLI `claim create`' },
-  { file: 'core/claims.ts', what: 'acquireClaimScope + createCoordinatorClaim (dispatched lanes)' },
-];
-
-function read(rel: string): string {
-  return fs.readFileSync(path.join(SRC, rel), 'utf-8');
+function resolveClaimObject(arg: ts.Expression, from: ts.Node): ts.ObjectLiteralExpression | undefined {
+  if (ts.isObjectLiteralExpression(arg)) return arg;
+  if (!ts.isIdentifier(arg)) return undefined;
+  const init = findInitializer(arg.text, from);
+  return init && ts.isObjectLiteralExpression(init) ? init : undefined;
 }
 
-/** Strip comments so a doc-comment mentioning the helper cannot fake a pass. */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|\s)\/\/[^\n]*/gm, '$1');
-}
+function collectCallsites(): Callsite[] {
+  const out: Callsite[] = [];
+  for (const file of sourceFiles()) {
+    const text = fs.readFileSync(file, 'utf-8');
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ESNext, true);
+    const rel = path.relative(SRC, file).split(path.sep).join('/');
 
-describe('trp#1292 — the claim baseline reaches every creation path', () => {
-  it('each known creation module actually calls claimBaselineFields', () => {
-    // stripComments matters: this very file's rationale names the helper, and so
-    // do the explanatory comments at each site. Only executable code counts.
-    const missing: string[] = [];
-    for (const site of CREATION_SITES) {
-      const code = stripComments(read(site.file));
-      if (!/claimBaselineFields\s*\(/.test(code)) missing.push(`${site.file} — ${site.what}`);
-    }
-    assert.deepEqual(
-      missing, [],
-      `these claim-creation paths do not stamp the baseline, so pln#636 C2 is inert for the claims they create:\n${missing.join('\n')}`,
-    );
-  });
-
-  it('finds no claim-persisting site outside the enumerated list', () => {
-    // The guard that makes the list above self-maintaining. A fifth creation path
-    // shows up here as an unreviewed site rather than as a silent gap — the
-    // failure mode that produced trp#1292 in the first place.
-    const known = new Set(CREATION_SITES.map((s) => s.file));
-    const offenders: string[] = [];
-    const walk = (dir: string): void => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) { walk(full); continue; }
-        if (!entry.name.endsWith('.ts')) continue;
-        const rel = path.relative(SRC, full).split(path.sep).join('/');
-        if (known.has(rel)) continue;
-        const code = stripComments(fs.readFileSync(full, 'utf-8'));
-        // A CREATION site persists a claim literal — `saveClaim({` / `saveClaimUnlocked({`.
-        // Spreading an existing record (`saveClaim({ ...oldClaim`) is an UPDATE and is
-        // deliberately excluded: re-stamping there would move an immutable baseline.
-        for (const m of code.matchAll(/saveClaim(?:Unlocked)?\(\s*\{\s*(\.\.\.)?/g)) {
-          if (m[1]) continue; // spread → update, not creation
-          offenders.push(rel);
-          break;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && PERSIST_FNS.has(node.expression.text)) {
+        const fn = node.expression.text;
+        const arg = node.arguments[0];
+        const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+        if (arg) {
+          const obj = resolveClaimObject(arg, node);
+          // Unresolvable argument (a parameter, a call result) is treated as an
+          // UPDATE: it persists a claim that already exists. Deliberate — but the
+          // inventory below still pins it, so a creation dressed that way fails.
+          const kind: Kind = obj && !spreadsExistingClaim(obj, node) ? 'create' : 'update';
+          out.push({ file: rel, line, fn, kind, stamped: obj ? stampsBaseline(obj, node) : false });
         }
       }
+      ts.forEachChild(node, visit);
     };
-    walk(SRC);
+    visit(sf);
+  }
+  return out.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
+}
+
+/**
+ * The CREATION sites, stated deliberately. Line numbers are intentionally absent
+ * — they churn on every edit and would make this a maintenance tax rather than a
+ * guard. What is pinned is the SET of files that create claims, and that each
+ * creation carries the baseline.
+ */
+const EXPECTED_CREATION_FILES = new Set([
+  'commands/mcp.ts',                 // bclaw_work(intent="execute") — the protocol's entry point
+  'commands/mcp-write-claims.ts',    // bclaw_claim
+  'commands/claim.ts',               // CLI `claim create`
+  'commands/watch.ts',               // auto-claim on file change (the 5th path, found by review)
+  'core/claims.ts',                  // acquireClaimScope + createCoordinatorClaim
+]);
+
+describe('trp#1292 — the claim baseline reaches every creation path (AST)', () => {
+  it('resolves callsites at all (guard against the guard going blind)', () => {
+    const sites = collectCallsites();
+    assert.ok(sites.length >= 10, `expected the real callsite inventory, got ${sites.length}`);
+    assert.ok(sites.some((s) => s.kind === 'create'), 'no creation site resolved — the AST walk broke');
+  });
+
+  it('EVERY creation site stamps the baseline', () => {
+    // The assertion the regex version could not make: it is per-CALLSITE, not
+    // per-module, so a file cannot pass merely because the helper appears
+    // somewhere else in it.
+    const unstamped = collectCallsites()
+      .filter((s) => s.kind === 'create' && !s.stamped)
+      .map((s) => `${s.file}:${s.line} (${s.fn})`);
     assert.deepEqual(
-      offenders, [],
-      `new claim-creation site(s) found. Add the baseline (…claimBaselineFields(cwd)) and list them in CREATION_SITES:\n${offenders.join('\n')}`,
+      unstamped, [],
+      `these claim-CREATION callsites do not carry the baseline, so pln#636 C2 is inert for the claims they create:\n${unstamped.join('\n')}`,
     );
   });
 
-  it('the baseline helper omits the key entirely when there is no git repo', () => {
-    // "Optional, never backfilled" is the schema contract. `{ base_sha: undefined }`
-    // would serialize away anyway, but an explicitly absent key is what downstream
-    // reads as `unverifiable` rather than as an empty string.
-    const code = stripComments(read('core/claims.ts'));
+  it('creation happens only in the files we expect', () => {
+    // A sixth creation path — in a new file OR inside an already-listed one —
+    // surfaces here instead of shipping silently. Round 1 skipped listed files
+    // entirely, which is how watch.ts stayed invisible.
+    const unexpected = [...new Set(
+      collectCallsites().filter((s) => s.kind === 'create').map((s) => s.file),
+    )].filter((f) => !EXPECTED_CREATION_FILES.has(f));
+    assert.deepEqual(
+      unexpected, [],
+      `new claim-creation file(s). Add ...claimBaselineFields(cwd) and list them in EXPECTED_CREATION_FILES:\n${unexpected.join('\n')}`,
+    );
+  });
+
+  it('every expected creation file still creates (the list cannot rot)', () => {
+    // Symmetry: if a path stops creating claims, the entry must be removed
+    // deliberately rather than left as a comforting but dead expectation.
+    const creating = new Set(collectCallsites().filter((s) => s.kind === 'create').map((s) => s.file));
+    const stale = [...EXPECTED_CREATION_FILES].filter((f) => !creating.has(f));
+    assert.deepEqual(stale, [], `listed as creation paths but no longer create a claim:\n${stale.join('\n')}`);
+  });
+
+  it('an identifier-argument creation is SEEN (the round-1 blind spot)', () => {
+    // watch.ts is the live proof: `const claim: Claim = {…}; saveClaim(claim)`.
+    // The regex guard never saw it, and the 1.19.1 fix missed the path entirely.
+    const watchSites = collectCallsites().filter((s) => s.file === 'commands/watch.ts');
+    assert.ok(watchSites.length > 0, 'watch.ts callsite not resolved — the identifier-tracing path regressed');
+    assert.ok(
+      watchSites.some((s) => s.kind === 'create' && s.stamped),
+      'watch.ts creates a claim via a variable; it must resolve as a stamped creation',
+    );
+  });
+
+  it('a released/patched claim is an UPDATE, never a creation', () => {
+    // Re-stamping on update would move a baseline whose whole point is to be a
+    // fixed point. These sites must classify as update so nothing demands a
+    // baseline of them.
+    const sites = collectCallsites();
+    const updates = sites.filter((s) => s.kind === 'update').map((s) => s.file);
+    assert.ok(
+      updates.includes('commands/mcp-write-coordination.ts'),
+      'the `{...oldClaim, status: released}` site must classify as an update',
+    );
+    assert.ok(
+      updates.includes('core/entity-operations.ts'),
+      'the patched-claim persist must classify as an update',
+    );
+  });
+
+  it('the baseline helper omits the key entirely outside a git repo', () => {
+    const code = fs.readFileSync(path.join(SRC, 'core/claims.ts'), 'utf-8');
     assert.match(
       code,
       /return base_sha \? \{ base_sha \} : \{\}/,
-      'claimBaselineFields must return {} — not { base_sha: undefined } — outside a git repo',
+      'claimBaselineFields must return {} — not { base_sha: undefined }',
     );
   });
 
-  it('the baseline is NOT stamped inside saveClaim itself', () => {
-    // saveClaim also persists updates (release, adopt, patch). Stamping there
-    // would re-baseline on every write, which is precisely the moving-ground
-    // problem that made `git diff HEAD` unusable and motivated base_sha.
-    const code = stripComments(read('core/claims.ts'));
-    const saveClaimBody = /export function saveClaim\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(code)?.[1] ?? '';
-    assert.ok(saveClaimBody.length > 0, 'could not locate saveClaim — update this test rather than deleting it');
-    assert.doesNotMatch(
-      saveClaimBody,
-      /claimBaselineFields/,
-      'saveClaim persists UPDATES too; stamping the baseline there would break its immutability',
-    );
+  it('saveClaim itself never stamps (it also persists updates)', () => {
+    const code = fs.readFileSync(path.join(SRC, 'core/claims.ts'), 'utf-8');
+    const body = /export function saveClaim\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(code)?.[1] ?? '';
+    assert.ok(body.length > 0, 'could not locate saveClaim — update this test rather than deleting it');
+    assert.doesNotMatch(body, /claimBaselineFields/, 'stamping in saveClaim would re-baseline on every update');
   });
 });
