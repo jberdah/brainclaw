@@ -1190,7 +1190,15 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
     // --- Dry-run path: skip assignment creation and message sending ---
     if (options.dryRun) {
       const briefMode = resolveBriefMode(targetAgent);
-      const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId, worktreePath });
+      // pln#638 PR-3 — `agent` MUST be passed here, exactly as the real dispatch
+      // path below does. Without it `generateBrief` cannot resolve the capability
+      // profile, and THREE things silently diverge from what would actually be
+      // sent: working-defaults claims `canCommit: true` (wrong, and dangerous, for
+      // a sandboxed worker whose .git is read-only), the MCP-less LANE-RESULT
+      // section is omitted for a tier-C agent, and the liveness section loses its
+      // `sandboxed` flag. A --dry-run that previews a DIFFERENT brief than the one
+      // that ships is worse than no preview.
+      const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId, worktreePath, agent: targetAgent });
       const invokeCmd = buildInvokeCommand(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) });
       if (invokeCmd) {
         const cmdPrefix = buildEnvPrefix(claimId);
