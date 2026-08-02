@@ -162,6 +162,35 @@ export function resolveClaimBaseSha(cwd?: string): string | undefined {
   }
 }
 
+/**
+ * The baseline fields every NEW claim must carry, ready to spread into a claim
+ * literal: `{ ...claimBaselineFields(cwd) }`.
+ *
+ * WHY A HELPER AND NOT AN INLINE CALL. `base_sha` shipped in 1.19.0 stamped from
+ * exactly ONE place — inside `acquireClaimScope` — and it turned out nothing
+ * user-facing calls that function. All four real creation paths
+ * (`bclaw_work(execute)`, `bclaw_claim`, the CLI `claim create`, and
+ * `createCoordinatorClaim`) build their claim literal inline and call `saveClaim`
+ * directly, so NO real claim ever got a baseline and the whole conformity
+ * reconcile that depends on it was inert (trp#1292). A named, greppable helper is
+ * what makes "did this creation path stamp the baseline?" answerable, and it is
+ * asserted per surface rather than only on the core function — testing
+ * `acquireClaimScope` directly is exactly what hid the gap.
+ *
+ * Returns an EMPTY object rather than `{ base_sha: undefined }` so a claim created
+ * outside a git repo has no such key at all, matching the "optional, never
+ * backfilled" contract the schema documents.
+ *
+ * Deliberately NOT applied inside `saveClaim`: that function also persists
+ * UPDATES (release, patch, adoption), and the baseline must be a fixed point —
+ * re-stamping it on every save is precisely the moving-ground failure that made
+ * `git diff HEAD` unusable in the first place.
+ */
+export function claimBaselineFields(cwd?: string): { base_sha?: string } {
+  const base_sha = resolveClaimBaseSha(cwd);
+  return base_sha ? { base_sha } : {};
+}
+
 export interface AcquireClaimScopeResult {
   /** True if we saved a new active claim. */
   acquired: boolean;
@@ -181,7 +210,7 @@ export function acquireClaimScope(input: AcquireClaimScopeInput, cwd?: string): 
   // Resolved OUTSIDE the mutate callback: one git call per acquisition, and it
   // stays off the critical section (mutate serializes filesystem writes on the
   // claims store, so a subprocess spawn inside it would widen the lock window).
-  const baseSha = resolveClaimBaseSha(cwd);
+  const baseline = claimBaselineFields(cwd);
   return mutate({ cwd }, () => {
     const conflictingClaim = listClaims(cwd).find(
       (claim) => claim.status === 'active' && claim.scope === input.scope,
@@ -204,7 +233,7 @@ export function acquireClaimScope(input: AcquireClaimScopeInput, cwd?: string): 
       model: input.model,
       // pln#636 C0-b — capture the baseline while we know it. Absent when the
       // project is not a git repo; downstream treats that as unverifiable.
-      ...(baseSha ? { base_sha: baseSha } : {}),
+      ...baseline,
       ...(input.paths?.length ? { paths: input.paths } : {}),
     };
 
@@ -1088,6 +1117,10 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
   }
 
   const claimId = generateClaimId();
+  // Resolved OUTSIDE the lock below, for the same reason acquireClaimScope does
+  // it: a subprocess spawn inside the mutate callback would widen the critical
+  // section that serializes writes on the claims store.
+  const baseline = claimBaselineFields(options.cwd);
   let worktreePath: string | undefined;
   let worktreeWarning: string | undefined;
 
@@ -1143,6 +1176,7 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
       created_at: nowISO(),
       status: 'active',
       worktree_path: worktreePath,
+      ...baseline, // pln#636 C0-b / trp#1292 — dispatched lanes need it most
     }, options.cwd);
 
     return { claimId, worktreePath, worktreeWarning, reusedExisting: false } as CoordinatorClaimResult;

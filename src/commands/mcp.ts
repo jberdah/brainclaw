@@ -21,7 +21,7 @@ import {
 } from '../core/entity-operations.js';
 import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
 import { type EntityName } from '../core/entity-registry.js';
-import { generateClaimId, listClaims, loadClaim, saveClaim, adoptClaimSession } from '../core/claims.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim, adoptClaimSession, claimBaselineFields } from '../core/claims.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { startSession } from './session-start.js';
 import {
@@ -1648,6 +1648,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             status: 'active',
             plan_id: workReq.planId,
             model: currentModel,
+            // pln#636 C0-b / trp#1292 — bclaw_work(execute) is the entry point the
+            // session protocol tells every agent to start with, so a missing
+            // baseline here made the conformity reconcile inert for nearly all
+            // real claims.
+            ...claimBaselineFields(targetCwd),
           }, targetCwd);
           appendAuditEntry({ actor: sessionResult.agent, actor_id: sessionResult.agent_id, action: 'claim', item_id: claimId, item_type: 'claim', scope: workReq.scope, session_id: sessionResult.session_id }, targetCwd);
           claimStatus = 'created';

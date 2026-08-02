@@ -18,7 +18,7 @@ import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { buildContext } from '../core/context.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
-import { generateClaimId, loadClaim, saveClaim, adoptClaimSession, releaseClaimWithCascade } from '../core/claims.js';
+import { generateClaimId, loadClaim, saveClaim, adoptClaimSession, releaseClaimWithCascade, claimBaselineFields } from '../core/claims.js';
 import { releaseClaimNextActions } from '../core/next-actions.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
 import { pushStructuredWarning } from '../core/warnings.js';
@@ -191,6 +191,11 @@ export async function handleBclawClaim(payload: McpToolExecutionPayload, ctx: Mc
     worktree_path: worktreePath,
     expires_at: claimExpiresAt,
     handoff_mode: handoffMode,
+    // pln#636 C0-b / trp#1292 — this handler builds its claim literal instead of
+    // going through acquireClaimScope, which is why the baseline was missing on
+    // every MCP-created claim and the conformity reconcile never had anything to
+    // compare against.
+    ...claimBaselineFields(claimCwd),
   }, claimCwd);
   appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim', scope: claimScope, session_id: identity.session_id, host_id: identity.host_id }, claimCwd);
 
