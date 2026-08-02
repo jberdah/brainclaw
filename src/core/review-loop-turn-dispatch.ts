@@ -461,6 +461,7 @@ export async function dispatchReviewLoopTurn(
       scope,
       worktreePath: claimResult.worktreePath,
       assignmentId,
+      cwd, // pln#638 PR-6b — the context envelope reads the store
     });
 
     const msg = sendMessage(
