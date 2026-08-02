@@ -5,6 +5,22 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.1] — 2026-08-02
+
+Fixes a defect that made two of 1.19.0's headline features **inert in production**. If you installed 1.19.0, upgrade: the scope-conformity reconcile it advertised never emitted anything.
+
+### Fixed
+
+- **`base_sha` is now stamped on every claim-creation path** (trp#1292). 1.19.0 introduced the immutable claim baseline and stamped it from exactly one place — inside `acquireClaimScope`. Nothing user-facing calls that function: all four real creation paths build their claim literal inline and call `saveClaim` directly, including `bclaw_work(intent="execute")`, the entry point the session protocol tells every agent to start with. Without a baseline the conformity reconcile returns `unverifiable`, so **pln#636 C0-b and C2 shipped and published doing nothing at all**.
+
+  Found by verifying the release empirically rather than trusting green tests — creating a claim through the live 1.19.0 server and reading the file off disk. The tests missed it because `claim-base-sha.test.ts` calls `acquireClaimScope` directly: green test, untested surface. That is the same failure shape as trp#1275 (a guard checking less than it claimed), and it is the finding an adversarial reviewer had raised hours earlier about a different module — "test the delivered artifact, not the assembler."
+
+  The fix is a named, greppable `claimBaselineFields(cwd)` spread at each site, resolved outside every `mutate()` so a git subprocess never widens the lock that serializes claim-store writes. Deliberately **not** applied inside `saveClaim`, which also persists updates — re-stamping there would move a baseline whose whole purpose is to be a fixed point.
+
+  The accompanying test is structural rather than example-based, since example tests are what failed: it enumerates the creation sites from source, asserts each calls the helper (comments stripped, so prose cannot fake a pass), and scans `src/` for any *other* claim-creation site absent from the list — so a fifth path fails CI instead of silently shipping a third inert feature.
+
+  Existing claims are not backfilled; "optional, never backfilled" remains the contract and a missing baseline correctly reads as `unverifiable`. Claims created from 1.19.1 onward carry one.
+
 ## [1.19.0] — 2026-08-01
 
 Guidance stops being prose an agent may or may not read. Responses now carry **outcome-derived next actions** and **structured warnings that name their own recovery path** (pln#634/#635), a **consistency suite** turns "generated guidance drifted from the engine" into a CI failure (pln#638 2c), claims gain a **scope grammar with an inverted default** plus an immutable `base_sha` baseline and a lazy conformity reconcile that reaches even MCP-less workers (pln#636), claim liveness finally honours the **file evidence** a sandboxed worker can actually emit, and the loop engine's **phase gates stop being satisfiable by empty artifacts** (pln#639). No breaking API changes; every addition is optional and legacy records parse unchanged.
