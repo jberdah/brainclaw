@@ -10,6 +10,7 @@ import {
   AGENT_EXPORT_REGISTRY,
   resolveExportTarget,
   resolveExportTargetByFormat,
+  resolveLiveCompanionPath,
   writeExportFile,
   writeLiveCompanionFile,
   buildHygieneSection,
@@ -224,19 +225,26 @@ export function refreshLiveCompanions(cwd?: string): { written: number; errors: 
     const instructions = getInstructionText({ project: undefined, agent: undefined }, effectiveCwd);
     const activeClaims = listClaims(effectiveCwd).filter((c) => c.status === 'active');
     const pendingCandidates = listCandidates('pending', effectiveCwd);
-    const seen = new Set<ExportFormat>();
-    const targets = AGENT_EXPORT_REGISTRY.filter((t) => {
-      if (seen.has(t.format)) return false;
-      seen.add(t.format);
-      return true;
-    });
 
     let written = 0;
     const errors: string[] = [];
     const liveGitignoreEntries: string[] = [];
 
-    for (const target of targets) {
+    // trp_6a49f976 F1 (codex review): dedupe by RESOLVED LIVE PATH, never by
+    // stable export format. Format-dedup dropped every agents-md agent after
+    // codex — including mistral-vibe, whose REGISTERED live companion
+    // (.vibe/live.md) then never got refreshed, while the stale-surface
+    // advisory told the operator `brainclaw refresh` would fix exactly that
+    // file. A path counts as taken only once something was actually RENDERED
+    // for it, so a tier with no live companion (codex, Tier A) does not shadow
+    // a rendering agent that shares its default path (hermes → AGENTS.live.md).
+    const renderedLivePaths = new Set<string>();
+
+    for (const target of AGENT_EXPORT_REGISTRY) {
       try {
+        const livePath = resolveLiveCompanionPath(target.agentName, target.relativePath);
+        if (renderedLivePaths.has(livePath)) continue;
+
         const profile = getAgentCapabilityProfile(target.agentName);
         if (!profile) continue;
 
@@ -252,7 +260,8 @@ export function refreshLiveCompanions(cwd?: string): { written: number; errors: 
         };
 
         const live = renderLiveSection(input);
-        if (!live) continue; // Tier A — no live companion needed
+        if (!live) continue; // no live companion for this tier
+        renderedLivePaths.add(livePath);
 
         const writeResult = writeLiveCompanionFile(live.content, target.agentName, target.relativePath, effectiveCwd);
         if (writeResult.created || writeResult.updated) {

@@ -17,8 +17,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assessSurfaceFreshness,
+  LIVE_SURFACE_REFRESH_COMMAND,
   parseSurfaceProvenance,
   reconcileSurfaceFreshness,
+  STABLE_SURFACE_REFRESH_COMMAND,
   staleSurfaceWarning,
 } from '../../src/core/surface-freshness.js';
 import { renderLiveSection } from '../../src/core/instruction-templates.js';
@@ -116,16 +118,18 @@ describe('surface freshness — reconcile over a project tree', { concurrency: f
     const result = reconcileSurfaceFreshness(root, '1.18.0');
     assert.deepEqual(result.stale.map((s) => s.relativePath), ['CLAUDE.md']);
     assert.equal(result.stale[0].stampedVersion, '1.10.0');
+    assert.equal(result.stale[0].kind, 'stable');
     assert.equal(
       fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf-8'), before,
       'reconcile must NEVER rewrite: regeneration is an explicit act',
     );
   });
 
-  it('scans live-companion targets too, not just the main registry', () => {
+  it('scans live-companion targets too, not just the main registry — and marks them live', () => {
     write('.github/copilot-instructions.live.md', '> Written by brainclaw v1.9.0 at 2026-01-01T00:00:00\n');
     const result = reconcileSurfaceFreshness(root, '1.18.0');
     assert.deepEqual(result.stale.map((s) => s.relativePath), ['.github/copilot-instructions.live.md']);
+    assert.equal(result.stale[0].kind, 'live');
   });
 
   it('counts a current surface as fresh and an unstamped one as unknown', () => {
@@ -162,14 +166,66 @@ describe('surface freshness — the advisory', { concurrency: false }, () => {
 
   it('names the files, their versions, and the command that fixes them', () => {
     const warning = staleSurfaceWarning({
-      stale: [{ relativePath: 'CLAUDE.md', stampedVersion: '1.10.0' }],
+      stale: [{ relativePath: 'CLAUDE.md', stampedVersion: '1.10.0', kind: 'stable' }],
       freshCount: 0,
       unknownCount: 0,
     }, '1.18.0');
     assert.equal(warning?.code, 'generated_surfaces_stale');
     assert.match(warning!.message, /CLAUDE\.md \(v1\.10\.0\)/);
-    assert.match(warning!.message, /brainclaw export --write/);
-    assert.equal(warning?.data?.refresh_command, 'brainclaw export --write');
+    assert.match(warning!.message, /brainclaw export --all --write/);
+    assert.equal(warning?.data?.refresh_command, STABLE_SURFACE_REFRESH_COMMAND);
+    assert.deepEqual(warning?.data?.refresh_commands, [STABLE_SURFACE_REFRESH_COMMAND]);
+  });
+
+  it('recommends `brainclaw refresh` when only live companions are stale — export never rewrites those', () => {
+    // trp_6a49f976: the first real-world firing of this advisory (v1.20.0
+    // upgrade) listed six live companions and recommended an export command
+    // that (a) the CLI rejects and (b) would not have touched any of them.
+    const warning = staleSurfaceWarning({
+      stale: [{ relativePath: '.cursor/live.md', stampedVersion: '1.19.1', kind: 'live' }],
+      freshCount: 0,
+      unknownCount: 0,
+    }, '1.20.0');
+    assert.match(warning!.message, /brainclaw refresh/);
+    assert.doesNotMatch(warning!.message, /export/);
+    assert.equal(warning?.data?.refresh_command, LIVE_SURFACE_REFRESH_COMMAND);
+    assert.deepEqual(warning?.data?.refresh_commands, [LIVE_SURFACE_REFRESH_COMMAND]);
+  });
+
+  it('recommends BOTH commands when both kinds are stale, as one runnable string', () => {
+    const warning = staleSurfaceWarning({
+      stale: [
+        { relativePath: 'CLAUDE.md', stampedVersion: '1.10.0', kind: 'stable' },
+        { relativePath: '.cursor/live.md', stampedVersion: '1.10.0', kind: 'live' },
+      ],
+      freshCount: 0,
+      unknownCount: 0,
+    }, '1.18.0');
+    assert.match(warning!.message, /brainclaw export --all --write/);
+    assert.match(warning!.message, /brainclaw refresh/);
+    assert.equal(
+      warning?.data?.refresh_command,
+      `${STABLE_SURFACE_REFRESH_COMMAND} && ${LIVE_SURFACE_REFRESH_COMMAND}`,
+    );
+    assert.deepEqual(
+      warning?.data?.refresh_commands,
+      [STABLE_SURFACE_REFRESH_COMMAND, LIVE_SURFACE_REFRESH_COMMAND],
+    );
+  });
+
+  it('the commands it recommends are ones the CLI actually accepts', () => {
+    // The 2c-class tripwire this file was missing: runExport (export.ts) exits
+    // with "--format, --detect, or --all is required" unless a mode flag is
+    // present. A recovery command the engine itself rejects is the exact drift
+    // pln#638 exists to eliminate — and it shipped in 1.20.0 anyway. Exact
+    // token contract rather than a mode-flag regex (codex review, PR #163):
+    // a loose match would accept `--format` with no argument, or a command
+    // that lost its `--write` and silently became a stdout dump.
+    assert.deepEqual(
+      STABLE_SURFACE_REFRESH_COMMAND.split(' '),
+      ['brainclaw', 'export', '--all', '--write'],
+    );
+    assert.deepEqual(LIVE_SURFACE_REFRESH_COMMAND.split(' '), ['brainclaw', 'refresh']);
   });
 
   it('carries NO next_actions — there is no MCP tool that regenerates', () => {
@@ -177,7 +233,7 @@ describe('surface freshness — the advisory', { concurrency: false }, () => {
     // so pointing at it would ship args the engine rejects — the exact drift this
     // plan exists to eliminate. pln#634's rule: no genuine follow-up, no field.
     const warning = staleSurfaceWarning({
-      stale: [{ relativePath: 'CLAUDE.md', stampedVersion: '1.10.0' }],
+      stale: [{ relativePath: 'CLAUDE.md', stampedVersion: '1.10.0', kind: 'stable' }],
       freshCount: 0,
       unknownCount: 0,
     }, '1.18.0');
@@ -185,7 +241,9 @@ describe('surface freshness — the advisory', { concurrency: false }, () => {
   });
 
   it('caps the reported list and says how many it omitted', () => {
-    const stale = Array.from({ length: 12 }, (_, i) => ({ relativePath: `f${i}.md`, stampedVersion: '1.0.0' }));
+    const stale = Array.from({ length: 12 }, (_, i) => (
+      { relativePath: `f${i}.md`, stampedVersion: '1.0.0', kind: 'stable' as const }
+    ));
     const warning = staleSurfaceWarning({ stale, freshCount: 0, unknownCount: 0 }, '1.18.0');
     assert.match(warning!.message, /\+4 more/);
     assert.equal(warning?.data?.stale_surfaces_omitted, 4);
