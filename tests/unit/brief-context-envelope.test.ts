@@ -105,4 +105,19 @@ describe('pln#638 PR-6b — context envelope', { concurrency: false }, () => {
     const brief = generateDispatchBrief({ task: 'fix', agent: 'codex', cwd: workspace.dir });
     assert.doesNotMatch(brief, /## Project context/);
   });
+
+  it('contextEnvelope: false suppresses the section even with a seeded store', () => {
+    // The ideation critic path: its content already inlines a BM25-curated
+    // memory bundle, so the generic envelope would double-carry the same
+    // traps and blow the ideation content cap (ideation-loop-e2e pins the
+    // budget math; this pins the switch).
+    seedState(workspace.dir, { constraints: 1, traps: 2 });
+    const brief = generateDispatchBrief({
+      task: 'critique the proposal',
+      agent: 'codex',
+      cwd: workspace.dir,
+      contextEnvelope: false,
+    });
+    assert.doesNotMatch(brief, /## Project context/);
+  });
 });

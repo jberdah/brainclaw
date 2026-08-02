@@ -860,6 +860,15 @@ export interface DispatchBriefOptions {
   worktreePath?: string;
   /** Project root for the inlined context envelope (pln#638 PR-6b). */
   cwd?: string;
+  /**
+   * Set false when the task content already curates its own project memory
+   * (the ideation brief inlines a BM25-selected, budget-managed bundle with
+   * an explicit truncation warning). Injecting the generic envelope on top
+   * would double-carry the same traps and blow the documented content cap.
+   * Default: true — the envelope exists precisely for briefs that would
+   * otherwise carry no context at all.
+   */
+  contextEnvelope?: boolean;
 }
 
 /** Character budget for the inlined context envelope — bounded by design
@@ -954,8 +963,11 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
   parts.push(buildWorkingDefaultsSection({ canCommit: taskBriefProfile ? dispatchCanCommit(taskBriefProfile) : true }));
 
   // pln#638 PR-6b — same envelope as generateBrief (see buildContextEnvelopeSection).
-  const taskEnvelope = buildContextEnvelopeSection(options.cwd);
-  if (taskEnvelope) parts.push(taskEnvelope);
+  // Suppressed only when the content curates its own memory (contextEnvelope: false).
+  if (options.contextEnvelope !== false) {
+    const taskEnvelope = buildContextEnvelopeSection(options.cwd);
+    if (taskEnvelope) parts.push(taskEnvelope);
+  }
 
   if (briefMode === 'full') {
     parts.push(buildProtocolSection({
