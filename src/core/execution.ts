@@ -205,6 +205,14 @@ export function executeDispatchedCommand(
  * - If autoExecute=true and agent is spawnable: spawn and return delivered_and_started
  * - If autoExecute=false or not spawnable: return command_ready_manual with command string
  * - If spawn fails: log warning, fallback to command_ready_manual
+ *
+ * pln#638 PR-6 — lifecycle boundary (the other half lives on
+ * buildProtocolSection in dispatcher.ts): the wrapper spawned here emits
+ * ack/heartbeat/completed/failed sentinels MECHANICALLY from the process exit
+ * code. That is TRANSPORT completion only. It never opens or closes sessions
+ * (lanes have none), never releases the lane's claim, and never triggers a
+ * review — business completion is proven exclusively by the coordinator's
+ * harvest/report path reading LANE-RESULT or bclaw_assignment_update.
  */
 export async function attemptExecution(
   invoke: InvokeCommand | undefined,

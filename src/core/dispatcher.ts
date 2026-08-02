@@ -530,6 +530,25 @@ export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: st
   ].join('\n');
 }
 
+/**
+ * pln#638 PR-6 — lane lifecycle doctrine (settled by loop lop_2d838a638b1e2956):
+ *
+ *   Native hooks = interactive agents. Dispatched workers = dispatcher-owned
+ *   lifecycle. A lane's unit of identity is assignment + claim + AgentRun —
+ *   NEVER a session. Sessions carry interactive side-effects (auto-release
+ *   frees ALL of an agent's claims at session_end) that would leak across
+ *   lanes, and N parallel lanes would contend on the session lock (observed:
+ *   a worker's global hook stalled 5s on a session LOCK, not on a missing
+ *   store).
+ *
+ *   The three lifecycle needs hooks used to cover are met elsewhere:
+ *   - shared context at start  → inlined ContextEnvelope in the brief
+ *     (buildContextEnvelopeSection — MCP is a refresh, not a prerequisite);
+ *   - progress/closure         → bclaw_assignment_update + the wrapper's
+ *     mechanical completed/failed sentinels (see attemptExecution);
+ *   - business closure         → the coordinator's harvest/report path.
+ *     Transport completion never releases claims or triggers review.
+ */
 export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string; assignmentId?: string }): string {
   const parts: string[] = [];
 
