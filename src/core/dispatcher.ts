@@ -602,19 +602,25 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     // cannot disagree about what a worker should write — they used to.
     parts.push(`Final fallback (if bclaw_assignment_update / MCP is unavailable in your environment): write LANE-RESULT.json at the worktree root — ${laneResultShape(options.assignmentId)}. The coordinator harvests it via \`brainclaw harvest ${options.assignmentId}\`.`);
   } else if (options?.claimId) {
-    parts.push('1. Call bclaw_session_start to register your session');
+    // pln#638 PR-6a — NO session lifecycle in a dispatched lane's brief. The
+    // ideation loop settled this (design of record: pln638-pr6 synthesis): a
+    // session is an AGENT's lifecycle and its effects overflow the lane —
+    // `session-end --auto-release` releases ALL of the agent's active claims and
+    // the handoff aggregates ALL its commits, so one finishing lane could tear
+    // down its siblings' work. The engine already agrees: SESSION_ID is
+    // deliberately scrubbed from the worker env (execution-profile.ts). The
+    // lane's lifecycle is the claim (+ assignment when present), nothing more.
     if (options.worktreePath) {
-      parts.push(`2. cd into the worktree: ${options.worktreePath}`);
+      parts.push(`1. cd into the worktree: ${options.worktreePath}`);
     }
-    parts.push(`${options.worktreePath ? '3' : '2'}. Work on the assigned scope (claim already active)`);
-    parts.push(`${options.worktreePath ? '4' : '3'}. Release the claim: bclaw_release_claim(id: "${options.claimId}", planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
-    parts.push(`${options.worktreePath ? '5' : '4'}. Call bclaw_session_end with a narrative when done`);
+    parts.push(`${options.worktreePath ? '2' : '1'}. Work on the assigned scope (claim already active)`);
+    parts.push(`${options.worktreePath ? '3' : '2'}. Release the claim: bclaw_release_claim(id: "${options.claimId}", planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
+    parts.push('Do NOT call bclaw_session_start / bclaw_session_end: sessions belong to interactive agents, and session-end tears down claims beyond this lane.');
   } else {
-    parts.push('1. Call bclaw_session_start to register your session');
-    parts.push('2. Call bclaw_claim to claim the scope before editing');
-    parts.push('3. Work in the worktree created by the claim');
-    parts.push('4. Release the claim when done: bclaw_release_claim(id: "clm_xxx", planStatus: "done") — required for hard_after sequence gating to unlock the next step');
-    parts.push('5. Call bclaw_session_end with a narrative when done');
+    parts.push('1. Call bclaw_claim to claim the scope before editing');
+    parts.push('2. Work in the worktree created by the claim');
+    parts.push('3. Release the claim when done: bclaw_release_claim(id: "clm_xxx", planStatus: "done") — required for hard_after sequence gating to unlock the next step');
+    parts.push('Do NOT call bclaw_session_start / bclaw_session_end: sessions belong to interactive agents, and session-end tears down claims beyond this lane.');
   }
   parts.push('');
 
@@ -622,7 +628,6 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
   if (options?.assignmentId) {
     parts.push('- bclaw_assignment_update (report lifecycle: accepted/started/progress/completed/failed/blocked)');
   }
-  parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
   if (!options?.claimId) {
     parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
   }
