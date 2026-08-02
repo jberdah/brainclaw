@@ -107,3 +107,10 @@ export {
   type AcquireBootstrapOptions,
   type AcquireBootstrapResult,
 } from './bootstrap-acquire.js';
+export {
+  deriveWorkerReplyContract,
+  renderWorkerReplyProse,
+  workerReplyNextAction,
+  type WorkerReplyContract,
+  type ArtifactRequirement,
+} from './worker-reply-contract.js';
