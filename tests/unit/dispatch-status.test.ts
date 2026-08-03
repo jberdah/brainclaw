@@ -432,6 +432,29 @@ describe('getDispatchStatus — worktree git evidence (pln#554 step 2)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('pln#621 pack — dead pid + FRESH filesystem activity: the recommendation never says kill', () => {
+    // pln#520 corpus incident: 6 workers were killed on a dead WRAPPER pid and
+    // committed their work 4-7 minutes later. The commits-ahead variant above
+    // pins the delivered case; THIS pins the earlier window — no commits yet,
+    // but the worker is demonstrably WRITING (fresh worktree mtime). Whatever
+    // the liveness verdict is, a destructive recommendation is forbidden.
+    const { dir } = initGitWorktree();
+    seedWithGitWorktree('ge_fsactive', dir, { pid: 9_999_999 }); // dead (wrapper) pid
+    fs.writeFileSync(path.join(dir, 'in-progress.txt'), 'still writing\n'); // fresh fs activity NOW
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge_fsactive', cwd: workspace.dir, base_ref: 'basepoint' });
+    assert.ok((status.runtime.last_fs_activity_ms ?? Infinity) < 60_000, 'precondition: fs activity is fresh');
+    // Review of PR #170 caught the first version of this pin only rejecting the
+    // LITERAL word "kill" while the silent_death branch advised "cancel +
+    // reroute" — destructive advice by another name. The invariant is about
+    // the ACTION, not the vocabulary.
+    assert.doesNotMatch(status.diagnosis.recommended_next_action, /kill|cancel|reroute/i,
+      'a dead pid proves nothing on an ack-wrapped spawn; fresh fs writes forbid ANY destructive recommendation');
+    assert.notEqual(status.diagnosis.health, 'stalled', 'a writing worker is not stalled');
+    assert.notEqual(status.diagnosis.health, 'silent_death', 'fresh fs activity vetoes the silent_death verdict');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('commits ahead + dirty tracked tree is NOT delivered — falls through to process evidence', () => {
     const { dir, git } = initGitWorktree();
     fs.writeFileSync(path.join(dir, 'work.txt'), 'wip\n');
@@ -443,7 +466,14 @@ describe('getDispatchStatus — worktree git evidence (pln#554 step 2)', () => {
     const status = getDispatchStatus({ target_id: 'asgn_ge2', cwd: workspace.dir, base_ref: 'basepoint' });
     assert.equal(status.runtime.commits_ahead, 1);
     assert.equal(status.runtime.dirty_tracked, 1);
-    assert.equal(status.diagnosis.health, 'silent_death');
+    // The load-bearing half: a dirty tree is never a "delivered" terminal.
+    assert.notEqual(status.diagnosis.health, 'terminal');
+    assert.doesNotMatch(status.diagnosis.summary, /worker delivered/);
+    // Post-pln#621: the tracked file was written moments ago, so the dead
+    // (wrapper) pid now reads healthy-writing rather than silent_death — the
+    // safer verdict. The process-evidence fallthrough applies only once fs
+    // activity has gone quiet.
+    assert.equal(status.diagnosis.health, 'healthy');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

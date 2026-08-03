@@ -480,7 +480,28 @@ function computeDiagnosis(
   const lastEventMs = new Date(agentRun.last_event_at ?? agentRun.started_at ?? agentRun.created_at).getTime();
   const stallAge = options.nowMs - lastEventMs;
 
+  // pln#527 — a stale last_event_at is NOT "stalled" when the filesystem is still
+  // active (logs streaming / worktree files edited). Workers emit no heartbeat
+  // during a long single operation (codex→stderr, claude -p buffering stdout),
+  // so fs activity is the truer liveness signal and vetoes the false-stalled.
+  const fsAge = runtime.last_fs_activity_ms;
+  const fsActive = fsAge !== undefined && fsAge < options.stallMs;
+
   if (runtime.pid_alive === false) {
+    // pln#621 pack (review of PR #170) — the fs-activity veto applies HERE too,
+    // not only to the stalled branch below. On an ack-wrapped spawn the tracked
+    // pid is the WRAPPER, dead by design while the worker keeps writing — the
+    // exact pln#520 shape (6 workers "dead", committing minutes later). This
+    // branch used to skip the veto and advise "cancel + reroute" on a worker
+    // that was demonstrably mid-write: a destructive recommendation on
+    // ambiguous evidence, which is the one thing the regression pack forbids.
+    if (fsActive) {
+      return {
+        health: 'healthy',
+        summary: `pid ${runtime.pid} is dead but the filesystem is ACTIVE (${Math.round((fsAge ?? 0) / 1000)}s ago) — on an ack-wrapped spawn the tracked pid is the wrapper, which exits by design while the worker keeps writing (pln#520)`,
+        recommended_next_action: 'No destructive action — the worker is writing. Re-check until a terminal signal appears (LANE-RESULT, completion sentinel, or a commit on the lane branch).',
+      };
+    }
     // pln#527 (#5) — surface a TARGETED diagnosis when the captured stderr matches
     // a known fatal boot signature (codex model/service_tier mismatch, API 400)
     // instead of a generic "silent_death".
@@ -494,13 +515,6 @@ function computeDiagnosis(
         ?? 'Read .stderr.log for the exit reason; then trigger reconciliation by calling bclaw_find(entity="agent_run") again, or cancel + reroute.',
     };
   }
-
-  // pln#527 — a stale last_event_at is NOT "stalled" when the filesystem is still
-  // active (logs streaming / worktree files edited). Workers emit no heartbeat
-  // during a long single operation (codex→stderr, claude -p buffering stdout),
-  // so fs activity is the truer liveness signal and vetoes the false-stalled.
-  const fsAge = runtime.last_fs_activity_ms;
-  const fsActive = fsAge !== undefined && fsAge < options.stallMs;
 
   if (runtime.pid_alive === true && stallAge > options.stallMs && fsActive) {
     return {
