@@ -5,6 +5,14 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.4] — 2026-08-03
+
+A security patch on top of 1.20.3, released within the hour: a Git revspec built from the checked-out branch name reached a shell, so `bclaw_claim` — called on virtually every `execute` intent — could execute an arbitrary command. Counterfactually verified (the regression test was watched failing on the pre-fix handler) and green on Windows and Linux CI.
+
+### Fixed
+
+- **A Git revspec no longer reaches a shell** (pln#618, #173). The stale-branch warning on `bclaw_claim` built its command by string interpolation — `execSync(\`git rev-list --count ${currentBranch}..${mainBranch}\`)` — with `currentBranch` read from `git branch --show-current`, i.e. from whatever ref the workspace happens to be on. A ref name is not a safe value: `check-ref-format` forbids whitespace, `~ ^ : ? * [ ] \`, `..` and `@{`, but permits `&`, `;`, `$`, backticks and parentheses — every one a shell metacharacter. Checking out a hostile-but-valid branch turned a read-only warning into arbitrary command execution. Measured on win32 with the branch `feat/pwn;touch${IFS}PWNED&echo.PWNED`: cmd.exe split on `&`, ran the injected command, and returned `PWNED..master` instead of the count — so `parseInt` yielded `NaN` and **the warning silently vanished too**, making this a latent correctness bug as well as a vulnerability. Both git calls in the handler now go through argv (`spawnSync` / the new `detectCommitsBehindMainDetailed`, which also reports WHICH reference branch produced the count), and the two redundant branch lookups collapse into one. Brainclaw's own branch names were never a vector — `sanitizeBranchComponent` applies a strict `[^a-zA-Z0-9._-]` whitelist — so the payload had to arrive from outside: a fetched PR branch, a teammate's branch, or an agent running raw `git checkout -b`. The regression (`tests/unit/security-git-revspec.test.ts`) is asserted at the `bclaw_claim` surface rather than only on the core helper (trp#1292's rule), with a payload that chains a parasite command under BOTH cmd.exe and POSIX sh. The other three `rev-list --count` call sites (`worktree.ts` ×2, `dispatch-status.ts`) were audited and were already argv-based — this was the last shell-interpolated revspec in the codebase.
+
 ## [1.20.3] — 2026-08-03
 
 The autonomy-safety release: the dogfood store's incident history became a regression corpus, the corpus classification found two live engine defects, and both are fixed here with counterfactually-verified pins (every fix's test was first watched failing on the pre-fix code). Both engine fixes went through adversarial codex review to reviewer_green.
