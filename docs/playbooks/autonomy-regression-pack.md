@@ -35,7 +35,7 @@ synthetic scenario stores: `tests/fixtures/store-corpus/`.
 | Double harvest of one lane | Re-ingesting the same LANE-RESULT is an idempotent no-op (marker) | ✅ `lane-result-harvest.test.ts` "skips on re-run" |
 | Double integration of a turn-owned approve lane | Exactly-once finalization — no duplicate verdict, loop stays terminal | ✅ `loops-pr3a-harvest-reconcile.test.ts` T7 |
 | pln#638 1c — CLI-harvested ideation lane never converged its loop | The ideation closer fires on the CLI harvest path too | ✅ `lane-harvest-cli-convergence.test.ts` |
-| 2026-08-02/03 ×2 — CLI-harvested REVIEW lane (file protocol, no turn keys) left its loop turn open; coordinator converged manually both times | A review lane harvested by assignment_id should converge its turn (or fail loudly naming the missing keys), never silently leave the loop blocked | 🔴 red → pln#644 |
+| 2026-08-02/03 ×2 — CLI-harvested REVIEW lane (file protocol, no turn keys) left its loop turn open; coordinator converged manually both times | A review lane harvested by assignment_id converges its turn on the report path (approve → reconcileTurn) or warns loudly naming the recovery (`review_turn_not_converged`), never a silent stall | ✅ `loops-pr3a-harvest-reconcile.test.ts` pln#644 suite (counterfactual: 8 tests red pre-fix) |
 
 ## Worktrees — the workspace carries unharvested work
 
@@ -73,13 +73,18 @@ synthetic scenario stores: `tests/fixtures/store-corpus/`.
 
 ## Red defects opened by this classification
 
-- **pln#644 — review-loop CLI-harvest turn convergence**: a review lane
-  delivered via the file protocol without turn keys is harvested into the
-  assignment but its loop turn stays open silently; the coordinator converged
+- **pln#644 — review-loop CLI-harvest turn convergence** *(RESOLVED)*: a review
+  lane delivered via the file protocol without turn keys was harvested into the
+  assignment but its loop turn stayed open silently; the coordinator converged
   by hand twice on 2026-08-02/03 (loops `lop_626271ee10ad09d8`,
-  `lop_4d869568bd99ddc0`). Wanted: assignment-keyed convergence for review
-  loops at the CLI harvest site (mirroring pln#638 1c for ideation), or a loud
-  failure naming the missing turn keys — never a silent stall.
+  `lop_4d869568bd99ddc0`). Fixed at the CLI harvest site: the report path now
+  finalizes an APPROVE turn-owned lane via the same exactly-once
+  `reconcileTurn` that `--integrate` uses (evidence sourced from the lane keys
+  or the wrapper sentinel — read-strict untouched), and every other
+  non-converged case (request_changes, missing verdict, refused evidence)
+  emits a `review_turn_not_converged` warning naming the open turn and the
+  recovery, surfaced on both the CLI text and `--json` outputs. Pinned in
+  `loops-pr3a-harvest-reconcile.test.ts` (pln#644 suite, counterfactual-red).
 
 Everything else in the corpus is pinned or explicitly an operator rule. New
 incidents: add the trap, add the row, add the counterfactual test — in that

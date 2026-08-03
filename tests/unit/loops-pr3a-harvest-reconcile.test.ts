@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { integrateLaneResults, harvestLaneResults, getLaneResultPath } from '../../src/commands/harvest.js';
+import { integrateLaneResults, harvestLaneResults, getLaneResultPath, runHarvestLane } from '../../src/commands/harvest.js';
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveTurnId, deriveChildIds,
@@ -238,29 +238,105 @@ describe('pln#630 PR3a — harvest → reconcileTurn wiring (integrate path)', (
     assert.equal(loop.artifacts.filter((a) => a.type === 'verdict').length, 1, 'exactly one verdict — no double-finalize');
   });
 
-  it('T8 report→integrate sequence: report neutralizes (loop open), integrate finalizes via reconcile (loop closed)', () => {
+  it('T8 report→integrate sequence (pln#644 semantics): report ALREADY finalizes an approve lane; integrate is an idempotent no-op', () => {
     process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1';
     const { loopId, runId, wt } = seedTurnOwned(cwd, { verdict: 'approve' });
     harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
-    assert.equal(getLoop(loopId, cwd)!.status, 'open', 'report path leaves the turn-owned loop OPEN (finalization deferred)');
+    assert.ok(['closed', 'completed'].includes(getLoop(loopId, cwd)!.status), 'report path converges an approve turn-owned lane (pln#644)');
     integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
-    assert.ok(['closed', 'completed'].includes(getLoop(loopId, cwd)!.status), 'integrate finalizes via reconcile');
-    assert.equal(harvestedEvents(cwd, runId).length, 1, 'reconcile ran exactly once — on integrate, not report');
+    const loop = getLoop(loopId, cwd)!;
+    assert.ok(['closed', 'completed'].includes(loop.status), 'loop stays terminal after integrate');
+    assert.equal(loop.artifacts.filter((a) => a.type === 'verdict').length, 1, 'exactly one verdict — integrate never double-finalizes');
+    assert.equal(harvestedEvents(cwd, runId).length, 1, 'reconcile finalized exactly once — on report');
+  });
+
+  it('T8b report→integrate for REQUEST_CHANGES: report defers (loudly), integrate still owns the fix cycle', () => {
+    process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1';
+    const { loopId, wt } = seedTurnOwned(cwd, { verdict: 'request_changes' });
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    assert.equal(getLoop(loopId, cwd)!.status, 'open', 'report path leaves the RC fix cycle to --integrate');
+    assert.equal(report.warnings.filter((w) => w.code === 'review_turn_not_converged').length, 1, '…but says so');
+    const integ = integrateLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const loop = getLoop(loopId, cwd)!;
+    assert.equal(loop.iteration_count, 1, 'integrate bumps the fix round');
+    assert.equal(integ.next_turns.length, 1, 'integrate emits the fix-cycle re-dispatch turn');
   });
 });
 
-describe('pln#630 PR3a — report path (harvestLaneResults) neutralized for turn-owned', () => {
+/**
+ * pln#644 — the report path used to SKIP turn-owned finalization entirely (deferred to
+ * `--integrate`) with no signal on any channel. That silently stalled two live review loops
+ * on 2026-08-02/03 (lop_626271ee10ad09d8, lop_4d869568bd99ddc0): the coordinator ran
+ * `brainclaw harvest <asgn>`, read "1 harvested, 0 error(s)", and converged both turns by
+ * hand hours later. New contract: the report path converges an APPROVE lane via the same
+ * exactly-once reconcileTurn, and every non-converged turn-owned lane whose turn is still
+ * live yields a `review_turn_not_converged` warning naming the recovery.
+ */
+describe('pln#644 — report path (harvestLaneResults) converges or warns, never silently stalls', () => {
   let cwd: string;
   beforeEach(() => { cwd = ws(); });
 
-  it('T5 flag-on: the report path does NOT close a turn-owned loop (finalization deferred to --integrate)', () => {
-    process.env.BRAINCLAW_TURN_OWNED_REVIEW = '1';
+  it('counterfactual (2026-08-02 scenario) — keyless APPROVE lane + wrapper sentinel: plain report harvest CONVERGES the turn', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW; // shipped default: turn-owned ON
     const { loopId, runId, wt } = seedTurnOwned(cwd, { verdict: 'approve' });
-    harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
     const loop = getLoop(loopId, cwd)!;
-    assert.equal(loop.status, 'open', 'report path must not pre-empt reconcile — loop stays open');
-    assert.equal(loadAgentRun(runId, cwd)?.status, 'created', 'run untouched by the report path');
+    assert.ok(['closed', 'completed'].includes(loop.status), `report path finalizes an approve lane (${loop.status})`);
+    assert.ok(loop.artifacts.some((a) => a.type === 'verdict' && /^accepted/i.test(a.body ?? '')), 'verdict recorded');
+    assert.equal(loadAgentRun(runId, cwd)?.status, 'completed', 'turn-owned run settled created→completed');
+    assert.equal(harvestedEvents(cwd, runId).length, 1, 'exactly one loop_artifact_harvested — reconcileTurn ran, exactly once');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released', 'approve close releases the coordinator claim');
+    assert.equal(report.warnings.length, 0, 'a converged lane needs no warning');
+  });
+
+  it('REQUEST_CHANGES lane: loop untouched (no premature fix-cycle) but ONE warning names the open turn + `--integrate <asgn>`', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const { loopId, runId, assignmentId, wt } = seedTurnOwned(cwd, { verdict: 'request_changes' });
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const loop = getLoop(loopId, cwd)!;
+    assert.equal(loop.status, 'open', 'report path never advances a fix cycle it cannot follow through on');
+    assert.equal(loop.iteration_count, 0, 'no premature round bump');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'active', 'claim untouched');
+    assert.equal(harvestedEvents(cwd, runId).length, 0, 'reconcileTurn did not run');
+    const warns = report.warnings.filter((w) => w.code === 'review_turn_not_converged');
+    assert.equal(warns.length, 1, 'exactly one loud warning');
+    assert.ok(warns[0]!.message.includes(`--integrate ${assignmentId}`), 'the warning names the exact recovery command');
+    assert.ok(warns[0]!.message.includes(loopId), 'the warning names the stalled loop');
+  });
+
+  it('verdict-less turn-owned lane: no convergence (ambiguous evidence) but a warning says WHY', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const { loopId, wt } = seedTurnOwned(cwd, {}); // no review_verdict at all
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    assert.equal(getLoop(loopId, cwd)!.status, 'open');
+    const warns = report.warnings.filter((w) => w.code === 'review_turn_not_converged');
+    assert.equal(warns.length, 1);
+    assert.ok(warns[0]!.message.includes('no review_verdict'), 'the warning names the missing evidence');
+  });
+
+  it('read-strict NOT weakened — wrong-nonce approve lane is refused AND the refusal is loud (was: silent skip)', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    // Lane carries a stale/wrong nonce, no sentinel: evidence can never match the attempt.
+    const { loopId, runId, wt } = seedTurnOwned(cwd, { verdict: 'approve', laneNonce: 'WRONG-GEN', writeSentinel: false });
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const loop = getLoop(loopId, cwd)!;
+    assert.equal(loop.status, 'open', 'mismatched evidence never converges the loop');
+    assert.ok(!loop.artifacts.some((a) => a.type === 'verdict'), 'no verdict from rejected evidence');
     assert.equal(harvestedEvents(cwd, runId).length, 0);
+    const warns = report.warnings.filter((w) => w.code === 'review_turn_not_converged');
+    assert.equal(warns.length, 1, 'the refusal surfaces as a warning');
+    assert.ok(warns[0]!.message.includes('reconcileTurn refused'), 'the warning carries the read-strict reason');
+  });
+
+  it('idempotent + quiet once terminal: re-running report harvest on a converged approve lane warns nothing and never double-finalizes', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const { loopId, wt } = seedTurnOwned(cwd, { verdict: 'approve' });
+    harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const second = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const loop = getLoop(loopId, cwd)!;
+    assert.ok(['closed', 'completed'].includes(loop.status), 'loop stays terminal');
+    assert.equal(loop.artifacts.filter((a) => a.type === 'verdict').length, 1, 'exactly one verdict across re-harvests');
+    assert.equal(second.warnings.length, 0, 'a terminal loop is a healthy no-op, not a warning');
   });
 
   it('T5b KILL-SWITCH (=0): the report path still closes a review loop via the legacy closer', () => {
@@ -269,5 +345,23 @@ describe('pln#630 PR3a — report path (harvestLaneResults) neutralized for turn
     harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
     const loop = getLoop(loopId, cwd)!;
     assert.ok(['closed', 'completed'].includes(loop.status), 'legacy report-path close unchanged under the kill-switch');
+  });
+
+  it('CLI (`harvest <asgn> --json`) surfaces the warnings channel — the second silence of the lived stalls', async () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const { assignmentId, wt } = seedTurnOwned(cwd, { verdict: 'request_changes' });
+    const lines: string[] = [];
+    const originalLog = console.log;
+    console.log = (s?: unknown) => { lines.push(String(s)); };
+    try {
+      await runHarvestLane(assignmentId, { worktree: [wt], cwd, json: true });
+    } finally {
+      console.log = originalLog;
+    }
+    const parsed = JSON.parse(lines.join('\n')) as { warnings?: Array<{ code: string; message: string }> };
+    assert.ok(parsed.warnings, 'JSON output carries the warnings field');
+    assert.equal(parsed.warnings!.length, 1);
+    assert.equal(parsed.warnings![0]!.code, 'review_turn_not_converged');
+    assert.ok(parsed.warnings![0]!.message.includes(`--integrate ${assignmentId}`));
   });
 });
