@@ -432,6 +432,24 @@ describe('getDispatchStatus — worktree git evidence (pln#554 step 2)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('pln#621 pack — dead pid + FRESH filesystem activity: the recommendation never says kill', () => {
+    // pln#520 corpus incident: 6 workers were killed on a dead WRAPPER pid and
+    // committed their work 4-7 minutes later. The commits-ahead variant above
+    // pins the delivered case; THIS pins the earlier window — no commits yet,
+    // but the worker is demonstrably WRITING (fresh worktree mtime). Whatever
+    // the liveness verdict is, a destructive recommendation is forbidden.
+    const { dir } = initGitWorktree();
+    seedWithGitWorktree('ge_fsactive', dir, { pid: 9_999_999 }); // dead (wrapper) pid
+    fs.writeFileSync(path.join(dir, 'in-progress.txt'), 'still writing\n'); // fresh fs activity NOW
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge_fsactive', cwd: workspace.dir, base_ref: 'basepoint' });
+    assert.ok((status.runtime.last_fs_activity_ms ?? Infinity) < 60_000, 'precondition: fs activity is fresh');
+    assert.doesNotMatch(status.diagnosis.recommended_next_action, /kill/i,
+      'a dead pid proves nothing on an ack-wrapped spawn; fresh fs writes forbid any kill recommendation');
+    assert.notEqual(status.diagnosis.health, 'stalled', 'a writing worker is not stalled');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('commits ahead + dirty tracked tree is NOT delivered — falls through to process evidence', () => {
     const { dir, git } = initGitWorktree();
     fs.writeFileSync(path.join(dir, 'work.txt'), 'wip\n');
