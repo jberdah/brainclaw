@@ -12,8 +12,10 @@
  *
  * @module
  */
+import { spawnSync } from 'node:child_process';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { buildContext } from '../core/context.js';
+import { detectCommitsBehindMainDetailed } from '../core/execution-context.js';
 import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { generateClaimId, loadClaim, saveClaim, adoptClaimSession, releaseClaimWithCascade, claimBaselineFields } from '../core/claims.js';
@@ -106,6 +108,22 @@ export function parseTtl(ttl: string): string | undefined {
   const unit = match[2]!;
   const ms = unit === 'm' ? value * 60_000 : unit === 'h' ? value * 3_600_000 : value * 86_400_000;
   return new Date(Date.now() + ms).toISOString();
+}
+
+/**
+ * Current git branch via an argv invocation — never a shell string (pln#618).
+ * Returns undefined when git is unavailable, cwd is not a repo, or HEAD is
+ * detached (`--show-current` prints nothing there).
+ */
+function currentGitBranch(cwd: string): string | undefined {
+  const result = spawnSync('git', ['branch', '--show-current'], {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 5000,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) return undefined;
+  return result.stdout.trim() || undefined;
 }
 
 export async function handleBclawClaim(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
@@ -221,34 +239,21 @@ export async function handleBclawClaim(payload: McpToolExecutionPayload, ctx: Mc
     : '';
   // Branch guardrail: warn if on master/main without a worktree
   let branchWarn = '';
-  if (!worktreePath) {
-    try {
-      const { execSync } = await import('node:child_process');
-      const branch = execSync('git branch --show-current', { cwd: claimCwd, encoding: 'utf-8' }).trim();
-      if (branch === 'master' || branch === 'main') {
-        const branchSlug = sanitizeBranchComponent(claimScope);
-        branchWarn = `\n⚠️ You are on ${branch}. Create a feature branch before editing: git checkout -b feat/${branchSlug}`;
-      }
-    } catch { /* git not available, skip warning */ }
+  const currentBranch = currentGitBranch(claimCwd);
+  if (!worktreePath && (currentBranch === 'master' || currentBranch === 'main')) {
+    const branchSlug = sanitizeBranchComponent(claimScope);
+    branchWarn = `\n⚠️ You are on ${currentBranch}. Create a feature branch before editing: git checkout -b feat/${branchSlug}`;
   }
-  // Stale-branch detection: warn if behind master
+  // Stale-branch detection: warn if behind master/main. Branch names may
+  // legally contain shell metacharacters — the revspec goes through an argv
+  // invocation, never a shell string (pln#618).
   let staleBranchWarn = '';
-  try {
-    const { execSync: execSyncSB } = await import('node:child_process');
-    const currentBranch = execSyncSB('git branch --show-current', { cwd: claimCwd, encoding: 'utf-8' }).trim();
-    if (currentBranch && currentBranch !== 'master' && currentBranch !== 'main') {
-      for (const mainBranch of ['master', 'main']) {
-        try {
-          const behind = execSyncSB(`git rev-list --count ${currentBranch}..${mainBranch}`, { cwd: claimCwd, encoding: 'utf-8' }).trim();
-          const count = parseInt(behind, 10);
-          if (count > 0) {
-            staleBranchWarn = `\n⚠ Branch is ${count} commit(s) behind ${mainBranch}. Consider rebasing before editing.`;
-          }
-          break;
-        } catch { /* branch doesn't exist, try next */ }
-      }
+  if (currentBranch && currentBranch !== 'master' && currentBranch !== 'main') {
+    const behind = detectCommitsBehindMainDetailed(claimCwd, currentBranch);
+    if (behind && behind.count > 0) {
+      staleBranchWarn = `\n⚠ Branch is ${behind.count} commit(s) behind ${behind.branch}. Consider rebasing before editing.`;
     }
-  } catch { /* git not available */ }
+  }
 
   const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
   const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
