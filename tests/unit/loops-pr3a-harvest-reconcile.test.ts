@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { integrateLaneResults, harvestLaneResults, getLaneResultPath, runHarvestLane } from '../../src/commands/harvest.js';
-import { openLoop, getLoop } from '../../src/core/loops/store.js';
+import { openLoop, getLoop, writeThreadFile } from '../../src/core/loops/store.js';
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveTurnId, deriveChildIds,
 } from '../../src/core/loops/attempt-reservation.js';
@@ -363,5 +363,40 @@ describe('pln#644 — report path (harvestLaneResults) converges or warns, never
     assert.equal(parsed.warnings!.length, 1);
     assert.equal(parsed.warnings![0]!.code, 'review_turn_not_converged');
     assert.ok(parsed.warnings![0]!.message.includes(`--integrate ${assignmentId}`));
+  });
+
+  it('PR #171 P2-1 — a BLOCKED loop (iteration cap) is terminal for reconcile: RC lane re-scan stays QUIET', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const { loopId, wt } = seedTurnOwned(cwd, { verdict: 'request_changes' });
+    const thread = getLoop(loopId, cwd)!;
+    thread.status = 'blocked';
+    writeThreadFile(thread, cwd);
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    assert.equal(getLoop(loopId, cwd)!.status, 'blocked', 'loop untouched');
+    assert.equal(report.warnings.length, 0, 'a blocked loop is not awaiting convergence — no false alarm');
+  });
+
+  it('PR #171 P2-1 — a PAUSED loop refuses advancement until resume: RC lane stays QUIET (advising --integrate would be a lie)', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const { loopId, wt } = seedTurnOwned(cwd, { verdict: 'request_changes' });
+    const thread = getLoop(loopId, cwd)!;
+    thread.status = 'paused';
+    writeThreadFile(thread, cwd);
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    assert.equal(getLoop(loopId, cwd)!.status, 'paused', 'loop untouched');
+    assert.equal(report.warnings.length, 0, 'a deliberately paused loop is an operator choice, not a stall');
+  });
+
+  it('PR #171 P2-2 — an UNEXPECTED reconcile failure (corrupt loop store) is swallowed but LOUD, not "1 harvested, 0 error(s)"', () => {
+    delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
+    const { loopId, wt } = seedTurnOwned(cwd, { verdict: 'approve' });
+    // Corrupt the loop thread file: getLoop propagates the parse error out of
+    // reconcileTurn, exercising the harvest catch — which used to swallow it silently.
+    fs.writeFileSync(path.join(cwd, '.brainclaw', 'loops', 'threads', `${loopId}.json`), '{ not json');
+    const report = harvestLaneResults({ worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const warns = report.warnings.filter((w) => w.code === 'review_turn_not_converged');
+    assert.equal(warns.length, 1, 'the swallowed failure surfaces as a warning');
+    assert.ok(warns[0]!.message.includes('loop-close failed unexpectedly'), 'the warning names the failure mode');
+    assert.ok(warns[0]!.message.includes(loopId), 'the warning still names the loop (from the reservation, not the broken store)');
   });
 });

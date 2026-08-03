@@ -122,7 +122,12 @@ function reconcileToReviewLoopResult(
 function loopTurnAwaitsConvergence(reservation: TurnReservation, cwd: string): boolean {
   const loop = getLoop(reservation.loop_id, cwd);
   if (!loop) return false;
-  if (['closed', 'completed', 'cancelled'].includes(loop.status)) return false;
+  // Only a live, advancing loop is awaiting convergence (PR #171 review P2-1).
+  // 'blocked' (iteration cap) is in reconcileTurn's LOOP_TERMINAL set, and a
+  // 'paused' loop refuses advancement until resumed — advising `--integrate`
+  // on either would be a false alarm. 'open' is the only non-terminal,
+  // advancing status (LoopStatus non-terminal = 'open' | 'paused').
+  if (loop.status !== 'open') return false;
   const slot = loop.slots.find((s) => s.slot_id === reservation.slot_id);
   if (!slot) return false;
   // Mirror reconcileTurn's superseded guard exactly: an UNSET current_turn_id is
@@ -502,6 +507,9 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // PR2: cycleOnRequestChanges=false — the report path only closes on approve;
     // it must NOT advance a request_changes cycle it cannot follow through on
     // (no re-dispatch, no claim retention). `harvest --integrate` owns the cycle.
+    // Hoisted for the catch below (PR #171 review P2-2): if turn-owned evidence was
+    // found before a throw, the swallowed failure must still surface as a warning.
+    let turnEvidenceForCatch: { reservation: TurnReservation; nonce: string } | undefined;
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
       if (laneAssignment) {
@@ -524,11 +532,19 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
         // sentinel) → the lane takes the unchanged legacy close so it still converges.
         // Ideation stays legacy (review-only).
         const laneTurnEvidence = turnOwnedReviewEnabled() ? turnOwnedLaneEvidence(lane, cwd) : undefined;
+        turnEvidenceForCatch = laneTurnEvidence;
         if (!laneTurnEvidence) {
           closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
         } else if (lane.review_verdict === 'approve') {
           const rr = reconcileTurnOwnedReviewLane(lane, cwd, laneTurnEvidence);
-          if (rr && !rr.result.reconciled && loopTurnAwaitsConvergence(laneTurnEvidence.reservation, cwd)) {
+          // Reason-based quietness (PR #171 review P2-1 refinement): a terminal loop
+          // returns reconciled:true (idempotent no-op) and a superseded turn is the one
+          // healthy decline (`harvest --all` over a prior round's lane) — everything
+          // else (refused evidence, deferred lock, loop/slot not found, contradiction,
+          // paused complete_turn refusal) is a live approve that did NOT land and must
+          // say so. No getLoop re-read here: the decline reason already discriminates,
+          // and the loop store itself may be the failing component.
+          if (rr && !rr.result.reconciled && !/superseded/.test(rr.result.reason ?? '')) {
             result.warnings.push(reviewTurnNotConvergedWarning(
               lane, laneTurnEvidence.reservation, `reconcileTurn refused: ${rr.result.reason ?? 'no reason given'}`,
             ));
@@ -560,7 +576,24 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
           }
         }
       }
-    } catch { /* never block harvest on loop-close */ }
+    } catch (err) {
+      // Never block harvest on loop-close — but a swallowed failure must not be
+      // SILENT for a turn-owned lane (PR #171 review P2-2): before this warning,
+      // an unexpected reconcile/store error left the operator with "1 harvested,
+      // 0 error(s)" and an open loop turn — the exact stall pln#644 exists to
+      // kill. Deliberately no liveness/superseded re-check here: that would
+      // re-read the loop store, which may be the very component that just threw
+      // (getLoop propagates parse errors). A rare over-warning on a broken store
+      // beats a silent stall on a live turn.
+      if (turnEvidenceForCatch) {
+        try {
+          result.warnings.push(reviewTurnNotConvergedWarning(
+            lane, turnEvidenceForCatch.reservation,
+            `loop-close failed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+          ));
+        } catch { /* truly never block harvest */ }
+      }
+    }
 
     const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
     if (fs.existsSync(marker)) {
