@@ -1,0 +1,234 @@
+{
+  "entity": "assignment",
+  "sampled": 297,
+  "fields": {
+    "acceptance_ttl_ms": {
+      "types": [
+        "number"
+      ],
+      "presence": "297/297"
+    },
+    "accepted_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "103/297"
+    },
+    "agent": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "artifacts": {
+      "types": [
+        "array"
+      ],
+      "presence": "297/297"
+    },
+    "cancelled_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "80/297"
+    },
+    "claim_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "completed_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "150/297"
+    },
+    "created_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "description": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "dispatcher_agent": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "dispatcher_session_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "165/297"
+    },
+    "error_message": {
+      "types": [
+        "string"
+      ],
+      "presence": "10/297"
+    },
+    "expired_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "42/297"
+    },
+    "failed_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "10/297"
+    },
+    "heartbeat_ttl_ms": {
+      "types": [
+        "number"
+      ],
+      "presence": "297/297"
+    },
+    "id": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "lane": {
+      "types": [
+        "string"
+      ],
+      "presence": "68/297"
+    },
+    "last_heartbeat_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "296/297"
+    },
+    "max_retries": {
+      "types": [
+        "number"
+      ],
+      "presence": "297/297",
+      "observed_short_values": [
+        "2"
+      ]
+    },
+    "message_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "294/297"
+    },
+    "offered_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "295/297"
+    },
+    "plan_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "68/297"
+    },
+    "retry_count": {
+      "types": [
+        "number"
+      ],
+      "presence": "297/297",
+      "observed_short_values": [
+        "0"
+      ]
+    },
+    "schema_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "297/297",
+      "observed_short_values": [
+        "2"
+      ]
+    },
+    "scope": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "sequence_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "68/297"
+    },
+    "session_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "65/297"
+    },
+    "short_label": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297"
+    },
+    "started_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "92/297"
+    },
+    "status": {
+      "types": [
+        "string"
+      ],
+      "presence": "297/297",
+      "observed_short_values": [
+        "cancelled",
+        "completed",
+        "created",
+        "expired",
+        "failed",
+        "offered",
+        "timed_out"
+      ]
+    },
+    "status_reason": {
+      "types": [
+        "string"
+      ],
+      "presence": "290/297"
+    },
+    "tags": {
+      "types": [
+        "array"
+      ],
+      "presence": "297/297"
+    },
+    "timed_out_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "12/297"
+    },
+    "updated_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "296/297"
+    },
+    "worktree_path": {
+      "types": [
+        "string"
+      ],
+      "presence": "64/297"
+    }
+  }
+}
