@@ -26,6 +26,8 @@ import {
 } from '../../src/core/worktree.js';
 import { saveConfig, defaultConfig } from '../../src/core/config.js';
 import { buildProtocolSection } from '../../src/core/dispatcher.js';
+import { createCoordinatorClaim, saveClaim, loadClaim } from '../../src/core/claims.js';
+import { ensureMemoryDir } from '../../src/core/io.js';
 
 // trp_37b05a15 — Next.js detection drives the Turbopack node_modules-symlink
 // warning at worktree creation.
@@ -1199,6 +1201,131 @@ describe('resolveWorktreeAddTimeoutMs', () => {
       }
     } finally {
       restore(prev);
+    }
+  });
+});
+
+// pln#642 — re-dispatch hygiene (trp_e824d2af + trp_72b4e9b3). A loop-scoped
+// dispatch derives the SAME branch/path every round, so round 2 either reused
+// a worktree still carrying round 1's LANE-RESULT.json (a TERMINAL SIGNAL that
+// then lied about the fresh worker), or collided on the path and wedged the
+// scope. All observed live, 2026-08-02/03.
+describe('re-dispatch hygiene (trp_e824d2af / trp_72b4e9b3)', () => {
+  function initRepo(prefix: string): { repo: string; git: (args: string[]) => void } {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    const git = (args: string[]): void => {
+      const r = spawnSync('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=T', ...args], { cwd: repo, encoding: 'utf-8' });
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+    };
+    git(['init']);
+    git(['commit', '--allow-empty', '-m', 'init']);
+    return { repo, git };
+  }
+
+  function cleanup(repo: string, targetPath: string): void {
+    spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+
+  it('resetWorktreeToRef ARCHIVES a prior LANE-RESULT.json out of the signal path (trp_e824d2af)', () => {
+    const { repo } = initRepo('bclaw-wt-lane-');
+    const targetPath = resolveWorktreePath(repo, 'feat/lane-archive');
+    try {
+      const wt = createWorktree(repo, 'feat/lane-archive');
+      fs.writeFileSync(path.join(wt, 'LANE-RESULT.json'), JSON.stringify({ assignment_id: 'asgn_round1', status: 'completed', summary: 'round 1 verdict' }));
+      const reset = resetWorktreeToRef(wt, 'HEAD');
+      assert.equal(reset.ok, true, `reset must pass once the terminal signal is archived: ${reset.stderr}`);
+      assert.ok(!fs.existsSync(path.join(wt, 'LANE-RESULT.json')), 'the terminal-signal filename is freed for the next turn');
+      const archived = fs.readdirSync(path.join(wt, '.brainclaw')).filter((f) => /^LANE-RESULT\.prev-\d+\.json$/.test(f));
+      assert.equal(archived.length, 1, 'prior result preserved for forensics in the .brainclaw sidecar');
+    } finally {
+      cleanup(repo, targetPath);
+    }
+  });
+
+  it('createWorktree ADOPTS an existing same-branch worktree instead of refusing (trp_72b4e9b3)', () => {
+    const { repo, git } = initRepo('bclaw-wt-adopt-');
+    const targetPath = resolveWorktreePath(repo, 'feat/adopt');
+    try {
+      const wt1 = createWorktree(repo, 'feat/adopt');
+      fs.writeFileSync(path.join(wt1, 'LANE-RESULT.json'), JSON.stringify({ assignment_id: 'asgn_round1', status: 'completed', summary: 'round 1' }));
+      // The base advances between rounds (a fix was merged).
+      git(['commit', '--allow-empty', '-m', 'round 2 base']);
+      const wt2 = createWorktree(repo, 'feat/adopt', { baseRef: 'HEAD', resetExistingBranch: true });
+      assert.equal(path.resolve(wt2), path.resolve(wt1), 'same path adopted, not refused');
+      assert.ok(!fs.existsSync(path.join(wt2, 'LANE-RESULT.json')), 'round 1 terminal signal archived on adoption');
+      const headMain = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).stdout.trim();
+      const headWt = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt2, encoding: 'utf-8' }).stdout.trim();
+      assert.equal(headWt, headMain, 'adopted worktree re-pointed to the requested base');
+      const sidecar = JSON.parse(fs.readFileSync(path.join(wt2, '.brainclaw-worktree.json'), 'utf-8'));
+      assert.equal(sidecar.base_ref_sha, headMain, 'sidecar anchor re-stamped — commits_ahead counts from THIS round');
+      assert.ok(sidecar.adopted_at, 'adoption is recorded');
+    } finally {
+      cleanup(repo, targetPath);
+    }
+  });
+
+  it('adoption REFUSES when the branch carries unharvested commits (can_2e282880 contract preserved)', () => {
+    const { repo, git } = initRepo('bclaw-wt-guard-');
+    const targetPath = resolveWorktreePath(repo, 'feat/guard');
+    try {
+      const wt = createWorktree(repo, 'feat/guard');
+      fs.writeFileSync(path.join(wt, 'WORK.md'), 'unharvested');
+      const gitWt = (args: string[]) => spawnSync('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=T', ...args], { cwd: wt, encoding: 'utf-8' });
+      gitWt(['add', 'WORK.md']);
+      gitWt(['commit', '-m', 'unharvested work']);
+      git(['commit', '--allow-empty', '-m', 'new base']);
+      assert.throws(
+        () => createWorktree(repo, 'feat/guard', { baseRef: 'HEAD' }),
+        /unharvested/i,
+        'without an explicit reset pin, adoption must never destroy commits',
+      );
+    } finally {
+      cleanup(repo, targetPath);
+    }
+  });
+
+  it('a FOREIGN directory at the worktree path still refuses (adoption is worktree-of-this-repo only)', () => {
+    const { repo } = initRepo('bclaw-wt-foreign-');
+    const targetPath = resolveWorktreePath(repo, 'feat/foreign');
+    try {
+      fs.mkdirSync(targetPath, { recursive: true });
+      fs.writeFileSync(path.join(targetPath, 'random.txt'), 'not a worktree');
+      assert.throws(
+        () => createWorktree(repo, 'feat/foreign'),
+        /already exists/,
+        'an unregistered directory is never adopted',
+      );
+    } finally {
+      cleanup(repo, targetPath);
+    }
+  });
+
+  it('createCoordinatorClaim HEALS a reused worktree-less claim instead of wedging the scope (trp_72b4e9b3)', () => {
+    // The wedge: a claim persisted after a failed worktree creation had no
+    // worktree_path, and every later dispatch reused it → "Reused claim has no
+    // worktree to pin" → spawn refused, forever, until a human intervened.
+    const { repo } = initRepo('bclaw-wt-heal-');
+    ensureMemoryDir(repo);
+    const scope = 'review-loop:lop_heal';
+    saveClaim({
+      schema_version: 2, id: 'clm_wedged', agent: 'codex', scope,
+      description: 'claim persisted after a failed worktree creation',
+      created_at: new Date().toISOString(), status: 'active',
+    }, repo);
+    const targetPath = resolveWorktreePath(repo, `feat/${sanitizeBranchComponent(scope)}`);
+    try {
+      const result = createCoordinatorClaim({
+        agent: 'codex', scope, description: 'round 2 dispatch',
+        dispatcherAgent: 'coord', cwd: repo, worktreeBaseRef: 'HEAD',
+      });
+      assert.equal(result.claimId, 'clm_wedged', 'the existing claim is reused, not duplicated');
+      assert.ok(result.worktreePath, 'a worktree is provisioned for the healed claim');
+      assert.equal(result.worktreeWarning, undefined, 'no more "has no worktree to pin" dead-end');
+      assert.equal(loadClaim('clm_wedged', repo)?.worktree_path, result.worktreePath, 'the claim record is patched');
+    } finally {
+      cleanup(repo, targetPath);
     }
   });
 });

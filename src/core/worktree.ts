@@ -584,6 +584,24 @@ export function resetWorktreeToRef(worktreePath: string, ref: string): { ok: boo
     return { ok: false, stderr: res.stderr };
   }
 
+  // trp_e824d2af — LANE-RESULT.json is a TERMINAL SIGNAL, and `reset --hard`
+  // does not touch untracked files: left at the root, the PRIOR turn's result
+  // reads as the NEXT turn's completion (dispatch_status declared a
+  // freshly-spawned round 2 "worker reported done" with round 1's verdict,
+  // observed live 2026-08-02). Archive it into the worktree's .brainclaw/
+  // sidecar — preserved for forensics, out of the signal path, and already
+  // excluded from the residue check below. Best-effort: an archive failure
+  // falls through to the residue check, which then names the file loudly
+  // instead of passing it silently.
+  try {
+    const laneResultPath = path.join(worktreePath, 'LANE-RESULT.json');
+    if (fs.existsSync(laneResultPath)) {
+      const archiveDir = path.join(worktreePath, '.brainclaw');
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.renameSync(laneResultPath, path.join(archiveDir, `LANE-RESULT.prev-${fs.statSync(laneResultPath).mtimeMs.toFixed(0)}.json`));
+    }
+  } catch { /* best-effort — the residue check below surfaces what remains */ }
+
   // `reset --hard` realigns HEAD + tracked files, but leaves UNTRACKED residue
   // from a prior use of the worktree — files the worker could still compile or
   // test against even though they don't exist at the pinned ref (codex r3).
@@ -623,6 +641,29 @@ export function resetWorktreeToRef(worktreePath: string, ref: string): { ok: boo
     }
   }
   return { ok: true, stderr: '' };
+}
+
+/**
+ * trp_72b4e9b3 — on worktree ADOPTION, re-stamp the sidecar's base anchor.
+ *
+ * The sidecar's `base_ref_sha` (trp#926) is the anchor `commits_ahead` counts
+ * from. An adopted worktree keeps its ROUND-1 creation stamp, so round 2's git
+ * evidence counted commits since the previous round's base — observed live as
+ * a nonsensical `commits_ahead: 2` on a freshly re-pointed worktree. Best-effort:
+ * a missing/unreadable sidecar (hand-made worktree) is left untouched.
+ */
+function refreshSidecarBaseSha(worktreePath: string, mainWorktreePath: string, baseRef: string): void {
+  const sidecarPath = path.join(worktreePath, '.brainclaw-worktree.json');
+  try {
+    if (!fs.existsSync(sidecarPath)) return;
+    const meta = JSON.parse(fs.readFileSync(sidecarPath, 'utf-8')) as Record<string, unknown>;
+    const rev = runGit(['rev-parse', baseRef], mainWorktreePath);
+    meta.base_ref = baseRef;
+    if (rev.ok) meta.base_ref_sha = rev.stdout.trim();
+    else delete meta.base_ref_sha;
+    meta.adopted_at = new Date().toISOString();
+    fs.writeFileSync(sidecarPath, JSON.stringify(meta, null, 2));
+  } catch { /* best-effort — stale anchor is observability-only */ }
 }
 
 export interface SharedCheckoutRisk {
@@ -876,6 +917,55 @@ export function createWorktree(
   const targetPath = resolveWorktreePath(mainWorktreePath, branchName);
 
   if (fs.existsSync(targetPath)) {
+    // trp_72b4e9b3 — the path derives from the branch name, and loop-scoped
+    // dispatches derive the SAME branch every round (feat/review-loop-<lop>).
+    // A fresh claim on round 2 therefore collided here and the whole spawn
+    // failed (spawn_no_worktree) — worse, the claim persisted without a
+    // worktree and wedged every later dispatch on the scope. When the existing
+    // path is a REGISTERED worktree of this repo checked out on EXACTLY the
+    // requested branch, ADOPT it: honor the reused-branch contract first
+    // (can_2e282880 — never destroy unharvested commits unless the caller
+    // explicitly pinned a reset), then re-point it to the base. Anything else
+    // at the path (foreign dir, other branch) still refuses loudly.
+    const attachedPath = findWorktreePathForBranch(listWorktrees(mainWorktreePath), branchName);
+    const sameTarget = attachedPath !== undefined && (process.platform === 'win32'
+      ? path.resolve(attachedPath).toLowerCase() === path.resolve(targetPath).toLowerCase()
+      : path.resolve(attachedPath) === path.resolve(targetPath));
+    if (sameTarget) {
+      // Resolve the base to a SHA in the MAIN repo first: resetWorktreeToRef
+      // runs inside the worktree, where a symbolic ref like "HEAD" resolves to
+      // the WORKTREE's own tip — a silent no-op reset onto the stale round.
+      const requestedBase = options.baseRef ?? 'HEAD';
+      const baseRev = runGit(['rev-parse', requestedBase], mainWorktreePath);
+      if (!baseRev.ok) {
+        throw new Error(`Cannot adopt worktree ${targetPath}: base ref ${requestedBase} does not resolve: ${baseRev.stderr.trim()}`);
+      }
+      const adoptBase = baseRev.stdout.trim();
+      if (!options.resetExistingBranch) {
+        const ahead = runGit(['rev-list', '--count', `${adoptBase}..${branchName}`], mainWorktreePath);
+        const aheadCount = ahead.ok ? parseInt(ahead.stdout.trim(), 10) : NaN;
+        if (!Number.isFinite(aheadCount)) {
+          throw new Error(`Cannot assess divergence of existing worktree branch ${branchName} vs ${adoptBase}: ${ahead.stderr.trim()}`);
+        }
+        if (aheadCount > 0) {
+          const commits = runGit(['log', '--oneline', '-n', '5', `${adoptBase}..${branchName}`], mainWorktreePath);
+          throw new Error(
+            `Refusing to adopt worktree ${targetPath}: branch ${branchName} has ${aheadCount} commit(s) not on ${adoptBase} (unharvested work). ` +
+            `Harvest/merge or remove the worktree first. Divergent commits:\n${commits.stdout.trim()}`,
+          );
+        }
+      }
+      const reset = resetWorktreeToRef(targetPath, adoptBase);
+      if (!reset.ok) {
+        throw new Error(
+          `Worktree path already exists and could not be adopted (reset to ${adoptBase} failed: ${reset.stderr.trim()}). ` +
+          `Remove it first with 'brainclaw worktree remove'.`,
+        );
+      }
+      logger.warn(`[worktree] adopted existing worktree ${targetPath} (branch ${branchName}) and re-pointed it to ${adoptBase}`);
+      refreshSidecarBaseSha(targetPath, mainWorktreePath, adoptBase);
+      return targetPath;
+    }
     throw new Error(
       `Worktree path already exists: ${targetPath}. Remove it first with 'brainclaw worktree remove'.`,
     );

@@ -8,10 +8,12 @@
  * exactly the reflex we cannot afford.
  *
  * Contract: an entry is served in detail `k` times, then folded into a single
- * aggregate line that carries the exact next_action (`bclaw_find …`) so the
- * agent still has one clear pointer. The counter is a small JSON file, safe to
- * lose — hitting it twice per stale item is worse than losing it once, and a
- * missing file just resets counts to zero.
+ * aggregate line that carries the folded IDS themselves (trp_336e8054: it used
+ * to point at `bclaw_find(status:'stale')`, a filter that returns nothing
+ * because staleness is computed, not stored) so the agent still has one clear,
+ * WORKING pointer. The counter is a small JSON file, safe to lose — hitting it
+ * twice per stale item is worse than losing it once, and a missing file just
+ * resets counts to zero.
  *
  * @module
  */
@@ -114,8 +116,9 @@ function bump(counter: ServeCounter | undefined, nowIso: string): ServeCounter {
 
 /**
  * Fold stale warnings served ≥ k times into a single aggregate line. The
- * aggregate carries a bclaw_find pointer so the agent still has one exact
- * next-action instead of guessing which filter to use.
+ * aggregate carries the folded item IDS (grouped by entity) so the agent has
+ * an exact, executable next-action — never a filter the engine cannot resolve
+ * (trp_336e8054).
  *
  * Idempotence: calling with recordServe=false is pure — the returned split is
  * derived from the current registry alone. With recordServe=true the counter
@@ -161,10 +164,24 @@ export function ageStaleWarnings(
 
   let aggregate: string | undefined;
   if (folded.length > 0) {
-    const byEntity = new Map<string, number>();
-    for (const w of folded) byEntity.set(w.entity, (byEntity.get(w.entity) ?? 0) + 1);
-    const parts = [...byEntity.entries()].map(([entity, n]) => `${n} ${entity}${n === 1 ? '' : 's'}`);
-    aggregate = `${folded.length} stale item${folded.length === 1 ? '' : 's'} you've already been offered (${parts.join(', ')}) — bclaw_find(status:'stale') to review, or bclaw_transition to retire.`;
+    // trp_336e8054 — the aggregate used to recommend `bclaw_find(status:'stale')`,
+    // a filter that returns NOTHING: staleness is COMPUTED at session-start, never
+    // stored as a status, so the operator could not retrieve the very items the
+    // line announced. The folded items are in hand right here — carry their ids,
+    // grouped by entity, so the recovery (`bclaw_get` each id) works verbatim.
+    const byEntity = new Map<string, string[]>();
+    for (const w of folded) {
+      const ids = byEntity.get(w.entity) ?? [];
+      ids.push(w.id);
+      byEntity.set(w.entity, ids);
+    }
+    const ID_CAP = 8;
+    const parts = [...byEntity.entries()].map(([entity, ids]) => {
+      const shown = ids.slice(0, ID_CAP);
+      const overflow = ids.length - shown.length;
+      return `${ids.length} ${entity}${ids.length === 1 ? '' : 's'}: ${shown.join(', ')}${overflow > 0 ? ` +${overflow} more` : ''}`;
+    });
+    aggregate = `${folded.length} stale item${folded.length === 1 ? '' : 's'} you've already been offered (${parts.join('; ')}) — bclaw_get each id to review, or bclaw_transition to retire.`;
   }
 
   return { warnings: detail, aggregate, served_ids, folded_ids };

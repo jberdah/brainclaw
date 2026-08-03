@@ -135,7 +135,13 @@ describe('ageStaleWarnings', () => {
     const third = ageStaleWarnings(warnings, ws.dir, { policy });
     assert.equal(third.warnings.length, 0);
     assert.ok(third.aggregate, 'aggregate present when K reached');
-    assert.match(third.aggregate!, /bclaw_find/, 'aggregate carries next_action');
+    // trp_336e8054 — the recovery must work VERBATIM. The old line pointed at
+    // bclaw_find(status:'stale'), a filter that returns nothing (staleness is
+    // computed, never stored), so the operator could not retrieve the items
+    // the aggregate announced. The folded ids themselves are the pointer.
+    assert.match(third.aggregate!, /pln_a/, 'aggregate names the folded ids');
+    assert.match(third.aggregate!, /rtn_b/, 'aggregate names the folded ids');
+    assert.doesNotMatch(third.aggregate!, /status:'stale'/, 'never recommend the filter the engine cannot resolve');
   });
 
   it('opt-out (disabled=true) bypasses aging entirely', () => {
