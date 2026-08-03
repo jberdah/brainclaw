@@ -1115,6 +1115,10 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
   const existingScopeClaim = listClaims(options.cwd).find(
     (claim) => claim.status === 'active' && claim.scope === options.scope,
   );
+  // Set when the reuse candidate turns out to be RELEASED under the store lock
+  // (review PR#167 P1): the scope is genuinely free, so control falls through
+  // to the fresh-claim path instead of handing the dispatcher a dead claim.
+  let reuseCandidateGone = false;
   if (existingScopeClaim) {
     if (existingScopeClaim.agent === options.agent) {
       // Same agent already has this scope — reuse the claim (backward compat,
@@ -1124,32 +1128,70 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
       // worktree — the same silent false-negative the guard exists to prevent
       // (pln#520 Tier 2 / codex r2).
       let reuseWarning: string | undefined;
-      if (options.worktreeBaseRef) {
-        if (existingScopeClaim.worktree_path) {
-          const reset = resetWorktreeToRef(existingScopeClaim.worktree_path, options.worktreeBaseRef);
+      let reusedWorktreePath = existingScopeClaim.worktree_path;
+      if (reusedWorktreePath) {
+        if (options.worktreeBaseRef) {
+          const reset = resetWorktreeToRef(reusedWorktreePath, options.worktreeBaseRef);
           if (!reset.ok) {
             reuseWarning = `Reused claim ${existingScopeClaim.id} pinned to ref "${options.worktreeBaseRef}": ${reset.stderr.trim()}`;
           }
-        } else {
-          reuseWarning = `Reused claim ${existingScopeClaim.id} has no worktree to pin to ref "${options.worktreeBaseRef}".`;
+        }
+      } else {
+        // trp_72b4e9b3(2) — a claim persisted after a failed worktree creation
+        // (e.g. the path collision this trap documents) used to WEDGE the scope:
+        // every later dispatch reused this worktree-less claim and the spawn
+        // refused ("Reused claim has no worktree to pin"). Heal it here:
+        // provision the worktree the claim should have had (createWorktree now
+        // ADOPTS an existing same-branch worktree, so the original collision
+        // cause resolves too) and patch the claim. On failure the old warning
+        // stands — visible, and the next call retries.
+        try {
+          reusedWorktreePath = createWorktree(options.cwd, `feat/${sanitizeBranchComponent(options.scope)}`, {
+            sessionId: options.sessionId,
+            agent: options.agent,
+            baseRef: options.worktreeBaseRef,
+            resetExistingBranch: options.resetExistingWorktreeBranch || Boolean(options.worktreeBaseRef),
+          });
+          const healedPath = reusedWorktreePath;
+          // Review PR#167 P1 — the patch REVALIDATES under the store lock.
+          // Provisioning takes seconds; if a release wins that window, the
+          // reused claim id must NEVER reach the dispatcher (it would spawn an
+          // assignment bound to a RELEASED claim). 'gone' falls through to the
+          // fresh-claim path below — the scope is genuinely free now, and the
+          // just-provisioned worktree is re-found by createWorktree's adoption.
+          const healed = mutate({ cwd: options.cwd }, (): 'patched' | 'already' | 'gone' => {
+            const fresh = loadClaim(existingScopeClaim.id, options.cwd);
+            if (!fresh || fresh.status !== 'active') return 'gone';
+            if (!fresh.worktree_path) {
+              fresh.worktree_path = healedPath;
+              saveClaimUnlocked(fresh, options.cwd);
+            }
+            return fresh.worktree_path === healedPath ? 'patched' : 'already';
+          });
+          if (healed === 'gone') reuseCandidateGone = true;
+        } catch (err) {
+          reuseWarning = `Reused claim ${existingScopeClaim.id} has no worktree, and provisioning one failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       }
+      if (!reuseCandidateGone) {
+        return {
+          claimId: existingScopeClaim.id,
+          worktreePath: reusedWorktreePath,
+          worktreeWarning: reuseWarning,
+          reusedExisting: true,
+        };
+      }
+    } else {
+      // DIFFERENT agent has an active claim on this scope — scope is locked.
+      // Return the existing claim info + a conflict flag so the dispatcher can skip.
       return {
         claimId: existingScopeClaim.id,
         worktreePath: existingScopeClaim.worktree_path,
-        worktreeWarning: reuseWarning,
         reusedExisting: true,
+        scopeConflict: true,
+        conflictAgent: existingScopeClaim.agent,
       };
     }
-    // DIFFERENT agent has an active claim on this scope — scope is locked.
-    // Return the existing claim info + a conflict flag so the dispatcher can skip.
-    return {
-      claimId: existingScopeClaim.id,
-      worktreePath: existingScopeClaim.worktree_path,
-      reusedExisting: true,
-      scopeConflict: true,
-      conflictAgent: existingScopeClaim.agent,
-    };
   }
 
   const claimId = generateClaimId();

@@ -78,8 +78,19 @@ export interface DispatchRuntimeSnapshot {
    * pln#532 — the worker's LANE-RESULT.json (if present at the worktree root).
    * This is the #1 verdict signal: a worker that wrote it has FINISHED, even when
    * it could not self-update the agent_run (sandboxed). undefined when absent.
+   *
+   * trp_e824d2af: only a lane result whose OWN assignment_id matches the target
+   * assignment lands here. A reused worktree keeps the PRIOR turn's file at the
+   * root, and reading it unmatched declared a freshly-spawned round 2 "worker
+   * reported done" with round 1's verdict.
    */
   lane_result?: { status: string; summary: string };
+  /**
+   * trp_e824d2af — a LANE-RESULT.json found at the worktree root that belongs
+   * to a DIFFERENT assignment (a prior turn in a reused worktree). Surfaced for
+   * observability, NEVER treated as a terminal signal for this dispatch.
+   */
+  lane_result_stale?: { assignment_id: string; status: string; summary: string };
   /**
    * pln#554 + trp#926 — commits on the lane branch ahead of the base ref, but
    * refined via patch-id: a squash-merged commit whose patch is already on
@@ -582,11 +593,21 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
 
   // pln#532 — the #1 verdict signal: a LANE-RESULT.json at the worktree root means
   // the worker FINISHED (even if it couldn't self-update the run). Read + validate it.
+  // trp_e824d2af — validate OWNERSHIP too: assignment_id is required on the schema,
+  // and a reused worktree keeps the prior turn's file at the root. Unmatched, that
+  // file declared a freshly-spawned round 2 terminal with round 1's verdict (observed
+  // live 2026-08-02, lop_626271ee10ad09d8). A mismatch is surfaced as stale, never
+  // as this dispatch's result.
   let laneResult: { status: string; summary: string } | undefined;
+  let laneResultStale: { assignment_id: string; status: string; summary: string } | undefined;
   if (worktreeForFs) {
     try {
       const parsed = LaneResultSchema.parse(JSON.parse(fs.readFileSync(path.join(worktreeForFs, 'LANE-RESULT.json'), 'utf-8')));
-      laneResult = { status: parsed.status, summary: parsed.summary };
+      if (parsed.assignment_id === assignmentId) {
+        laneResult = { status: parsed.status, summary: parsed.summary };
+      } else {
+        laneResultStale = { assignment_id: parsed.assignment_id, status: parsed.status, summary: parsed.summary };
+      }
     } catch { /* no / invalid LANE-RESULT.json */ }
   }
 
@@ -606,6 +627,7 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
     },
     last_fs_activity_ms: lastFsActivityMs,
     lane_result: laneResult,
+    ...(laneResultStale ? { lane_result_stale: laneResultStale } : {}),
     commits_ahead: evidence?.commitsAhead,
     commits_ahead_raw: evidence?.commitsAheadRaw,
     commits_ahead_base: evidence?.baseRef,
