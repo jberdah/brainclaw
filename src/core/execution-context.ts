@@ -235,29 +235,47 @@ function detectGitRemote(cwd: string, runner: CommandRunner): boolean {
   return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length > 0;
 }
 
+/** Result of {@link detectCommitsBehindMainDetailed}: which reference branch produced the count. */
+export interface CommitsBehindMainDetail {
+  branch: 'master' | 'main';
+  count: number;
+}
+
 /**
- * Detect how many commits the current branch is behind the main branch.
- * Tries master then main as the reference branch.
+ * Detect how many commits the current branch is behind the main branch,
+ * reporting which reference branch (master/main) produced the count.
+ * Tries both and keeps the highest — handles repos where both branches
+ * exist but only one is the real reference.
  * Returns undefined if not in a git repo or on the main branch itself.
+ *
+ * Branch names may legally contain shell metacharacters (`;`, `&`, `$()`,
+ * backticks…), so the revspec MUST stay a single argv element — never
+ * assemble it into a shell string (pln#618).
  */
-function detectCommitsBehindMain(cwd: string, currentBranch: string, runner: CommandRunner): number | undefined {
+export function detectCommitsBehindMainDetailed(
+  cwd: string,
+  currentBranch: string,
+  runner: CommandRunner = defaultRunner,
+): CommitsBehindMainDetail | undefined {
   // Don't check if already on main branch
   if (currentBranch === 'master' || currentBranch === 'main') return undefined;
 
-  // Try both master and main, return the highest count found.
-  // This handles repos where both branches exist but only one is the real reference.
-  let maxBehind: number | undefined;
-  for (const mainBranch of ['master', 'main']) {
+  let best: CommitsBehindMainDetail | undefined;
+  for (const mainBranch of ['master', 'main'] as const) {
     const result = runner('git', ['rev-list', '--count', `${currentBranch}..${mainBranch}`], cwd);
     if (result.status === 0) {
       const count = parseInt(result.stdout.trim(), 10);
-      if (!isNaN(count) && (maxBehind === undefined || count > maxBehind)) {
-        maxBehind = count;
+      if (!isNaN(count) && (best === undefined || count > best.count)) {
+        best = { branch: mainBranch, count };
       }
     }
   }
 
-  return maxBehind;
+  return best;
+}
+
+function detectCommitsBehindMain(cwd: string, currentBranch: string, runner: CommandRunner): number | undefined {
+  return detectCommitsBehindMainDetailed(cwd, currentBranch, runner)?.count;
 }
 
 function detectToolchains(cwd: string, runner: CommandRunner): ExecutionToolVersion[] {
