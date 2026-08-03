@@ -8,6 +8,21 @@ guarantees this changelog follows.
 
 ---
 
+## [1.20.3] — 2026-08-03
+
+**Changed — `bclaw_dispatch_status` diagnosis values under the fs-activity veto (#170)**
+- A dead tracked pid combined with FRESH filesystem activity (log/worktree
+  mtime within the activity window) now yields `diagnosis.health: "healthy"`
+  with a "worker is writing" summary — previously this combination could
+  reach the `silent_death` branch and recommend "cancel + reroute" against a
+  live worker. Value change only on `diagnosis.health` /
+  `diagnosis.recommended_next_action` for that evidence combination; no field
+  added/removed, no inputSchema change. Consumers gating on
+  `health === "silent_death"` see strictly FEWER (more accurate) firings.
+- No MCP contract change from pln#644 (#171): the `review_turn_not_converged`
+  warning lives on the CLI harvest surface (`brainclaw harvest` text/`--json`
+  output), not on an MCP tool response.
+
 ## [1.20.2] — 2026-08-03
 
 **Added — `lane_result_stale` on the dispatch_status runtime snapshot (#167)**
