@@ -21,9 +21,9 @@ synthetic scenario stores: `tests/fixtures/store-corpus/`.
 | Incident | Invariant | Status |
 |---|---|---|
 | pln#520 — 6 workers killed on a dead WRAPPER pid, they committed 4-7 min later | Commits ahead + clean tree ⇒ verdict "harvest it", never kill/reroute, even with a dead pid | ✅ `dispatch-status.test.ts` "never kill-and-reroute" |
-| pln#520 variant — dead pid but the worker is WRITING (logs/worktree mtime fresh) | Fresh fs activity ⇒ the recommendation must never contain a kill instruction | ✅ `dispatch-status.test.ts` "no kill while the filesystem is active" (added by this pack) |
+| pln#520 variant — dead pid but the worker is WRITING (logs/worktree mtime fresh) | Fresh fs activity ⇒ the recommendation never contains ANY destructive instruction (kill/cancel/reroute) and the verdict is never silent_death | ✅ `dispatch-status.test.ts` "never says kill" — building this pin found a REAL gap: the silent_death branch skipped the fs-activity veto and advised "cancel + reroute" on a writing worker; fixed with the pin (review of PR #170) |
 | pln#527 — stale heartbeat during a long single operation | Stale heartbeat + fresh fs activity ⇒ "working, not stalled" (no fail inference) | ✅ `agentrun-reconciler.test.ts` heartbeat/fs-veto cases |
-| trp#292 — spawn deaths mis-diagnosed; stderr never read | Failure verdicts carry the stderr tail (worker's last words) | ✅ `dispatch-status.test.ts` stderr-signature cases |
+| trp#292 — spawn deaths mis-diagnosed; stderr never read | Known fatal boot signatures in stderr yield a TARGETED diagnosis instead of a generic silent_death | ✅ `dispatch-status.test.ts` stderr-signature cases (narrower than "every failure verdict carries the tail" — the reconciler's logTailSuffix covers the fail-inference side) |
 | Operator rule — never blanket-kill agents by process name (IDE runs them too) | Kill only pids from `agent_run.pid` cross-checked with `launched_at` | 📋 mitigated (operator rule; engine cannot see foreign processes) |
 
 ## Harvest — verdicts and results are exactly-once and owned
@@ -46,6 +46,7 @@ synthetic scenario stores: `tests/fixtures/store-corpus/`.
 | can_2e282880 — branch reuse ran a worker on an April base / would destroy commits | Unharvested commits refuse silent reuse/adoption | ✅ `worktree.test.ts` unharvested-commits guards |
 | trp (2026-08-01) — `git worktree remove` follows Windows junctions, wiped main-repo node_modules | brainclaw's own removal detaches junctions first; raw git remove remains dangerous | ✅ engine path (`detachWorktreeJunctions`) · 📋 the raw-git variant stays an operator rule |
 | trp#950 — two >48-char scopes collapsed to one branch slug | Distinct scopes yield distinct valid slugs | ✅ `worktree.test.ts` slug suite |
+| trp#926 — a squash-merged lane read as "worker delivered" again (`commits_ahead` counted the ancestry, not the patches) | Squash-merged work counts 0 via patch-id refinement — no false delivered verdict, no false GC | ✅ `worktree-squash-aware.test.ts` (row added on review of PR #170 — the audit found the incident missing from the catalog) |
 | Duplicate spawn — a respawned assignment ran beside its "dead" predecessor in one worktree | Two live workers must never share a worktree unknowingly | 📋 mitigated (heartbeat-file coordination; pln#630 launch fence covers the turn-owned path: reservation + grant make a duplicate launch DENIED) — engine-wide guard tracked in pln#644 classification notes |
 
 ## Claims / cascades — advisory locks that cannot lie or leak
@@ -53,11 +54,11 @@ synthetic scenario stores: `tests/fixtures/store-corpus/`.
 | Incident | Invariant | Status |
 |---|---|---|
 | trp#433 — dead runs left active claims accumulating | Failed runs release their claim (GC cascade, non-turn-owned) | ✅ `agentrun-reconciler.test.ts` trp#433 cases |
-| pln#638 6c — transport completion released claims / triggered reviews | Transport evidence carries NO business effect; only harvest/report proof does | ✅ 6c pin + `loops-reconcile-turn.test.ts` |
+| pln#638 6c — transport completion released claims / triggered reviews | Transport completion never RELEASES the claim (`inferred_completed` with the claim still active) | ✅ `agentrun-reconciler.test.ts` 6c pin — narrower than the full boundary: the no-review-trigger half was audited true in the 6c pass but has no dedicated pin (honest gap, not a defect) |
 | dec#151 — turn-owned failure released via transport GC | Turn-owned release is a LOOP business decision (recorded on the loop first, audited) | ✅ `agentrun-reconciler.test.ts` pln#641 cases |
 | PR#166 review P1 — the promised lazy retry was unreachable (read paths skip terminal runs) | A stranded claim converges from a plain `bclaw_find(agent_run)` read | ✅ `agentrun-reconciler.test.ts` P1 cases incl. `listEntities` surface test |
 | PR#166 review P1 round 2 — the release audit could lie under a concurrent release | `releaseClaimIfActive`: check+transition atomic; the event fires only for the call that transitioned | ✅ `loops-reconcile-turn.test.ts` atomic-contract cases |
-| trp_72b4e9b3(2) — a worktree-less claim wedged all dispatch on its scope | Reuse heals the claim (provisions + patches under the store lock); a concurrently-released claim never reaches the dispatcher | ✅ `worktree.test.ts` heal test |
+| trp_72b4e9b3(2) — a worktree-less claim wedged all dispatch on its scope | Reuse heals the claim (provisions + patches under the store lock) | ✅ `worktree.test.ts` heal test — the concurrently-released-claim window is guarded by locked revalidation ('gone' → fresh-claim path, codex-verified control flow, PR #167) but is not injection-testable; the heal pin covers the wedge only |
 | trp#928 — any caller could release any claim | Ownership-checked release; coordinator override is explicit + audited | ✅ claim auth suites |
 | Claim reuse across review rounds (trp_e824d2af context) | A SUPERSEDED turn's convergence never releases the live turn's reused claim | ✅ `loops-reconcile-turn.test.ts` superseded case |
 
