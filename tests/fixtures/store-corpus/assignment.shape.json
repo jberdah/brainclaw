@@ -1,120 +1,120 @@
 {
   "entity": "assignment",
-  "sampled": 296,
+  "sampled": 297,
   "fields": {
     "acceptance_ttl_ms": {
       "types": [
         "number"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "accepted_at": {
       "types": [
         "string"
       ],
-      "presence": "102/296"
+      "presence": "103/297"
     },
     "agent": {
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "artifacts": {
       "types": [
         "array"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "cancelled_at": {
       "types": [
         "string"
       ],
-      "presence": "80/296"
+      "presence": "80/297"
     },
     "claim_id": {
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "completed_at": {
       "types": [
         "string"
       ],
-      "presence": "149/296"
+      "presence": "150/297"
     },
     "created_at": {
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "description": {
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "dispatcher_agent": {
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "dispatcher_session_id": {
       "types": [
         "string"
       ],
-      "presence": "164/296"
+      "presence": "165/297"
     },
     "error_message": {
       "types": [
         "string"
       ],
-      "presence": "10/296"
+      "presence": "10/297"
     },
     "expired_at": {
       "types": [
         "string"
       ],
-      "presence": "42/296"
+      "presence": "42/297"
     },
     "failed_at": {
       "types": [
         "string"
       ],
-      "presence": "10/296"
+      "presence": "10/297"
     },
     "heartbeat_ttl_ms": {
       "types": [
         "number"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "id": {
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "lane": {
       "types": [
         "string"
       ],
-      "presence": "68/296"
+      "presence": "68/297"
     },
     "last_heartbeat_at": {
       "types": [
         "string"
       ],
-      "presence": "295/296"
+      "presence": "296/297"
     },
     "max_retries": {
       "types": [
         "number"
       ],
-      "presence": "296/296",
+      "presence": "297/297",
       "observed_short_values": [
         "2"
       ]
@@ -123,25 +123,25 @@
       "types": [
         "string"
       ],
-      "presence": "293/296"
+      "presence": "294/297"
     },
     "offered_at": {
       "types": [
         "string"
       ],
-      "presence": "294/296"
+      "presence": "295/297"
     },
     "plan_id": {
       "types": [
         "string"
       ],
-      "presence": "68/296"
+      "presence": "68/297"
     },
     "retry_count": {
       "types": [
         "number"
       ],
-      "presence": "296/296",
+      "presence": "297/297",
       "observed_short_values": [
         "0"
       ]
@@ -150,7 +150,7 @@
       "types": [
         "number"
       ],
-      "presence": "296/296",
+      "presence": "297/297",
       "observed_short_values": [
         "2"
       ]
@@ -159,37 +159,37 @@
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "sequence_id": {
       "types": [
         "string"
       ],
-      "presence": "68/296"
+      "presence": "68/297"
     },
     "session_id": {
       "types": [
         "string"
       ],
-      "presence": "64/296"
+      "presence": "65/297"
     },
     "short_label": {
       "types": [
         "string"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "started_at": {
       "types": [
         "string"
       ],
-      "presence": "91/296"
+      "presence": "92/297"
     },
     "status": {
       "types": [
         "string"
       ],
-      "presence": "296/296",
+      "presence": "297/297",
       "observed_short_values": [
         "cancelled",
         "completed",
@@ -204,31 +204,31 @@
       "types": [
         "string"
       ],
-      "presence": "289/296"
+      "presence": "290/297"
     },
     "tags": {
       "types": [
         "array"
       ],
-      "presence": "296/296"
+      "presence": "297/297"
     },
     "timed_out_at": {
       "types": [
         "string"
       ],
-      "presence": "12/296"
+      "presence": "12/297"
     },
     "updated_at": {
       "types": [
         "string"
       ],
-      "presence": "295/296"
+      "presence": "296/297"
     },
     "worktree_path": {
       "types": [
         "string"
       ],
-      "presence": "64/296"
+      "presence": "64/297"
     }
   }
 }

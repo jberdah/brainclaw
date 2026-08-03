@@ -1,156 +1,156 @@
 {
   "entity": "inbox_message",
-  "sampled": 834,
+  "sampled": 835,
   "fields": {
     "ack_at": {
       "types": [
         "string"
       ],
-      "presence": "239/834"
+      "presence": "240/835"
     },
     "assignment_id": {
       "types": [
         "string"
       ],
-      "presence": "295/834"
+      "presence": "296/835"
     },
     "author": {
       "types": [
         "string"
       ],
-      "presence": "834/834"
+      "presence": "835/835"
     },
     "author_id": {
       "types": [
         "string"
       ],
-      "presence": "157/834"
+      "presence": "157/835"
     },
     "claim_id": {
       "types": [
         "string"
       ],
-      "presence": "315/834"
+      "presence": "316/835"
     },
     "contradiction_summary": {
       "types": [
         "string"
       ],
-      "presence": "7/834"
+      "presence": "7/835"
     },
     "contradictions_detected": {
       "types": [
         "array"
       ],
-      "presence": "7/834"
+      "presence": "7/835"
     },
     "created_at": {
       "types": [
         "string"
       ],
-      "presence": "834/834"
+      "presence": "835/835"
     },
     "from": {
       "types": [
         "string"
       ],
-      "presence": "570/834"
+      "presence": "571/835"
     },
     "host_id": {
       "types": [
         "string"
       ],
-      "presence": "42/834"
+      "presence": "42/835"
     },
     "id": {
       "types": [
         "string"
       ],
-      "presence": "834/834"
+      "presence": "835/835"
     },
     "narrative": {
       "types": [
         "string"
       ],
-      "presence": "1/834"
+      "presence": "1/835"
     },
     "origin": {
       "types": [
         "string"
       ],
-      "presence": "7/834"
+      "presence": "7/835"
     },
     "payload": {
       "types": [
         "object"
       ],
-      "presence": "442/834"
+      "presence": "443/835"
     },
     "plan_id": {
       "types": [
         "string"
       ],
-      "presence": "25/834"
+      "presence": "25/835"
     },
     "project_id": {
       "types": [
         "string"
       ],
-      "presence": "42/834"
+      "presence": "42/835"
     },
     "promotion_blocked_reason": {
       "types": [
         "string"
       ],
-      "presence": "7/834"
+      "presence": "7/835"
     },
     "provenance": {
       "types": [
         "object"
       ],
-      "presence": "72/834"
+      "presence": "72/835"
     },
     "ref": {
       "types": [
         "string"
       ],
-      "presence": "379/834"
+      "presence": "380/835"
     },
     "related_paths": {
       "types": [
         "array"
       ],
-      "presence": "151/834"
+      "presence": "151/835"
     },
     "requires_ack": {
       "types": [
         "boolean"
       ],
-      "presence": "570/834"
+      "presence": "571/835"
     },
     "resolution_reason": {
       "types": [
         "string"
       ],
-      "presence": "95/834"
+      "presence": "95/835"
     },
     "resolved_at": {
       "types": [
         "string"
       ],
-      "presence": "149/834"
+      "presence": "149/835"
     },
     "resolved_by": {
       "types": [
         "string"
       ],
-      "presence": "149/834"
+      "presence": "149/835"
     },
     "schema_version": {
       "types": [
         "number"
       ],
-      "presence": "834/834",
+      "presence": "835/835",
       "observed_short_values": [
         "2"
       ]
@@ -159,19 +159,19 @@
       "types": [
         "string"
       ],
-      "presence": "369/834"
+      "presence": "370/835"
     },
     "session_id": {
       "types": [
         "string"
       ],
-      "presence": "275/834"
+      "presence": "276/835"
     },
     "severity": {
       "types": [
         "string"
       ],
-      "presence": "9/834",
+      "presence": "9/835",
       "observed_short_values": [
         "high",
         "medium"
@@ -181,31 +181,31 @@
       "types": [
         "string"
       ],
-      "presence": "762/834"
+      "presence": "763/835"
     },
     "source": {
       "types": [
         "string"
       ],
-      "presence": "2/834"
+      "presence": "2/835"
     },
     "star_count": {
       "types": [
         "number"
       ],
-      "presence": "264/834"
+      "presence": "264/835"
     },
     "starred_by": {
       "types": [
         "array"
       ],
-      "presence": "264/834"
+      "presence": "264/835"
     },
     "status": {
       "types": [
         "string"
       ],
-      "presence": "834/834",
+      "presence": "835/835",
       "observed_short_values": [
         "accepted",
         "acknowledged",
@@ -217,31 +217,31 @@
       "types": [
         "array"
       ],
-      "presence": "834/834"
+      "presence": "835/835"
     },
     "text": {
       "types": [
         "string"
       ],
-      "presence": "834/834"
+      "presence": "835/835"
     },
     "thread_id": {
       "types": [
         "string"
       ],
-      "presence": "189/834"
+      "presence": "189/835"
     },
     "to": {
       "types": [
         "string"
       ],
-      "presence": "570/834"
+      "presence": "571/835"
     },
     "type": {
       "types": [
         "string"
       ],
-      "presence": "834/834",
+      "presence": "835/835",
       "observed_short_values": [
         "assign",
         "constraint",
@@ -258,19 +258,19 @@
       "types": [
         "string"
       ],
-      "presence": "570/834"
+      "presence": "571/835"
     },
     "usage_count": {
       "types": [
         "number"
       ],
-      "presence": "264/834"
+      "presence": "264/835"
     },
     "usage_events": {
       "types": [
         "array"
       ],
-      "presence": "264/834"
+      "presence": "264/835"
     }
   }
 }

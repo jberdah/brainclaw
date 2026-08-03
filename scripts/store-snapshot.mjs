@@ -268,10 +268,14 @@ function cmdFixtures(args) {
   // short free text through (`text`, `description`, sequence names are free
   // prose regardless of length). Only field names that are structurally
   // enum-like ever export values; everything else exports type/presence only.
+  // current_phase is deliberately ABSENT (review PR#169 round 2): it is
+  // z.string().min(1) copied from phases[0].name — a CUSTOM phase name is
+  // operator free text, not an enum, even though every stock loop uses
+  // standard names.
   const SAFE_VALUE_FIELDS = new Set([
     'schema_version', 'status', 'type', 'kind', 'outcome', 'priority',
     'severity', 'visibility', 'transport', 'channel', 'message_type',
-    'note_type', 'current_phase', 'review_mode', 'handoff_mode',
+    'note_type', 'review_mode', 'handoff_mode',
     'attempt_index', 'retry_count', 'max_retries', 'iteration_count', 'version',
   ]);
   for (const [entity, rel] of Object.entries(collections)) {

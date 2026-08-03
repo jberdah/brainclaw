@@ -1,155 +1,144 @@
 {
   "entity": "loop",
-  "sampled": 243,
+  "sampled": 245,
   "fields": {
     "agent": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "agent_id": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "artifacts": {
       "types": [
         "array"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "at": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "base_version": {
       "types": [
         "number"
       ],
-      "presence": "10/243"
+      "presence": "12/245"
     },
     "child_ids": {
       "types": [
         "object"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "claim_id": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "closed_at": {
       "types": [
         "string"
       ],
-      "presence": "217/243"
+      "presence": "217/245"
     },
     "completion_mode": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "created_at": {
       "types": [
         "string"
       ],
-      "presence": "236/243"
+      "presence": "238/245"
     },
     "created_by": {
       "types": [
         "string"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "current_phase": {
       "types": [
         "string"
       ],
-      "presence": "222/243",
-      "observed_short_values": [
-        "change_summary",
-        "critique",
-        "findings",
-        "followup_review",
-        "handoff_ready",
-        "proposal",
-        "survey",
-        "synthesis",
-        "verdict"
-      ]
+      "presence": "222/245"
     },
     "cwd": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "decided_at": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "decision": {
       "types": [
         "string"
       ],
-      "presence": "8/243"
+      "presence": "8/245"
     },
     "epoch": {
       "types": [
         "number"
       ],
-      "presence": "8/243"
+      "presence": "8/245"
     },
     "events": {
       "types": [
         "array"
       ],
-      "presence": "10/243"
+      "presence": "12/245"
     },
     "expected_artifacts": {
       "types": [
         "array"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "goal": {
       "types": [
         "string"
       ],
-      "presence": "25/243"
+      "presence": "25/245"
     },
     "id": {
       "types": [
         "string"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "intent_id": {
       "types": [
         "string"
       ],
-      "presence": "10/243"
+      "presence": "12/245"
     },
     "iteration": {
       "types": [
         "number"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "iteration_count": {
       "types": [
         "number"
       ],
-      "presence": "222/243",
+      "presence": "222/245",
       "observed_short_values": [
         "0",
         "2"
@@ -159,7 +148,7 @@
       "types": [
         "string"
       ],
-      "presence": "232/243",
+      "presence": "234/245",
       "observed_short_values": [
         "complete_turn",
         "ideation",
@@ -171,85 +160,85 @@
       "types": [
         "object"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "lease_deadline": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "linked": {
       "types": [
         "object"
       ],
-      "presence": "7/243"
+      "presence": "7/245"
     },
     "loop_id": {
       "types": [
         "string"
       ],
-      "presence": "14/243"
+      "presence": "16/245"
     },
     "loop_version_at_reserve": {
       "types": [
         "number"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "mutation_id": {
       "types": [
         "string"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "open_questions": {
       "types": [
         "array"
       ],
-      "presence": "199/243"
+      "presence": "199/245"
     },
     "owner_agent_id": {
       "types": [
         "string"
       ],
-      "presence": "3/243"
+      "presence": "3/245"
     },
     "phase": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "phases": {
       "types": [
         "array"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "protocol": {
       "types": [
         "object"
       ],
-      "presence": "221/243"
+      "presence": "221/245"
     },
     "request_hash": {
       "types": [
         "string"
       ],
-      "presence": "3/243"
+      "presence": "3/245"
     },
     "response": {
       "types": [
         "object"
       ],
-      "presence": "3/243"
+      "presence": "3/245"
     },
     "schema_version": {
       "types": [
         "number"
       ],
-      "presence": "222/243",
+      "presence": "222/245",
       "observed_short_values": [
         "1"
       ]
@@ -258,19 +247,19 @@
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "slots": {
       "types": [
         "array"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "status": {
       "types": [
         "string"
       ],
-      "presence": "222/243",
+      "presence": "222/245",
       "observed_short_values": [
         "cancelled",
         "completed",
@@ -281,61 +270,61 @@
       "types": [
         "object"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "store_root": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "stored_at": {
       "types": [
         "string"
       ],
-      "presence": "3/243"
+      "presence": "3/245"
     },
     "target_slot_generation": {
       "types": [
         "number"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "thread_snapshot": {
       "types": [
         "object"
       ],
-      "presence": "10/243"
+      "presence": "12/245"
     },
     "title": {
       "types": [
         "string"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "token": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "turn_id": {
       "types": [
         "string"
       ],
-      "presence": "4/243"
+      "presence": "4/245"
     },
     "updated_at": {
       "types": [
         "string"
       ],
-      "presence": "222/243"
+      "presence": "222/245"
     },
     "version": {
       "types": [
         "number"
       ],
-      "presence": "222/243",
+      "presence": "222/245",
       "observed_short_values": [
         "10",
         "11",

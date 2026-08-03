@@ -1,66 +1,66 @@
 {
   "entity": "claim",
-  "sampled": 644,
+  "sampled": 646,
   "fields": {
     "adopted_at": {
       "types": [
         "string"
       ],
-      "presence": "10/644"
+      "presence": "10/646"
     },
     "agent": {
       "types": [
         "string"
       ],
-      "presence": "644/644"
+      "presence": "646/646"
     },
     "agent_id": {
       "types": [
         "string"
       ],
-      "presence": "345/644"
+      "presence": "346/646"
     },
     "assignment_id": {
       "types": [
         "string"
       ],
-      "presence": "258/644"
+      "presence": "259/646"
     },
     "assignment_message_id": {
       "types": [
         "string"
       ],
-      "presence": "278/644"
+      "presence": "279/646"
     },
     "base_sha": {
       "types": [
         "string"
       ],
-      "presence": "22/644"
+      "presence": "24/646"
     },
     "created_at": {
       "types": [
         "string"
       ],
-      "presence": "644/644"
+      "presence": "646/646"
     },
     "description": {
       "types": [
         "string"
       ],
-      "presence": "644/644"
+      "presence": "646/646"
     },
     "expires_at": {
       "types": [
         "string"
       ],
-      "presence": "17/644"
+      "presence": "17/646"
     },
     "handoff_mode": {
       "types": [
         "string"
       ],
-      "presence": "159/644",
+      "presence": "160/646",
       "observed_short_values": [
         "integrator",
         "self-commit"
@@ -70,37 +70,37 @@
       "types": [
         "string"
       ],
-      "presence": "202/644"
+      "presence": "203/646"
     },
     "id": {
       "types": [
         "string"
       ],
-      "presence": "644/644"
+      "presence": "646/646"
     },
     "plan_id": {
       "types": [
         "string"
       ],
-      "presence": "315/644"
+      "presence": "316/646"
     },
     "project_id": {
       "types": [
         "string"
       ],
-      "presence": "202/644"
+      "presence": "203/646"
     },
     "released_at": {
       "types": [
         "string"
       ],
-      "presence": "642/644"
+      "presence": "644/646"
     },
     "schema_version": {
       "types": [
         "number"
       ],
-      "presence": "644/644",
+      "presence": "646/646",
       "observed_short_values": [
         "2"
       ]
@@ -109,19 +109,19 @@
       "types": [
         "string"
       ],
-      "presence": "644/644"
+      "presence": "646/646"
     },
     "session_id": {
       "types": [
         "string"
       ],
-      "presence": "355/644"
+      "presence": "356/646"
     },
     "status": {
       "types": [
         "string"
       ],
-      "presence": "644/644",
+      "presence": "646/646",
       "observed_short_values": [
         "active",
         "released"
@@ -131,13 +131,13 @@
       "types": [
         "string"
       ],
-      "presence": "302/644"
+      "presence": "303/646"
     },
     "worktree_path": {
       "types": [
         "string"
       ],
-      "presence": "355/644"
+      "presence": "356/646"
     }
   }
 }

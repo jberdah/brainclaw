@@ -140,4 +140,24 @@ describe('store-snapshot (pln#619)', { concurrency: false }, () => {
     assert.ok(claimShape.fields.status.observed_short_values.includes('active'), 'allowlisted enum values ARE kept');
     assert.ok(claimShape.fields.status.observed_short_values.includes('released'));
   });
+
+  it('a CUSTOM loop phase name never exports — current_phase is operator text, not an enum (round-2 P1)', () => {
+    // LoopSchema's current_phase is z.string().min(1) copied from
+    // phases[0].name: stock loops use standard names, but a custom preset can
+    // put ANY text there. It looked enum-like and sat on the allowlist — the
+    // reviewer traced the schema and evicted it.
+    fs.mkdirSync(path.join(store, 'loops'), { recursive: true });
+    fs.writeFileSync(path.join(store, 'loops', 'lop_x.json'), JSON.stringify({
+      schema_version: 1, id: 'lop_x', kind: 'ideation', status: 'open',
+      current_phase: 'secret customer phase', iteration_count: 0,
+    }));
+    const out = path.join(root, 'shapes');
+    const r = run(['fixtures', '--store', store, '--out', out]);
+    assert.equal(r.status, 0, r.stderr);
+    const serialized = fs.readFileSync(path.join(out, 'loop.shape.json'), 'utf-8');
+    assert.doesNotMatch(serialized, /secret customer phase/, 'custom phase names are free text');
+    const loopShape = JSON.parse(serialized);
+    assert.equal(loopShape.fields.current_phase.observed_short_values, undefined, 'no values for current_phase at all');
+    assert.ok(loopShape.fields.kind.observed_short_values.includes('ideation'), 'kind stays allowlisted (schema enum)');
+  });
 });
