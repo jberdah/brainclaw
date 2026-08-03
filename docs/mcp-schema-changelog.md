@@ -8,6 +8,31 @@ guarantees this changelog follows.
 
 ---
 
+## [1.20.2] — 2026-08-03
+
+**Added — `lane_result_stale` on the dispatch_status runtime snapshot (#167)**
+- Additive sibling of `runtime.lane_result`: a LANE-RESULT.json found at the
+  worktree root that belongs to a DIFFERENT assignment (a prior turn in a
+  reused worktree) now lands here — `{ assignment_id, status, summary }` —
+  and is NEVER treated as this dispatch's terminal signal. `lane_result`
+  itself is unchanged in shape; it is simply no longer populated by a foreign
+  file (that population was the trp_e824d2af defect, not a contract).
+
+**Added — new audited runtime-event reason (#166)**
+- `status_reason: "turn_failure_business_release"` on `run_failed` events:
+  the business release of a turn-owned lane's claim after a transport
+  failure, emitted by the loop convergence (replaces the GC cascade's
+  `gc_cascade_release_on_failure` for turn-owned lanes only; non-turn-owned
+  runs keep emitting the GC reason).
+
+**Changed — stale-warnings aggregate text now carries ids (#167)**
+- The `stale_warnings_aggregate` string embeds the folded item ids grouped by
+  entity (cap 8 per entity + overflow note) instead of recommending
+  `bclaw_find(status:'stale')`, which the engine cannot resolve. Prose-only;
+  no structured field changed.
+- Read contract only across all three: no tool added/removed/renamed, no
+  inputSchema change, no surface-fingerprint movement.
+
 ## [1.20.1] — 2026-08-02
 
 **Changed — `generated_surfaces_stale` recovery data is now true, and structured (#163)**
