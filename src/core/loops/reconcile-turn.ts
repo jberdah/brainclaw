@@ -11,7 +11,7 @@ import { createRuntimeEvent } from '../events.js';
 import { readCompletionSignals } from '../runtime-signals.js';
 import { buildFixCycleTask, type ReviewLoopNextTurn } from '../review-loop-close.js';
 import { withLoopLock, LockTimeoutError, LockLostError } from './lock.js';
-import type { LaneResult } from '../schema.js';
+import type { AgentRun, LaneResult } from '../schema.js';
 
 /**
  * reconcileTurn (pln#630 §8) — the ONE mutating convergence action for a
@@ -410,5 +410,165 @@ function convergeLockedTurn(
     auto_closed,
     loop_status,
     ...(next_turn ? { next_turn } : {}),
+  };
+}
+
+// ─── pln#641 (dec#151 option b) — business convergence of a FAILED turn ─────
+
+export interface ReconcileFailedTurnInput {
+  /** The reservation owning the dead attempt (resolved by the caller via findReservationByRunId). */
+  reservation: TurnReservation;
+  /** The run the transport reconciler just moved to failed/cancelled. */
+  run: AgentRun;
+  /** The transport-level reason, recorded as the turn's failure_reason. */
+  reason: string;
+  actor?: string;
+  cwd?: string;
+}
+
+export interface ReconcileFailedTurnResult {
+  /** True when the failure is durably recorded on the loop (or nothing was left to record). */
+  converged: boolean;
+  claim_released: boolean;
+  reason: string;
+}
+
+/**
+ * Converge a TURN-OWNED lane whose worker died at the TRANSPORT level (no lane
+ * result will ever arrive). dec#151, operator-decided option (b): the lane's
+ * claim is business state owned by its loop, so its release must be a business
+ * decision recorded ON the loop — through the same convergence family harvest
+ * uses (reconcileTurn) — never a side-effect of a transport verdict. Before
+ * this, the trp#433 GC cascade released the claim straight from the transport
+ * reconciler, which is exactly what the pln#638 6c effects boundary forbids.
+ *
+ * What "business decision" means concretely here: complete_turn(outcome:
+ * 'failed') writes the failure into the loop journal FIRST (crash-atomic WAL),
+ * and only then is the claim released — so a released claim always has a loop
+ * record explaining WHY, and a crash between the two converges on the next
+ * read-path pass (release is idempotent). Retry lanes are not starved: the
+ * release happens in the same lazy pass that inferred the failure, just via
+ * the loop's machinery instead of around it.
+ *
+ * Declines (converged:false — the claim STAYS, a later read-path pass retries):
+ *   - containment mismatch (never converge another store's loop/claim);
+ *   - lock contention (LockTimeout/LockLost);
+ *   - loop missing (a claim should not be stripped on evidence we cannot read).
+ * SUPERSEDED is converged:true WITHOUT release: a newer turn owns the slot, and
+ * claim REUSE across rounds is real (trp_e824d2af) — releasing the old round's
+ * claim would strip the live one.
+ */
+export function reconcileFailedTurn(input: ReconcileFailedTurnInput): ReconcileFailedTurnResult {
+  const { reservation, run, cwd } = input;
+  const actor = input.actor ?? 'reconciler';
+
+  // Containment gate — same rule as reconcileTurn (§8 Q6), same win32 case-fold.
+  const operatingRoot = path.resolve(cwd ?? process.cwd());
+  const reservationRoot = path.resolve(reservation.store_root);
+  const sameStore = process.platform === 'win32'
+    ? reservationRoot.toLowerCase() === operatingRoot.toLowerCase()
+    : reservationRoot === operatingRoot;
+  if (!sameStore) {
+    return { converged: false, claim_released: false, reason: `containment: reservation store_root ${reservation.store_root} != operating store ${operatingRoot}` };
+  }
+
+  try {
+    return withLoopLock<ReconcileFailedTurnResult>({
+      cwd,
+      intent: 'reconcile-failed-turn',
+      agentId: actor,
+      scope: { kind: 'loop', loopId: reservation.loop_id },
+      work: () => convergeFailedLockedTurn(reservation, run, input.reason, actor, cwd),
+    });
+  } catch (err) {
+    if (err instanceof LockTimeoutError || err instanceof LockLostError) {
+      return { converged: false, claim_released: false, reason: `deferred (${err.name}); the next read-path pass retries` };
+    }
+    throw err;
+  }
+}
+
+function convergeFailedLockedTurn(
+  reservation: TurnReservation,
+  run: AgentRun,
+  transportReason: string,
+  actor: string,
+  cwd: string | undefined,
+): ReconcileFailedTurnResult {
+  const releaseAudited = (claimId: string | undefined, why: string): boolean => {
+    if (!claimId) return false;
+    const before = (() => { try { return loadClaim(claimId, cwd)?.status; } catch { return undefined; } })();
+    releaseCoordinatorClaim(claimId, cwd);
+    const released = before === 'active';
+    if (released) {
+      try {
+        createRuntimeEvent({
+          agent: actor,
+          event_type: 'run_failed',
+          text: `Released claim ${claimId} as the BUSINESS convergence of failed turn ${reservation.turn_id}: ${why}`,
+          tags: ['loops', 'reconcile', 'claim-release', 'effects-boundary'],
+          assignment_id: reservation.child_ids.assignment_id,
+          run_id: run.id,
+          claim_id: claimId,
+          status_reason: 'turn_failure_business_release',
+        }, cwd);
+      } catch { /* observability best-effort — never undo the release */ }
+    }
+    return released;
+  };
+
+  const loop = getLoop(reservation.loop_id, cwd);
+  if (!loop) {
+    // No loop to record on — do NOT strip the claim on evidence we cannot read.
+    // A genuinely deleted loop leaves the claim to the staleness sweep.
+    return { converged: false, claim_released: false, reason: `loop ${reservation.loop_id} not found — claim retained for the staleness sweep` };
+  }
+
+  const authoritativeClaimId = loadAssignment(reservation.child_ids.assignment_id, cwd)?.claim_id ?? reservation.claim_id;
+
+  // Terminal loop: the business story is already over — releasing is pure
+  // idempotent cleanup, mirroring reconcileTurn's terminal early-return.
+  if (LOOP_TERMINAL.has(loop.status)) {
+    const released = releaseAudited(authoritativeClaimId, `loop already ${loop.status}`);
+    return { converged: true, claim_released: released, reason: `loop already ${loop.status} — release-only cleanup` };
+  }
+
+  const slot = loop.slots.find((s) => s.slot_id === reservation.slot_id);
+  if (!slot) {
+    return { converged: false, claim_released: false, reason: `slot ${reservation.slot_id} not in loop ${reservation.loop_id} — claim retained` };
+  }
+
+  // Superseded: a NEWER turn owns this slot. Claim reuse across rounds is real
+  // (trp_e824d2af — round 2 rode round 1's claim), so releasing here would strip
+  // the LIVE attempt. Nothing to do for the dead round; the live one converges it.
+  if (slot.current_turn_id !== undefined && slot.current_turn_id !== reservation.turn_id) {
+    return { converged: true, claim_released: false, reason: `turn ${reservation.turn_id} superseded by ${slot.current_turn_id} — claim belongs to the live turn` };
+  }
+
+  // Record the business failure on the loop FIRST (crash-atomic WAL), then
+  // release. A slot already terminal means a prior pass recorded it — skip the
+  // double-record, still release (idempotent).
+  const slotTerminal = slot.status === 'done' || slot.status === 'failed' || slot.status === 'cancelled';
+  if (!slotTerminal) {
+    try {
+      complete_turn({
+        id: loop.id,
+        slot_id: slot.slot_id,
+        actor,
+        outcome: 'failed',
+        failure_reason: transportReason,
+      }, cwd);
+    } catch (err) {
+      return { converged: false, claim_released: false, reason: `complete_turn failed: ${err instanceof Error ? err.message : String(err)} — claim retained, next pass retries` };
+    }
+  }
+
+  const released = releaseAudited(authoritativeClaimId, transportReason);
+  return {
+    converged: true,
+    claim_released: released,
+    reason: slotTerminal
+      ? `turn ${reservation.turn_id} failure already recorded — release re-attempted`
+      : `turn ${reservation.turn_id} failure recorded on loop ${loop.id}; claim ${released ? 'released' : 'not active'}`,
   };
 }

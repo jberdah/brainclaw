@@ -42,6 +42,7 @@ import { nowISO } from './ids.js';
 import { readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
 import { findReservationByRunId, evidenceMatchesAttempt, launchGrant, revokeLaunchGrant } from './loops/attempt-reservation.js';
 import type { TurnReservation } from './loops/attempt-reservation.js';
+import { reconcileFailedTurn } from './loops/reconcile-turn.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -345,11 +346,32 @@ function fsActiveWithin(evidence: ReconcileEvidence, windowMs: number): boolean 
  * accumulating for manual cleanup. Best-effort + idempotent: only an active claim
  * is released, and any error is swallowed (GC must never break reconciliation).
  * Inference only fires after the stale window with no life evidence, so this is
- * conservative. (Loop auto-close on failure is a follow-up.)
+ * conservative.
+ *
+ * pln#641 (dec#151 option b): a TURN-OWNED run's claim is business state owned
+ * by its LOOP, and the pln#638 6c effects boundary forbids a transport verdict
+ * from carrying business effects. So a run with a reservation routes through
+ * reconcileFailedTurn — the failure is recorded ON the loop (complete_turn
+ * outcome:'failed') and the release is that convergence's business decision,
+ * in the same lazy pass. When the loop path DECLINES (lock contention, loop
+ * missing, containment), the claim deliberately stays for the next read-path
+ * pass — never a forced fallback release, that would re-open the boundary hole.
+ * Non-turn-owned runs keep the trp#433 cascade unchanged.
  */
-function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string, terminalStatus: 'failed' | 'cancelled' = 'failed'): void {
+function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string, terminalStatus: 'failed' | 'cancelled' = 'failed', reason?: string): void {
   if (!run.claim_id) return;
   try {
+    const reservation = findReservationByRunId(run.id, cwd);
+    if (reservation) {
+      reconcileFailedTurn({
+        reservation,
+        run,
+        reason: reason ?? `run reconciled to ${terminalStatus}`,
+        actor,
+        cwd,
+      });
+      return;
+    }
     const claim = loadClaim(run.claim_id, cwd);
     if (claim && claim.status === 'active') {
       releaseClaim(run.claim_id, cwd);
@@ -559,7 +581,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
   const failHere = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(runId, 'failed', { actor, status_reason: reason }, cwd);
-      cascadeReleaseOnFailure(run, actor, cwd);
+      cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: runId, action: 'inferred_failed', reason, evidence, previous_status, current_status: 'failed' };
     } catch (err) {
       return {
@@ -686,7 +708,7 @@ function reconcileTurnOwnedPreRunLease(
   }
   try {
     transitionAgentRun(run.id, targetStatus, { actor, status_reason: reason }, cwd);
-    cascadeReleaseOnFailure(run, actor, cwd, targetStatus);
+    cascadeReleaseOnFailure(run, actor, cwd, targetStatus, reason);
     return { run_id: run.id, action, reason, evidence, previous_status, current_status: targetStatus };
   } catch (err) {
     return {
@@ -748,7 +770,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   const failRun = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(run.id, 'failed', { actor, status_reason: reason }, cwd);
-      cascadeReleaseOnFailure(run, actor, cwd);
+      cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: run.id, action: 'inferred_failed', reason, evidence, previous_status: run.status, current_status: 'failed' };
     } catch (err) {
       return {

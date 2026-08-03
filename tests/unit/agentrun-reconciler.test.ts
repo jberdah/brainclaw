@@ -6,6 +6,11 @@ import * as path from 'node:path';
 import { createAgentRun, loadAgentRun, transitionAgentRun } from '../../src/core/agentruns.js';
 import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { saveClaim, loadClaim } from '../../src/core/claims.js';
+import { openLoop, getLoop } from '../../src/core/loops/store.js';
+import {
+  reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds, deriveTurnId,
+} from '../../src/core/loops/attempt-reservation.js';
+import { listRuntimeEvents } from '../../src/core/events.js';
 import {
   reconcileAgentRun,
   reconcileAllOpenRuns,
@@ -429,6 +434,53 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
       nowMs: new Date(run.created_at).getTime() + 5 * 60_000, // inside stale window
     });
     assert.equal(loadClaim('clm_test', ws.dir).status, 'active', 'claim untouched while run still running');
+  });
+
+  it('pln#641 — a TURN-OWNED transport failure releases the claim through the LOOP, never the GC cascade', () => {
+    // dec#151 option (b): the lane's claim is business state owned by its loop.
+    // The transport reconciler still infers the run failed (a transport fact),
+    // but the claim release must arrive as a loop-recorded business decision —
+    // slot marked failed via complete_turn, audited as such — in the SAME lazy
+    // pass, so retry lanes are never starved.
+    const loop = openLoop({
+      kind: 'review', title: 'turn-owned failure', created_by: 'coord', mode: 'symmetric',
+      phases: [{ name: 'findings' }],
+      stop_condition: { kind: 'reviewer_green' },
+      slots: [{ slot_id: 'lsl_r', role: 'reviewer', agent: 'codex', status: 'assigned' }],
+    }, ws.dir);
+    const turnId = deriveTurnId(loop.id, 'lsl_r', 0);
+    const { assignment_id, run_id } = deriveChildIds(turnId);
+    reserve({
+      turn_id: turnId, loop_id: loop.id, slot_id: 'lsl_r', target_slot_generation: 0,
+      loop_version_at_reserve: loop.version, agent: 'codex', claim_id: 'clm_turn',
+      phase: 'findings', iteration: 0, store_root: ws.dir, cwd: ws.dir,
+      lease_deadline: new Date(Date.now() + 600_000).toISOString(),
+    }, ws.dir);
+    commitReservation(turnId, ws.dir);
+    armLaunch(turnId, { token: 'gen-1', epoch: 1, lease_deadline: new Date(Date.now() + 600_000).toISOString() }, ws.dir);
+    consumeLaunchGrant(turnId, 'gen-1', 1, ws.dir);
+    makeClaim({ id: 'clm_turn' });
+    makeAssignment({ id: assignment_id, claim_id: 'clm_turn' });
+    const run = createAgentRun({
+      id: run_id, short_label: run_id, assignment_id, claim_id: 'clm_turn', agent: 'codex',
+      transport: 'cli_spawn', scope: 'review-loop', description: 'turn-owned lane',
+      status: 'running', pid: 999_999,
+    }, ws.dir);
+
+    const result = reconcileAgentRun(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 35 * 60_000, // past stale, dead pid, no evidence
+    });
+    assert.equal(result.action, 'inferred_failed');
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'released', 'non-famine: released in the same lazy pass');
+    // The release is the LOOP's business decision, recorded and audited as such.
+    const reloaded = getLoop(loop.id, ws.dir)!;
+    assert.equal(reloaded.slots.find((s) => s.slot_id === 'lsl_r')!.status, 'failed',
+      'the loop journal carries the failure record');
+    const events = listRuntimeEvents(ws.dir);
+    assert.equal(events.filter((e) => e.status_reason === 'turn_failure_business_release').length, 1,
+      'audited as a business release');
+    assert.equal(events.filter((e) => e.status_reason === 'gc_cascade_release_on_failure').length, 0,
+      'the transport GC cascade must NOT fire for a turn-owned lane (pln#638 6c)');
   });
 
   it('sweep never cancels — defers dead-pid runs lacking evidence', () => {
