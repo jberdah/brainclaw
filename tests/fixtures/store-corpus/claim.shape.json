@@ -1,0 +1,143 @@
+{
+  "entity": "claim",
+  "sampled": 646,
+  "fields": {
+    "adopted_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "10/646"
+    },
+    "agent": {
+      "types": [
+        "string"
+      ],
+      "presence": "646/646"
+    },
+    "agent_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "346/646"
+    },
+    "assignment_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "259/646"
+    },
+    "assignment_message_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "279/646"
+    },
+    "base_sha": {
+      "types": [
+        "string"
+      ],
+      "presence": "24/646"
+    },
+    "created_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "646/646"
+    },
+    "description": {
+      "types": [
+        "string"
+      ],
+      "presence": "646/646"
+    },
+    "expires_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "17/646"
+    },
+    "handoff_mode": {
+      "types": [
+        "string"
+      ],
+      "presence": "160/646",
+      "observed_short_values": [
+        "integrator",
+        "self-commit"
+      ]
+    },
+    "host_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "203/646"
+    },
+    "id": {
+      "types": [
+        "string"
+      ],
+      "presence": "646/646"
+    },
+    "plan_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "316/646"
+    },
+    "project_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "203/646"
+    },
+    "released_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "644/646"
+    },
+    "schema_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "646/646",
+      "observed_short_values": [
+        "2"
+      ]
+    },
+    "scope": {
+      "types": [
+        "string"
+      ],
+      "presence": "646/646"
+    },
+    "session_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "356/646"
+    },
+    "status": {
+      "types": [
+        "string"
+      ],
+      "presence": "646/646",
+      "observed_short_values": [
+        "active",
+        "released"
+      ]
+    },
+    "user": {
+      "types": [
+        "string"
+      ],
+      "presence": "303/646"
+    },
+    "worktree_path": {
+      "types": [
+        "string"
+      ],
+      "presence": "356/646"
+    }
+  }
+}

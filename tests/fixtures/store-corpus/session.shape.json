@@ -1,0 +1,81 @@
+{
+  "entity": "session",
+  "sampled": 168,
+  "fields": {
+    "agent": {
+      "types": [
+        "string"
+      ],
+      "presence": "168/168"
+    },
+    "agent_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "168/168"
+    },
+    "branch": {
+      "types": [
+        "string"
+      ],
+      "presence": "158/168"
+    },
+    "host_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "168/168"
+    },
+    "isolation_mode": {
+      "types": [
+        "string"
+      ],
+      "presence": "158/168"
+    },
+    "last_seen_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "168/168"
+    },
+    "pid": {
+      "types": [
+        "number"
+      ],
+      "presence": "168/168"
+    },
+    "schema_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "168/168",
+      "observed_short_values": [
+        "2"
+      ]
+    },
+    "session_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "168/168"
+    },
+    "started_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "168/168"
+    },
+    "user": {
+      "types": [
+        "string"
+      ],
+      "presence": "168/168"
+    },
+    "worktree_path": {
+      "types": [
+        "string"
+      ],
+      "presence": "158/168"
+    }
+  }
+}

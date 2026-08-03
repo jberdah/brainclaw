@@ -1,0 +1,92 @@
+{
+  "entity": "sequence",
+  "sampled": 59,
+  "fields": {
+    "author": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "author_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "41/59"
+    },
+    "created_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "description": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "id": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "items": {
+      "types": [
+        "array"
+      ],
+      "presence": "59/59"
+    },
+    "name": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "owner": {
+      "types": [
+        "string"
+      ],
+      "presence": "18/59"
+    },
+    "schema_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "59/59",
+      "observed_short_values": [
+        "2"
+      ]
+    },
+    "short_label": {
+      "types": [
+        "string"
+      ],
+      "presence": "57/59"
+    },
+    "status": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59",
+      "observed_short_values": [
+        "active",
+        "archived",
+        "draft"
+      ]
+    },
+    "tags": {
+      "types": [
+        "array"
+      ],
+      "presence": "59/59"
+    },
+    "updated_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    }
+  }
+}
