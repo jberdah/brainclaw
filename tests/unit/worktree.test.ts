@@ -1302,6 +1302,31 @@ describe('re-dispatch hygiene (trp_e824d2af / trp_72b4e9b3)', () => {
     }
   });
 
+  it('adoption REFUSES on uncommitted TRACKED changes — a sandboxed worker\'s unharvested output (PR#167 P1)', () => {
+    // A sandboxed codex cannot commit (.git read-only): its whole review output
+    // lives as uncommitted tracked edits the coordinator harvests via
+    // `git diff HEAD`. The commit-count guard never sees those, and the hard
+    // reset would destroy them silently — EVEN under an explicit reset pin
+    // (the pin means "start from this base", never "discard unharvested work").
+    const { repo, git } = initRepo('bclaw-wt-dirt-');
+    const targetPath = resolveWorktreePath(repo, 'feat/dirt');
+    try {
+      fs.writeFileSync(path.join(repo, 'src.ts'), 'original');
+      git(['add', 'src.ts']);
+      git(['commit', '-m', 'base file']);
+      const wt = createWorktree(repo, 'feat/dirt');
+      fs.writeFileSync(path.join(wt, 'src.ts'), 'uncommitted review fix');
+      git(['commit', '--allow-empty', '-m', 'new base']);
+      assert.throws(
+        () => createWorktree(repo, 'feat/dirt', { baseRef: 'HEAD', resetExistingBranch: true }),
+        /unharvested output/i,
+      );
+      assert.equal(fs.readFileSync(path.join(wt, 'src.ts'), 'utf-8'), 'uncommitted review fix', 'the worker\'s diff survives');
+    } finally {
+      cleanup(repo, targetPath);
+    }
+  });
+
   it('createCoordinatorClaim HEALS a reused worktree-less claim instead of wedging the scope (trp_72b4e9b3)', () => {
     // The wedge: a claim persisted after a failed worktree creation had no
     // worktree_path, and every later dispatch reused it → "Reused claim has no

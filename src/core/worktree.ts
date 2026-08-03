@@ -941,6 +941,25 @@ export function createWorktree(
         throw new Error(`Cannot adopt worktree ${targetPath}: base ref ${requestedBase} does not resolve: ${baseRev.stderr.trim()}`);
       }
       const adoptBase = baseRev.stdout.trim();
+      // Review PR#167 P1 — TRACKED dirt is unharvested work, unconditionally.
+      // A sandboxed codex CANNOT commit (.git read-only): its entire review
+      // output lives as staged/unstaged edits the coordinator harvests via
+      // `git diff HEAD`. The commit guard below never sees those, and the
+      // hard reset would destroy them silently — even under an explicit
+      // reset pin, because the pin means "start from this base", never
+      // "discard a worker's unharvested output". Untracked files are fine:
+      // the reset leaves them and resetWorktreeToRef's residue check governs.
+      const dirt = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=no'], targetPath);
+      if (!dirt.ok) {
+        throw new Error(`Cannot adopt worktree ${targetPath}: dirty-state check failed: ${dirt.stderr.trim()}`);
+      }
+      if (dirt.stdout.length > 0) {
+        const files = dirt.stdout.split('\0').filter(Boolean).map((e) => e.slice(3)).slice(0, 5).join(', ');
+        throw new Error(
+          `Refusing to adopt worktree ${targetPath}: it has uncommitted TRACKED changes (${files}) — a sandboxed worker's ` +
+          `unharvested output. Harvest the diff first (git diff HEAD in that worktree) or remove the worktree.`,
+        );
+      }
       if (!options.resetExistingBranch) {
         const ahead = runGit(['rev-list', '--count', `${adoptBase}..${branchName}`], mainWorktreePath);
         const aheadCount = ahead.ok ? parseInt(ahead.stdout.trim(), 10) : NaN;
