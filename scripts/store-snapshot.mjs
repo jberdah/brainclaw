@@ -22,12 +22,13 @@
  *            then verify the restored tree against the same manifest — the
  *            acceptance criterion of pln#619 ("a restored store reproduces the
  *            metrics") executed literally.
- *   fixtures emit SHAPE fixtures (field names, value types, observed enum-ish
- *            values for short fields) per entity collection — NEVER raw
- *            values: the store carries private coordination text and the
- *            fixtures land in a public repo. Raw-value corpora stay inside
- *            the private snapshot; shapes are enough to build synthetic
- *            scenario stores for the regression pack.
+ *   fixtures emit SHAPE fixtures (field names, value types, and observed
+ *            values for an ALLOWLIST of enum-like fields only) per entity
+ *            collection — NEVER free text or identity values: the store
+ *            carries private coordination content and the fixtures land in a
+ *            public repo. Raw-value corpora stay inside the private snapshot;
+ *            shapes are enough to build synthetic scenario stores for the
+ *            regression pack.
  *
  * Snapshots default to ~/.brainclaw/snapshots/<store-basename>/<stamp>/ —
  * OUTSIDE any git repo: the store must never transit through a public remote.
@@ -67,15 +68,18 @@ function sha256File(absPath) {
 
 /**
  * One deterministic hash over the whole tree: sha256 of the sorted list of
- * `relpath\nsize\nsha256(file)\n` records. Any added/removed/altered file
+ * `relpath\0size\0sha256(file)\0` records. Any added/removed/altered file
  * changes it; file mtimes deliberately do NOT (a faithful copy keeps the hash).
+ * NUL-delimited (review PR#169 P2): a POSIX filename may legally contain a
+ * newline, so \n-delimited records let two distinct trees share a preimage —
+ * NUL is the one byte no filesystem allows in a path component.
  */
 function corpusHash(root, files) {
   const hash = crypto.createHash('sha256');
   for (const rel of files) {
     const abs = path.join(root, rel);
     const stat = fs.statSync(abs);
-    hash.update(`${rel}\n${stat.size}\n${sha256File(abs)}\n`);
+    hash.update(`${rel}\0${stat.size}\0${sha256File(abs)}\0`);
   }
   return hash.digest('hex');
 }
@@ -258,12 +262,18 @@ function cmdFixtures(args) {
     session: 'sessions',
   };
   fs.mkdirSync(out, { recursive: true });
-  const SHORT = 24;
-  // Identifying fields never export VALUES, only type/presence: a hostname or
-  // OS username is short enough to pass the length gate and these fixtures
-  // land in a public repo (caught live on the first real export: host_id and
-  // user values surfaced in session/claim shapes).
-  const IDENTITY_FIELD = /host|user|author|owner|email|machine/i;
+  // Review PR#169 P1 — value export is ALLOWLIST-ONLY. The first two attempts
+  // both leaked: a length heuristic let the hostname and OS username through
+  // (short identity values), and after the identity-field fix it STILL let
+  // short free text through (`text`, `description`, sequence names are free
+  // prose regardless of length). Only field names that are structurally
+  // enum-like ever export values; everything else exports type/presence only.
+  const SAFE_VALUE_FIELDS = new Set([
+    'schema_version', 'status', 'type', 'kind', 'outcome', 'priority',
+    'severity', 'visibility', 'transport', 'channel', 'message_type',
+    'note_type', 'current_phase', 'review_mode', 'handoff_mode',
+    'attempt_index', 'retry_count', 'max_retries', 'iteration_count', 'version',
+  ]);
   for (const [entity, rel] of Object.entries(collections)) {
     const dir = path.join(store, rel);
     if (!fs.existsSync(dir)) continue;
@@ -281,8 +291,7 @@ function cmdFixtures(args) {
         slot.seen += 1;
         const t = Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
         slot.types.add(t);
-        const identifying = IDENTITY_FIELD.test(key);
-        if (!identifying && ((t === 'string' && value.length <= SHORT && !/[a-f0-9]{8}/.test(value)) || t === 'boolean' || t === 'number')) {
+        if (SAFE_VALUE_FIELDS.has(key) && (t === 'string' || t === 'boolean' || t === 'number')) {
           if (slot.values.size < 12) slot.values.add(String(value));
         }
         fields.set(key, slot);
@@ -303,9 +312,10 @@ function cmdFixtures(args) {
     '# Store shape fixtures (pln#619)',
     '',
     'Field-shape summaries of a real dogfood brainclaw store: field names, value',
-    'types, presence ratios, and observed SHORT values (status enums, schema',
-    'versions). No free text and no ids are ever exported — raw-value corpora',
-    'stay inside the private snapshot (`store-snapshot.mjs create`).',
+    'types, presence ratios — and observed values for an ALLOWLIST of enum-like',
+    'fields only (status, type, severity, …). Free text, identity values and ids',
+    'are never exported, whatever their length — raw-value corpora stay inside',
+    'the private snapshot (`store-snapshot.mjs create`).',
     '',
     'Regenerate: `node scripts/store-snapshot.mjs fixtures --store <store> --out <dir>`',
     '',

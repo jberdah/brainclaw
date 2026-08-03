@@ -36,21 +36,32 @@ node scripts/store-snapshot.mjs fixtures [--store <dir>] --out <dir>
   pln#619 acceptance criterion ("a restored store reproduces the metrics")
   executed on every restore.
 - **fixtures** exports SHAPE summaries per entity collection (field names,
-  value types, presence ratios, observed SHORT enum-ish values). Free text is
-  never exported, and identity fields (host/user/author/owner/email/machine)
-  export type/presence only — both guards exist because the very first real
-  export leaked a hostname and an OS username toward the public repo.
-  Committed under `tests/fixtures/store-corpus/` for the regression pack.
+  value types, presence ratios) and observed values for an ALLOWLIST of
+  enum-like field names only (status, type, severity, …). Free text and
+  identity values are never exported, whatever their length — the rule is
+  allowlist-only because two heuristics failed before it: a length gate leaked
+  the hostname and OS username, and its identity-field patch still leaked
+  short free text (adversarial review of PR #169 caught it in the shipped
+  fixtures). Committed under `tests/fixtures/store-corpus/` for the
+  regression pack.
+
+The corpus hash serializes records NUL-delimited: a POSIX filename may legally
+contain a newline, so newline-delimited records would let two distinct trees
+share a preimage (same review, finding 2).
 
 ## Baseline of record
 
 The pre-curation baseline of 2026-08-03 (brainclaw 1.20.2, store at ~1.9 GB /
-11 951 files, 643 claims / 295 assignments / 240 loops):
+12 121 files, 644 claims / 296 assignments / 243 loops):
 
 ```
-~/.brainclaw/snapshots/shared_agent_memory_mvp/2026-08-03T09-38-35-129Z
-corpus_hash 399599d1789a8d776a16ae8e7643a2305fad2db35e87d95b4c0adc10cf89c9ec
+~/.brainclaw/snapshots/shared_agent_memory_mvp/2026-08-03T09-53-14-067Z
+corpus_hash 2732797349b1d61c38ba838f8d03ccba6fe901c755788ba212f0375db479094c
 ```
+
+(The candidate-triage curation of 2026-08-03 was performed against the earlier
+capture of the same morning; this retake follows the hash-encoding fix and
+supersedes it.)
 
 Restore-verified on capture day (hash + entity counts reproduced in an
 isolated target). Any later "did the curation lose something?" question is

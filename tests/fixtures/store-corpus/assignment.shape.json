@@ -1,261 +1,120 @@
 {
   "entity": "assignment",
-  "sampled": 295,
+  "sampled": 296,
   "fields": {
     "acceptance_ttl_ms": {
       "types": [
         "number"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "900000"
-      ]
+      "presence": "296/296"
     },
     "accepted_at": {
       "types": [
         "string"
       ],
-      "presence": "101/295",
-      "observed_short_values": [
-        "2026-04-13T19:23:10.552Z",
-        "2026-04-13T20:23:35.009Z",
-        "2026-05-05T13:03:26.197Z",
-        "2026-05-05T13:45:15.940Z",
-        "2026-05-22T08:40:57.141Z",
-        "2026-05-26T14:54:14.589Z",
-        "2026-06-10T20:18:34.989Z",
-        "2026-06-10T20:38:20.008Z",
-        "2026-06-10T22:32:02.835Z",
-        "2026-06-12T14:54:50.730Z",
-        "2026-06-12T14:55:10.507Z",
-        "2026-08-02T07:59:48.281Z"
-      ]
+      "presence": "102/296"
     },
     "agent": {
       "types": [
         "string"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "claude-code",
-        "claude-sonnet",
-        "cline",
-        "codex",
-        "github-copilot",
-        "opencode"
-      ]
+      "presence": "296/296"
     },
     "artifacts": {
       "types": [
         "array"
       ],
-      "presence": "295/295"
+      "presence": "296/296"
     },
     "cancelled_at": {
       "types": [
         "string"
       ],
-      "presence": "80/295",
-      "observed_short_values": [
-        "2026-06-02T20:34:35.827Z",
-        "2026-06-02T20:35:39.017Z",
-        "2026-06-02T20:36:12.527Z",
-        "2026-06-02T20:36:51.109Z",
-        "2026-06-02T20:36:55.190Z",
-        "2026-06-02T20:36:58.995Z",
-        "2026-06-02T20:37:14.620Z",
-        "2026-06-02T20:37:44.711Z",
-        "2026-06-02T20:38:02.908Z",
-        "2026-06-02T20:38:42.922Z",
-        "2026-07-21T09:11:44.314Z",
-        "2026-08-02T20:56:34.526Z"
-      ]
+      "presence": "80/296"
     },
     "claim_id": {
       "types": [
         "string"
       ],
-      "presence": "295/295"
+      "presence": "296/296"
     },
     "completed_at": {
       "types": [
         "string"
       ],
-      "presence": "148/295",
-      "observed_short_values": [
-        "2026-04-13T19:47:57.984Z",
-        "2026-04-13T20:23:46.558Z",
-        "2026-05-05T13:10:05.687Z",
-        "2026-05-22T08:44:53.773Z",
-        "2026-06-10T20:26:39.014Z",
-        "2026-06-12T12:00:31.189Z",
-        "2026-06-12T15:01:30.916Z",
-        "2026-06-12T15:12:56.937Z",
-        "2026-06-13T22:13:55.152Z",
-        "2026-06-14T07:14:25.033Z",
-        "2026-06-20T13:43:59.453Z",
-        "2026-07-18T15:23:18.271Z"
-      ]
+      "presence": "149/296"
     },
     "created_at": {
       "types": [
         "string"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "2026-04-14T13:47:42.695Z",
-        "2026-04-14T20:59:25.588Z",
-        "2026-04-25T08:27:13.752Z",
-        "2026-04-25T12:01:42.546Z",
-        "2026-05-05T13:02:46.304Z",
-        "2026-05-22T06:48:44.525Z",
-        "2026-05-29T07:20:53.652Z",
-        "2026-06-10T20:17:02.987Z",
-        "2026-06-10T21:50:47.211Z",
-        "2026-06-12T11:47:42.301Z",
-        "2026-06-12T14:52:58.830Z",
-        "2026-07-18T12:21:59.243Z"
-      ]
+      "presence": "296/296"
     },
     "description": {
       "types": [
         "string"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "Check metadata",
-        "First assignment",
-        "Fix the bug",
-        "Original task",
-        "Refactor delivery module",
-        "Second assignment",
-        "Track side effects",
-        "do the work"
-      ]
+      "presence": "296/296"
     },
     "dispatcher_agent": {
       "types": [
         "string"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "Codex",
-        "antigravity",
-        "bclaw_coordinate",
-        "claude-code",
-        "codex"
-      ]
+      "presence": "296/296"
     },
     "dispatcher_session_id": {
       "types": [
         "string"
       ],
-      "presence": "163/295"
+      "presence": "164/296"
     },
     "error_message": {
       "types": [
         "string"
       ],
-      "presence": "10/295"
+      "presence": "10/296"
     },
     "expired_at": {
       "types": [
         "string"
       ],
-      "presence": "42/295",
-      "observed_short_values": [
-        "2026-04-14T11:31:29.886Z",
-        "2026-04-14T13:47:12.367Z",
-        "2026-04-14T13:47:12.521Z",
-        "2026-04-14T20:43:30.010Z",
-        "2026-04-15T08:40:30.071Z",
-        "2026-04-15T11:06:46.721Z",
-        "2026-04-25T08:26:44.470Z",
-        "2026-04-25T19:45:46.307Z",
-        "2026-06-10T12:51:59.691Z",
-        "2026-06-10T12:52:00.281Z",
-        "2026-06-10T12:52:01.754Z",
-        "2026-06-10T12:52:06.430Z"
-      ]
+      "presence": "42/296"
     },
     "failed_at": {
       "types": [
         "string"
       ],
-      "presence": "10/295",
-      "observed_short_values": [
-        "2026-04-25T08:28:00.014Z",
-        "2026-04-25T08:28:05.856Z",
-        "2026-04-25T08:28:11.999Z",
-        "2026-04-25T08:28:17.608Z",
-        "2026-04-25T08:28:23.285Z",
-        "2026-04-25T08:28:28.986Z",
-        "2026-04-25T10:01:33.665Z",
-        "2026-04-25T10:18:55.076Z",
-        "2026-07-05T05:58:34.971Z",
-        "2026-07-05T05:58:36.247Z"
-      ]
+      "presence": "10/296"
     },
     "heartbeat_ttl_ms": {
       "types": [
         "number"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "1800000"
-      ]
+      "presence": "296/296"
     },
     "id": {
       "types": [
         "string"
       ],
-      "presence": "295/295"
+      "presence": "296/296"
     },
     "lane": {
       "types": [
         "string"
       ],
-      "presence": "68/295",
-      "observed_short_values": [
-        "B-kilocode",
-        "D-mcp-cleanup",
-        "arrival",
-        "ci",
-        "cleanup-candidates",
-        "ext-actions-core",
-        "memory",
-        "opencode-continue-perms",
-        "review-pass",
-        "schema-source",
-        "store-chain-cli",
-        "writable-roots-spike"
-      ]
+      "presence": "68/296"
     },
     "last_heartbeat_at": {
       "types": [
         "string"
       ],
-      "presence": "294/295",
-      "observed_short_values": [
-        "2026-04-14T20:43:30.010Z",
-        "2026-04-15T08:40:30.071Z",
-        "2026-04-25T08:28:11.999Z",
-        "2026-04-25T19:45:46.307Z",
-        "2026-05-05T13:10:05.687Z",
-        "2026-06-02T20:37:44.711Z",
-        "2026-06-02T20:38:42.922Z",
-        "2026-06-10T20:26:39.014Z",
-        "2026-06-10T23:38:20.525Z",
-        "2026-06-12T12:00:31.189Z",
-        "2026-06-12T15:12:56.937Z",
-        "2026-07-18T15:23:18.271Z"
-      ]
+      "presence": "295/296"
     },
     "max_retries": {
       "types": [
         "number"
       ],
-      "presence": "295/295",
+      "presence": "296/296",
       "observed_short_values": [
         "2"
       ]
@@ -264,39 +123,25 @@
       "types": [
         "string"
       ],
-      "presence": "292/295"
+      "presence": "293/296"
     },
     "offered_at": {
       "types": [
         "string"
       ],
-      "presence": "293/295",
-      "observed_short_values": [
-        "2026-04-14T13:48:07.973Z",
-        "2026-04-14T20:59:34.850Z",
-        "2026-04-25T08:27:18.942Z",
-        "2026-04-25T12:01:45.814Z",
-        "2026-05-05T13:02:49.397Z",
-        "2026-05-22T06:48:51.088Z",
-        "2026-05-29T07:20:56.836Z",
-        "2026-06-10T20:17:11.546Z",
-        "2026-06-10T21:50:55.018Z",
-        "2026-06-12T11:47:48.304Z",
-        "2026-06-12T14:53:07.103Z",
-        "2026-07-18T12:22:07.233Z"
-      ]
+      "presence": "294/296"
     },
     "plan_id": {
       "types": [
         "string"
       ],
-      "presence": "68/295"
+      "presence": "68/296"
     },
     "retry_count": {
       "types": [
         "number"
       ],
-      "presence": "295/295",
+      "presence": "296/296",
       "observed_short_values": [
         "0"
       ]
@@ -305,7 +150,7 @@
       "types": [
         "number"
       ],
-      "presence": "295/295",
+      "presence": "296/296",
       "observed_short_values": [
         "2"
       ]
@@ -314,82 +159,37 @@
       "types": [
         "string"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "C:/tmp",
-        "curation-triage-report",
-        "src/core/bug.ts",
-        "src/core/claims.ts",
-        "src/core/delivery.ts",
-        "src/core/dispatcher.ts",
-        "src/core/dup.ts",
-        "src/core/next-actions.ts",
-        "src/effects.ts",
-        "src/feature.ts",
-        "src/foo.ts",
-        "src/meta.ts"
-      ]
+      "presence": "296/296"
     },
     "sequence_id": {
       "types": [
         "string"
       ],
-      "presence": "68/295"
+      "presence": "68/296"
     },
     "session_id": {
       "types": [
         "string"
       ],
-      "presence": "63/295",
-      "observed_short_values": [
-        "unknown"
-      ]
+      "presence": "64/296"
     },
     "short_label": {
       "types": [
         "string"
       ],
-      "presence": "295/295",
-      "observed_short_values": [
-        "asgn#12",
-        "asgn#128",
-        "asgn#15",
-        "asgn#217",
-        "asgn#221",
-        "asgn#233",
-        "asgn#234",
-        "asgn#25",
-        "asgn#309",
-        "asgn#37",
-        "asgn#45",
-        "asgn#94"
-      ]
+      "presence": "296/296"
     },
     "started_at": {
       "types": [
         "string"
       ],
-      "presence": "90/295",
-      "observed_short_values": [
-        "2026-04-13T19:23:19.010Z",
-        "2026-04-13T20:23:36.888Z",
-        "2026-05-05T13:04:05.879Z",
-        "2026-05-05T13:45:24.283Z",
-        "2026-05-22T08:41:15.799Z",
-        "2026-05-26T14:54:24.839Z",
-        "2026-06-10T20:18:38.649Z",
-        "2026-06-10T21:50:31.226Z",
-        "2026-06-12T14:55:00.817Z",
-        "2026-06-12T14:55:18.422Z",
-        "2026-07-23T21:23:28.219Z",
-        "2026-08-02T07:59:52.441Z"
-      ]
+      "presence": "91/296"
     },
     "status": {
       "types": [
         "string"
       ],
-      "presence": "295/295",
+      "presence": "296/296",
       "observed_short_values": [
         "cancelled",
         "completed",
@@ -404,62 +204,31 @@
       "types": [
         "string"
       ],
-      "presence": "288/295",
-      "observed_short_values": [
-        "pln#515 step 1 done"
-      ]
+      "presence": "289/296"
     },
     "tags": {
       "types": [
         "array"
       ],
-      "presence": "295/295"
+      "presence": "296/296"
     },
     "timed_out_at": {
       "types": [
         "string"
       ],
-      "presence": "12/295",
-      "observed_short_values": [
-        "2026-04-15T08:40:30.266Z",
-        "2026-06-10T21:33:23.614Z",
-        "2026-06-10T21:33:24.041Z",
-        "2026-06-10T21:33:24.566Z",
-        "2026-06-10T21:33:24.997Z",
-        "2026-06-10T22:32:01.070Z",
-        "2026-06-10T22:32:01.958Z",
-        "2026-06-10T23:38:20.525Z",
-        "2026-07-04T10:25:35.543Z",
-        "2026-07-10T12:01:04.857Z",
-        "2026-07-10T12:01:06.422Z",
-        "2026-08-02T06:34:47.205Z"
-      ]
+      "presence": "12/296"
     },
     "updated_at": {
       "types": [
         "string"
       ],
-      "presence": "294/295",
-      "observed_short_values": [
-        "2026-04-14T20:43:30.010Z",
-        "2026-04-15T08:40:30.071Z",
-        "2026-04-25T08:28:11.999Z",
-        "2026-04-25T19:45:46.307Z",
-        "2026-05-05T13:10:05.687Z",
-        "2026-06-02T20:37:44.711Z",
-        "2026-06-02T20:38:42.922Z",
-        "2026-06-10T20:26:39.014Z",
-        "2026-06-10T23:38:20.525Z",
-        "2026-06-12T12:00:31.189Z",
-        "2026-06-12T15:12:56.937Z",
-        "2026-07-18T15:23:18.271Z"
-      ]
+      "presence": "295/296"
     },
     "worktree_path": {
       "types": [
         "string"
       ],
-      "presence": "64/295"
+      "presence": "64/296"
     }
   }
 }

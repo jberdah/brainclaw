@@ -116,13 +116,15 @@ describe('store-snapshot (pln#619)', { concurrency: false }, () => {
     assert.match(restored.stderr, /not empty/);
   });
 
-  it('fixtures export SHAPES only — free text and identity values never leak', () => {
-    // The identity redaction was added after the FIRST real export leaked the
-    // machine hostname and OS username into would-be public fixtures: both
-    // are short enough to pass the length gate, so field NAMES gate them.
+  it('fixtures export SHAPES only — value export is allowlist-only (review PR#169 P1)', () => {
+    // Two heuristics failed before this allowlist: a length gate leaked the
+    // hostname and OS username (short identity values), and its identity-field
+    // patch STILL leaked short free text (`text`, `description`, sequence
+    // names are prose regardless of length). Only enum-like field NAMES may
+    // export values.
     fs.writeFileSync(path.join(store, 'coordination', 'claims', 'clm_b.json'), JSON.stringify({
       schema_version: 2, id: 'clm_b', agent: 'codex', scope: 'src/y', status: 'released',
-      host_id: 'mymachine01', user: 'realuser',
+      host_id: 'mymachine01', user: 'realuser', description: 'short secret',
     }));
     const out = path.join(root, 'shapes');
     const r = run(['fixtures', '--store', store, '--out', out]);
@@ -130,9 +132,12 @@ describe('store-snapshot (pln#619)', { concurrency: false }, () => {
     const claimShape = JSON.parse(fs.readFileSync(path.join(out, 'claim.shape.json'), 'utf-8'));
     assert.deepEqual(claimShape.fields.description.types, ['string']);
     const serialized = fs.readFileSync(path.join(out, 'claim.shape.json'), 'utf-8');
-    assert.doesNotMatch(serialized, /long private description/, 'free text must never reach fixtures');
+    assert.doesNotMatch(serialized, /long private description/, 'long free text must never reach fixtures');
+    assert.doesNotMatch(serialized, /short secret/, 'SHORT free text must never reach fixtures either');
     assert.doesNotMatch(serialized, /mymachine01|realuser/, 'identity field VALUES must never reach fixtures');
-    assert.deepEqual(claimShape.fields.host_id.types, ['string'], 'identity fields keep type/presence');
-    assert.ok(claimShape.fields.status.observed_short_values.includes('active'), 'short enum-ish values ARE kept');
+    assert.doesNotMatch(serialized, /codex|src\/y|clm_b/, 'agent names, scopes and ids are not allowlisted');
+    assert.deepEqual(claimShape.fields.host_id.types, ['string'], 'non-allowlisted fields keep type/presence');
+    assert.ok(claimShape.fields.status.observed_short_values.includes('active'), 'allowlisted enum values ARE kept');
+    assert.ok(claimShape.fields.status.observed_short_values.includes('released'));
   });
 });
