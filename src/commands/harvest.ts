@@ -28,6 +28,7 @@ import { closeIdeationLoopFromLaneResult } from '../core/ideation-loop-close.js'
 import { dispatchReviewLoopTurn, turnOwnedReviewEnabled } from '../core/review-loop-turn-dispatch.js';
 import { reconcileTurn, type ReconcileTurnResult } from '../core/loops/reconcile-turn.js';
 import { findReservationByAssignmentId, type TurnReservation } from '../core/loops/attempt-reservation.js';
+import { getLoop } from '../core/loops/store.js';
 import { readCompletionSignals } from '../core/runtime-signals.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
 import { toWarningDetail } from '../core/warnings.js';
@@ -75,8 +76,9 @@ function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): { reservation: Tu
 function reconcileTurnOwnedReviewLane(
   lane: LaneResult,
   cwd: string,
+  evidence?: { reservation: TurnReservation; nonce: string },
 ): { reservation: TurnReservation; result: ReconcileTurnResult } | undefined {
-  const ev = turnOwnedLaneEvidence(lane, cwd);
+  const ev = evidence ?? turnOwnedLaneEvidence(lane, cwd);
   if (!ev) return undefined; // legacy lane OR no turn-keyed evidence — caller runs the legacy path
   const { reservation, nonce } = ev;
   const enrichedLane: LaneResult = {
@@ -107,6 +109,62 @@ function reconcileToReviewLoopResult(
     reason: rr.reason,
     loop_status: rr.loop_status,
   };
+}
+
+/**
+ * pln#644 — the warn-only branches must stay QUIET for a lane whose turn is no
+ * longer the live one: a prior round's LANE-RESULT re-scanned by `harvest --all`
+ * after the loop advanced (superseded) or closed (terminal) is a healthy flow,
+ * not a stall. Warning there would train operators to ignore the one warning
+ * that matters. Only an OPEN loop whose slot still points at THIS turn is
+ * actually awaiting convergence.
+ */
+function loopTurnAwaitsConvergence(reservation: TurnReservation, cwd: string): boolean {
+  const loop = getLoop(reservation.loop_id, cwd);
+  if (!loop) return false;
+  // Only a live, advancing loop is awaiting convergence (PR #171 review P2-1).
+  // 'blocked' (iteration cap) is in reconcileTurn's LOOP_TERMINAL set, and a
+  // 'paused' loop refuses advancement until resumed — advising `--integrate`
+  // on either would be a false alarm. 'open' is the only non-terminal,
+  // advancing status (LoopStatus non-terminal = 'open' | 'paused').
+  if (loop.status !== 'open') return false;
+  const slot = loop.slots.find((s) => s.slot_id === reservation.slot_id);
+  if (!slot) return false;
+  // Mirror reconcileTurn's superseded guard exactly: an UNSET current_turn_id is
+  // "not superseded" (a dispatch whose turn() never rebound the slot pointer is
+  // still this turn's attempt), only a pointer to a DIFFERENT turn means the
+  // slot moved on and the stale lane deserves silence, not a warning.
+  return slot.current_turn_id === undefined || slot.current_turn_id === reservation.turn_id;
+}
+
+/**
+ * pln#644 — the loud half of "converge or fail loudly". The message names the
+ * exact command that finalizes the turn (`harvest --integrate`) AND the manual
+ * loop-drive alternative, because the two lived stalls (2026-08-02/03) were
+ * both resolved manually once the coordinator finally noticed the open turn.
+ */
+function reviewTurnNotConvergedWarning(lane: LaneResult, reservation: TurnReservation, why: string): WarningDetail {
+  return toWarningDetail({
+    code: 'review_turn_not_converged',
+    message:
+      `Turn-owned review lane ${lane.assignment_id} harvested report-only: loop ${reservation.loop_id} ` +
+      `turn ${reservation.turn_id} is NOT converged — ${why}. ` +
+      `Run \`brainclaw harvest --integrate ${lane.assignment_id}\` to finalize it ` +
+      `(records the verdict; on request_changes it also drives the fix cycle), ` +
+      `or drive the loop manually (bclaw_loop add_artifact + complete_turn).`,
+    data: {
+      assignment_id: lane.assignment_id,
+      loop_id: reservation.loop_id,
+      turn_id: reservation.turn_id,
+      review_verdict: lane.review_verdict ?? null,
+      reason: why,
+    },
+    next_actions: [{
+      tool: 'bclaw_loop',
+      args: { intent: 'get', loop_id: reservation.loop_id },
+      when: 'inspect the open turn before converging it via --integrate or a manual complete_turn',
+    }],
+  });
 }
 
 export interface HarvestOptions {
@@ -449,19 +507,53 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // PR2: cycleOnRequestChanges=false — the report path only closes on approve;
     // it must NOT advance a request_changes cycle it cannot follow through on
     // (no re-dispatch, no claim retention). `harvest --integrate` owns the cycle.
+    // Hoisted for the catch below (PR #171 review P2-2): if turn-owned evidence was
+    // found before a throw, the swallowed failure must still surface as a warning.
+    let turnEvidenceForCatch: { reservation: TurnReservation; nonce: string } | undefined;
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
       if (laneAssignment) {
-        // pln#630 PR3a — a TURN-OWNED review lane (reservation + turn-keyed evidence) is finalized
-        // ONLY by reconcileTurn on the `--integrate` path (which owns claim/worktree teardown). The
-        // report path must NOT pre-empt it with a legacy close (which would terminalize the loop and
-        // strand the turn-owned run). So skip the legacy review-close for such a lane. Kill-switch
-        // (=0), a legacy lane (no reservation), OR a reservation WITHOUT evidence (review Finding 1:
-        // an inbox_only/non-ack-wrapped dispatch that never wrote a sentinel) → false → the lane
-        // takes the unchanged legacy close so it still converges. Ideation stays legacy (review-only).
-        const laneIsTurnOwned = turnOwnedReviewEnabled() && !!turnOwnedLaneEvidence(lane, cwd);
-        if (!laneIsTurnOwned) {
+        // pln#644 (supersedes the pln#630 PR3a report-path deferral) — a TURN-OWNED review lane
+        // used to be skipped ENTIRELY here (finalization deferred to `--integrate`) with no
+        // signal at all: the operator ran `brainclaw harvest <asgn>`, read "1 harvested", and
+        // the loop turn silently stayed open. That stalled two live loops on 2026-08-02/03
+        // (lop_626271ee10ad09d8, lop_4d869568bd99ddc0), both converged by hand. The report
+        // path now converges what it safely CAN and says what it can't:
+        //   - APPROVE → reconcileTurn right here — the same exactly-once idempotent finalizer
+        //     `--integrate` uses (mirrors the pln#638 1c ideation closer firing on this path).
+        //     Read-strict is NOT weakened: evidence still comes from the lane keys or the
+        //     wrapper sentinel, and a mismatch still refuses (loudly, below).
+        //   - REQUEST_CHANGES / no verdict / refused evidence → the loop is left alone (the
+        //     report path still cannot follow through on a fix cycle: no re-dispatch, no
+        //     commit-on-behalf — `--integrate` owns that) but a `review_turn_not_converged`
+        //     WARNING now names the open turn and the recovery. Never a silent stall.
+        // Kill-switch (=0), a legacy lane (no reservation), OR a reservation WITHOUT evidence
+        // (review Finding 1: an inbox_only/non-ack-wrapped dispatch that never wrote a
+        // sentinel) → the lane takes the unchanged legacy close so it still converges.
+        // Ideation stays legacy (review-only).
+        const laneTurnEvidence = turnOwnedReviewEnabled() ? turnOwnedLaneEvidence(lane, cwd) : undefined;
+        turnEvidenceForCatch = laneTurnEvidence;
+        if (!laneTurnEvidence) {
           closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
+        } else if (lane.review_verdict === 'approve') {
+          const rr = reconcileTurnOwnedReviewLane(lane, cwd, laneTurnEvidence);
+          // Reason-based quietness (PR #171 review P2-1 refinement): a terminal loop
+          // returns reconciled:true (idempotent no-op) and a superseded turn is the one
+          // healthy decline (`harvest --all` over a prior round's lane) — everything
+          // else (refused evidence, deferred lock, loop/slot not found, contradiction,
+          // paused complete_turn refusal) is a live approve that did NOT land and must
+          // say so. No getLoop re-read here: the decline reason already discriminates,
+          // and the loop store itself may be the failing component.
+          if (rr && !rr.result.reconciled && !/superseded/.test(rr.result.reason ?? '')) {
+            result.warnings.push(reviewTurnNotConvergedWarning(
+              lane, laneTurnEvidence.reservation, `reconcileTurn refused: ${rr.result.reason ?? 'no reason given'}`,
+            ));
+          }
+        } else if (loopTurnAwaitsConvergence(laneTurnEvidence.reservation, cwd)) {
+          const why = lane.review_verdict === 'request_changes'
+            ? 'a request_changes fix cycle needs re-dispatch + commit-on-behalf, which the report path does not do'
+            : 'the lane carries no review_verdict, so nothing proves the reviewer reached a verdict';
+          result.warnings.push(reviewTurnNotConvergedWarning(lane, laneTurnEvidence.reservation, why));
         }
         // pln#521 P2-bis — the ideation analog: a critic lane records its critique +
         // advances the ideation loop. Returns undefined for non-ideate scopes (no-op here).
@@ -484,7 +576,24 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
           }
         }
       }
-    } catch { /* never block harvest on loop-close */ }
+    } catch (err) {
+      // Never block harvest on loop-close — but a swallowed failure must not be
+      // SILENT for a turn-owned lane (PR #171 review P2-2): before this warning,
+      // an unexpected reconcile/store error left the operator with "1 harvested,
+      // 0 error(s)" and an open loop turn — the exact stall pln#644 exists to
+      // kill. Deliberately no liveness/superseded re-check here: that would
+      // re-read the loop store, which may be the very component that just threw
+      // (getLoop propagates parse errors). A rare over-warning on a broken store
+      // beats a silent stall on a live turn.
+      if (turnEvidenceForCatch) {
+        try {
+          result.warnings.push(reviewTurnNotConvergedWarning(
+            lane, turnEvidenceForCatch.reservation,
+            `loop-close failed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+          ));
+        } catch { /* truly never block harvest */ }
+      }
+    }
 
     const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
     if (fs.existsSync(marker)) {
@@ -1262,6 +1371,10 @@ export async function runHarvestLane(assignmentId: string | undefined, options: 
       harvested: result.harvested,
       skipped: result.skipped,
       errors: result.errors,
+      // pln#644 — warnings (review_turn_not_converged, claim conformity) were
+      // collected but never emitted on ANY channel; the silent half of the
+      // 2026-08-02/03 review-loop stalls.
+      warnings: result.warnings,
     }, null, 2));
     return;
   }
@@ -1292,5 +1405,11 @@ export async function runHarvestLane(assignmentId: string | undefined, options: 
   for (const err of result.errors) {
     console.error(`  ✗ ${err}`);
   }
-  console.log(`\n✔ Lane harvest complete${dryTag}: ${result.harvested.length} harvested, ${result.skipped.length} skipped, ${result.errors.length} error(s).`);
+  // pln#644 — warnings must reach the operator's eyes: a turn-owned review lane
+  // whose loop turn did not converge used to vanish behind "N harvested".
+  for (const w of result.warnings) {
+    console.log(`  ⚠ ${w.message}`);
+  }
+  const warnTag = result.warnings.length > 0 ? `, ${result.warnings.length} warning(s)` : '';
+  console.log(`\n✔ Lane harvest complete${dryTag}: ${result.harvested.length} harvested, ${result.skipped.length} skipped, ${result.errors.length} error(s)${warnTag}.`);
 }
