@@ -42,6 +42,7 @@ import { nowISO } from './ids.js';
 import { readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
 import { findReservationByRunId, evidenceMatchesAttempt, launchGrant, revokeLaunchGrant } from './loops/attempt-reservation.js';
 import type { TurnReservation } from './loops/attempt-reservation.js';
+import { reconcileFailedTurn } from './loops/reconcile-turn.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -345,11 +346,32 @@ function fsActiveWithin(evidence: ReconcileEvidence, windowMs: number): boolean 
  * accumulating for manual cleanup. Best-effort + idempotent: only an active claim
  * is released, and any error is swallowed (GC must never break reconciliation).
  * Inference only fires after the stale window with no life evidence, so this is
- * conservative. (Loop auto-close on failure is a follow-up.)
+ * conservative.
+ *
+ * pln#641 (dec#151 option b): a TURN-OWNED run's claim is business state owned
+ * by its LOOP, and the pln#638 6c effects boundary forbids a transport verdict
+ * from carrying business effects. So a run with a reservation routes through
+ * reconcileFailedTurn — the failure is recorded ON the loop (complete_turn
+ * outcome:'failed') and the release is that convergence's business decision,
+ * in the same lazy pass. When the loop path DECLINES (lock contention, loop
+ * missing, containment), the claim deliberately stays for the next read-path
+ * pass — never a forced fallback release, that would re-open the boundary hole.
+ * Non-turn-owned runs keep the trp#433 cascade unchanged.
  */
-function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string, terminalStatus: 'failed' | 'cancelled' = 'failed'): void {
+function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string, terminalStatus: 'failed' | 'cancelled' = 'failed', reason?: string): void {
   if (!run.claim_id) return;
   try {
+    const reservation = findReservationByRunId(run.id, cwd);
+    if (reservation) {
+      reconcileFailedTurn({
+        reservation,
+        run,
+        reason: reason ?? `run reconciled to ${terminalStatus}`,
+        actor,
+        cwd,
+      });
+      return;
+    }
     const claim = loadClaim(run.claim_id, cwd);
     if (claim && claim.status === 'active') {
       releaseClaim(run.claim_id, cwd);
@@ -366,6 +388,47 @@ function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string, ter
       }, cwd);
     }
   } catch { /* best-effort — never let GC break reconciliation */ }
+}
+
+/**
+ * pln#641 review P1 — the stranded-failure retry the read path was missing.
+ *
+ * `cascadeReleaseOnFailure` fires exactly once, on the failed/cancelled
+ * TRANSITION. When the business convergence declines in that pass (loop-lock
+ * contention, transient loop read failure) or the process crashes between the
+ * loop's WAL record and the release, the run is already terminal — and every
+ * read path deliberately skips terminal runs, so the "next pass retries"
+ * promise was unreachable: the claim stranded until the 24h stale sweep,
+ * contrary to the same-lazy-pass/non-famine guarantee of dec#151.
+ *
+ * This is that retry, called from the read-path walk ON terminal runs
+ * (entity-operations.ts loadAgentRunsWithReconciliation). Cheap by
+ * construction: in-memory status/claim_id/recency guards first, ONE claim
+ * read only for RECENT failed/cancelled runs that still name a claim; the
+ * cascade re-checks everything and stays idempotent. The recency window keeps
+ * the walk from re-reading a claim file for every historical failure forever —
+ * anything older has long been the stale sweep's business anyway.
+ */
+export const STRANDED_RELEASE_RETRY_WINDOW_MS = 48 * 60 * 60_000;
+
+export function reconcileStrandedFailureClaimAtRead(run: AgentRun, cwd?: string, options: ReconcileOptions = {}): boolean {
+  if (run.status !== 'failed' && run.status !== 'cancelled') return false;
+  if (!run.claim_id) return false;
+  const now = options.nowMs ?? Date.now();
+  const anchor = Date.parse(run.completed_at ?? run.updated_at ?? run.created_at);
+  if (Number.isFinite(anchor) && now - anchor > STRANDED_RELEASE_RETRY_WINDOW_MS) return false;
+  try {
+    const claim = loadClaim(run.claim_id, cwd);
+    if (!claim || claim.status !== 'active') return false;
+  } catch { return false; }
+  cascadeReleaseOnFailure(
+    run,
+    options.actor ?? 'reconciler',
+    cwd,
+    run.status,
+    run.status_reason ?? `stranded ${run.status} run — read-path retry`,
+  );
+  return true;
 }
 
 function anyCompletionEvidence(evidence: ReconcileEvidence): boolean {
@@ -559,7 +622,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
   const failHere = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(runId, 'failed', { actor, status_reason: reason }, cwd);
-      cascadeReleaseOnFailure(run, actor, cwd);
+      cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: runId, action: 'inferred_failed', reason, evidence, previous_status, current_status: 'failed' };
     } catch (err) {
       return {
@@ -686,7 +749,7 @@ function reconcileTurnOwnedPreRunLease(
   }
   try {
     transitionAgentRun(run.id, targetStatus, { actor, status_reason: reason }, cwd);
-    cascadeReleaseOnFailure(run, actor, cwd, targetStatus);
+    cascadeReleaseOnFailure(run, actor, cwd, targetStatus, reason);
     return { run_id: run.id, action, reason, evidence, previous_status, current_status: targetStatus };
   } catch (err) {
     return {
@@ -748,7 +811,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   const failRun = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(run.id, 'failed', { actor, status_reason: reason }, cwd);
-      cascadeReleaseOnFailure(run, actor, cwd);
+      cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: run.id, action: 'inferred_failed', reason, evidence, previous_status: run.status, current_status: 'failed' };
     } catch (err) {
       return {

@@ -328,6 +328,42 @@ export function releaseClaim(id: string, cwd?: string, auth?: ReleaseClaimAuth):
 }
 
 /**
+ * Release a claim ONLY if it is still `active`, reporting whether THIS call
+ * performed the active→released transition.
+ *
+ * pln#641 review round-2 P1: `releaseClaim` sets `released` unconditionally —
+ * an already-released claim is silently re-released — so any caller that
+ * check-then-releases to decide whether to AUDIT the transition lies under a
+ * concurrent external release (the check passes, the write "succeeds", the
+ * caller emits an event for a transition it never performed). Here the status
+ * check runs INSIDE the same store mutation that writes the release, so the
+ * answer is exact: `released: true` means this call, and no one else, moved
+ * the claim out of `active`.
+ */
+export function releaseClaimIfActive(
+  id: string,
+  cwd?: string,
+  auth?: ReleaseClaimAuth,
+): { released: boolean; claim: Claim | undefined } {
+  let overrideUsed = false;
+  let transitioned = false;
+  const result = mutate({ cwd }, () => {
+    const claim = loadClaim(id, cwd);
+    if (!claim || claim.status !== 'active') return claim;
+    overrideUsed = assertReleaseOwnership(claim, auth).overrideUsed;
+    claim.status = 'released';
+    claim.released_at = nowISO();
+    saveClaimUnlocked(claim, cwd);
+    transitioned = true;
+    return claim;
+  });
+  if (transitioned && overrideUsed && auth && result) {
+    auditReleaseOverride(result, auth, cwd);
+  }
+  return { released: transitioned, claim: result };
+}
+
+/**
  * Mark an active claim as `stale` — a distinct terminal state from `released`
  * used when a claim is being torn down because its owner is gone (session
  * expired, worker died, coordinator abandoned the lane). Same ownership rules

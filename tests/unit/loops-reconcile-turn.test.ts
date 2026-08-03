@@ -6,11 +6,12 @@ import path from 'node:path';
 
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
 import { complete_turn, turn } from '../../src/core/loops/verbs.js';
-import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
+import { reconcileTurn, reconcileFailedTurn } from '../../src/core/loops/reconcile-turn.js';
 import {
-  reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds,
+  reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds, getReservation,
 } from '../../src/core/loops/attempt-reservation.js';
 import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
+import { saveClaim, loadClaim, releaseClaim, releaseClaimIfActive } from '../../src/core/claims.js';
 import { listRuntimeEvents } from '../../src/core/events.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
 import type { LaneResult } from '../../src/core/schema.js';
@@ -188,5 +189,100 @@ describe('reconcileTurn §8', () => {
     assert.equal(r.reconciled, false);
     assert.equal(r.conflict, true);
     assert.equal(getLoop(loopId, cwd)!.status, 'open');
+  });
+});
+
+// ── pln#641 (dec#151 option b) — reconcileFailedTurn ────────────────────────
+// A worker that died at the TRANSPORT level produces no lane result, ever. Its
+// claim release must still be a BUSINESS decision recorded on the loop — never
+// a side-effect of the transport verdict (pln#638 6c effects boundary).
+
+describe('reconcileFailedTurn — business convergence of a transport failure (pln#641)', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = ws(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  function failedSetup() {
+    const s = setup(cwd);
+    saveClaim({
+      schema_version: 2, id: 'clm_x', agent: 'codex', scope: 'review-loop',
+      description: 'lane claim', created_at: new Date().toISOString(), status: 'active',
+    }, cwd);
+    const run = loadAgentRun(s.runId, cwd)!;
+    const reservation = getReservation(s.turnId, cwd)!;
+    return { ...s, run, reservation };
+  }
+
+  it('records the failure ON the loop first, then releases the claim, with a business audit trail', () => {
+    const { loopId, run, reservation } = failedSetup();
+    const r = reconcileFailedTurn({ reservation, run, reason: 'stalled: heartbeat lost', cwd });
+    assert.equal(r.converged, true);
+    assert.equal(r.claim_released, true);
+    assert.equal(loadClaim('clm_x', cwd).status, 'released', 'non-famine: the scope is re-claimable for a retry lane');
+    const loop = getLoop(loopId, cwd)!;
+    assert.equal(loop.slots.find((sl) => sl.slot_id === 'lsl_r')!.status, 'failed',
+      'the failure is a recorded loop fact, not a transport side-effect');
+    assert.equal(loop.status, 'open', 'a failed lane leaves the loop open for a retry dispatch');
+    const business = listRuntimeEvents(cwd).filter((e) => e.status_reason === 'turn_failure_business_release');
+    assert.equal(business.length, 1, 'the release is audited as a BUSINESS decision');
+    assert.equal(business[0]!.claim_id, 'clm_x');
+  });
+
+  it('SUPERSEDED → converged WITHOUT release: the claim belongs to the live turn (claim reuse, trp_e824d2af)', () => {
+    const { loopId, run, reservation } = failedSetup();
+    turn({ id: loopId, slot_id: 'lsl_r', actor: 'coord', turn_id: 'tat_newer' }, cwd);
+    const r = reconcileFailedTurn({ reservation, run, reason: 'silent_termination_no_evidence', cwd });
+    assert.equal(r.converged, true);
+    assert.match(r.reason, /superseded/);
+    assert.equal(r.claim_released, false);
+    assert.equal(loadClaim('clm_x', cwd).status, 'active', 'the live turn keeps its (reused) claim');
+  });
+
+  it('is idempotent: a second pass records nothing and emits no second audit event', () => {
+    const { run, reservation } = failedSetup();
+    reconcileFailedTurn({ reservation, run, reason: 'first pass', cwd });
+    const r2 = reconcileFailedTurn({ reservation, run, reason: 'second pass', cwd });
+    assert.equal(r2.converged, true);
+    assert.equal(r2.claim_released, false, 'claim already released — nothing to redo');
+    assert.equal(
+      listRuntimeEvents(cwd).filter((e) => e.status_reason === 'turn_failure_business_release').length, 1,
+      'exactly one business release event across both passes',
+    );
+  });
+
+  it('containment: refuses to converge a reservation from ANOTHER store — claim retained', () => {
+    const { run, reservation } = failedSetup();
+    const foreign = { ...reservation, store_root: path.join(cwd, 'elsewhere') };
+    const r = reconcileFailedTurn({ reservation: foreign, run, reason: 'x', cwd });
+    assert.equal(r.converged, false);
+    assert.match(r.reason, /containment/);
+    assert.equal(loadClaim('clm_x', cwd).status, 'active', 'never a forced release across store boundaries');
+  });
+
+  it('an EXTERNAL release winning the race → converged, but NO phantom business event (round-2 P1)', () => {
+    const { loopId, run, reservation } = failedSetup();
+    // The agent's own bclaw_release_claim lands first.
+    releaseClaim('clm_x', cwd);
+    const r = reconcileFailedTurn({ reservation, run, reason: 'stalled', cwd });
+    assert.equal(r.converged, true, 'the loop record still converges');
+    assert.equal(r.claim_released, false, 'this call performed no transition');
+    assert.equal(getLoop(loopId, cwd)!.slots.find((sl) => sl.slot_id === 'lsl_r')!.status, 'failed');
+    assert.equal(
+      listRuntimeEvents(cwd).filter((e) => e.status_reason === 'turn_failure_business_release').length, 0,
+      'no event for a transition this call did not perform',
+    );
+  });
+
+  it('releaseClaimIfActive: the atomic contract the audit relies on (round-2 P1)', () => {
+    // `releaseClaim` re-releases an already-released claim silently, which is
+    // exactly why a caller-side check-then-release audit could lie. The
+    // primitive must answer "did THIS call transition it" — exactly once true.
+    saveClaim({
+      schema_version: 2, id: 'clm_atomic', agent: 'codex', scope: 's',
+      description: 'd', created_at: new Date().toISOString(), status: 'active',
+    }, cwd);
+    assert.equal(releaseClaimIfActive('clm_atomic', cwd).released, true, 'first caller wins the transition');
+    assert.equal(releaseClaimIfActive('clm_atomic', cwd).released, false, 'second caller is told the truth');
+    assert.equal(loadClaim('clm_atomic', cwd).status, 'released');
   });
 });
