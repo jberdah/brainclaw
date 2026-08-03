@@ -1,0 +1,439 @@
+{
+  "entity": "inbox_message",
+  "sampled": 832,
+  "fields": {
+    "ack_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "238/832",
+      "observed_short_values": [
+        "2026-05-06T22:22:25.111Z",
+        "2026-05-06T22:22:33.041Z",
+        "2026-05-06T22:22:34.732Z",
+        "2026-05-06T22:22:35.947Z",
+        "2026-05-06T22:22:48.062Z",
+        "2026-05-06T22:23:32.232Z",
+        "2026-05-06T22:35:29.994Z",
+        "2026-06-02T20:41:17.930Z",
+        "2026-07-04T15:37:30.448Z",
+        "2026-07-04T15:39:18.998Z",
+        "2026-07-04T15:39:27.818Z",
+        "2026-07-04T15:39:53.279Z"
+      ]
+    },
+    "assignment_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "294/832"
+    },
+    "author": {
+      "types": [
+        "string"
+      ],
+      "presence": "832/832"
+    },
+    "author_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "157/832"
+    },
+    "claim_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "314/832"
+    },
+    "contradiction_summary": {
+      "types": [
+        "string"
+      ],
+      "presence": "7/832"
+    },
+    "contradictions_detected": {
+      "types": [
+        "array"
+      ],
+      "presence": "7/832"
+    },
+    "created_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "832/832",
+      "observed_short_values": [
+        "2026-04-25T14:08:33.603Z",
+        "2026-05-21T19:34:42.989Z",
+        "2026-05-22T11:19:42.538Z",
+        "2026-05-26T15:58:27.999Z",
+        "2026-05-27T14:34:32.181Z",
+        "2026-06-08T20:57:06.107Z",
+        "2026-06-08T20:57:55.052Z",
+        "2026-06-10T14:44:32.761Z",
+        "2026-06-10T15:34:46.927Z",
+        "2026-07-16T13:39:54.509Z",
+        "2026-07-16T15:37:09.966Z",
+        "2026-07-16T15:37:18.073Z"
+      ]
+    },
+    "from": {
+      "types": [
+        "string"
+      ],
+      "presence": "569/832",
+      "observed_short_values": [
+        "Codex",
+        "antigravity",
+        "avocat_du_diable",
+        "bclaw_coordinate",
+        "claude-code",
+        "codex",
+        "conservateur",
+        "github-copilot",
+        "produit",
+        "simplificateur",
+        "visionnaire"
+      ]
+    },
+    "host_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "42/832"
+    },
+    "id": {
+      "types": [
+        "string"
+      ],
+      "presence": "832/832"
+    },
+    "narrative": {
+      "types": [
+        "string"
+      ],
+      "presence": "1/832"
+    },
+    "origin": {
+      "types": [
+        "string"
+      ],
+      "presence": "7/832",
+      "observed_short_values": [
+        "mcp:quick-capture"
+      ]
+    },
+    "payload": {
+      "types": [
+        "object"
+      ],
+      "presence": "441/832"
+    },
+    "plan_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "25/832"
+    },
+    "project_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "42/832"
+    },
+    "promotion_blocked_reason": {
+      "types": [
+        "string"
+      ],
+      "presence": "7/832",
+      "observed_short_values": [
+        "contradiction_detected"
+      ]
+    },
+    "provenance": {
+      "types": [
+        "object"
+      ],
+      "presence": "72/832"
+    },
+    "ref": {
+      "types": [
+        "string"
+      ],
+      "presence": "378/832",
+      "observed_short_values": [
+        "curation-triage-report",
+        "docs + release framing",
+        "pln#520",
+        "src/core/bug.ts",
+        "src/core/delivery.ts",
+        "src/core/dispatcher.ts",
+        "src/core/dup.ts",
+        "src/core/worktree.ts",
+        "src/effects.ts",
+        "src/feature.ts",
+        "src/foo.ts",
+        "src/meta.ts"
+      ]
+    },
+    "related_paths": {
+      "types": [
+        "array"
+      ],
+      "presence": "150/832"
+    },
+    "requires_ack": {
+      "types": [
+        "boolean"
+      ],
+      "presence": "569/832",
+      "observed_short_values": [
+        "false",
+        "true"
+      ]
+    },
+    "resolution_reason": {
+      "types": [
+        "string"
+      ],
+      "presence": "95/832",
+      "observed_short_values": [
+        "test fixture"
+      ]
+    },
+    "resolved_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "149/832",
+      "observed_short_values": [
+        "2026-06-10T20:02:09.209Z",
+        "2026-06-10T20:02:42.789Z",
+        "2026-06-10T20:03:34.661Z",
+        "2026-06-10T20:06:19.938Z",
+        "2026-06-10T20:06:47.754Z",
+        "2026-06-10T20:26:31.521Z",
+        "2026-06-10T20:26:59.104Z",
+        "2026-06-10T20:27:27.502Z",
+        "2026-06-10T20:28:01.649Z",
+        "2026-06-10T20:28:28.655Z",
+        "2026-06-10T20:28:55.825Z",
+        "2026-06-10T20:29:22.547Z"
+      ]
+    },
+    "resolved_by": {
+      "types": [
+        "string"
+      ],
+      "presence": "149/832",
+      "observed_short_values": [
+        "antigravity",
+        "claude-code",
+        "codex",
+        "github-copilot"
+      ]
+    },
+    "schema_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "832/832",
+      "observed_short_values": [
+        "2"
+      ]
+    },
+    "scope": {
+      "types": [
+        "string"
+      ],
+      "presence": "368/832",
+      "observed_short_values": [
+        "C:/tmp",
+        "curation-triage-report",
+        "docs + release framing",
+        "docs/, README.md",
+        "e2e-gap-fixes",
+        "pln#520",
+        "src/core/delivery.ts",
+        "src/core/dup.ts",
+        "src/feature.ts",
+        "src/foo.ts",
+        "src/meta.ts",
+        "vscode-extension/"
+      ]
+    },
+    "session_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "274/832"
+    },
+    "severity": {
+      "types": [
+        "string"
+      ],
+      "presence": "9/832",
+      "observed_short_values": [
+        "high",
+        "medium"
+      ]
+    },
+    "short_label": {
+      "types": [
+        "string"
+      ],
+      "presence": "760/832",
+      "observed_short_values": [
+        "cnd#556",
+        "cnd#557",
+        "cnd#558",
+        "cnd#559",
+        "cnd#564",
+        "cnd#569",
+        "cnd#575",
+        "cnd#577",
+        "cnd#583",
+        "cnd#587",
+        "cnd#590",
+        "cnd#592"
+      ]
+    },
+    "source": {
+      "types": [
+        "string"
+      ],
+      "presence": "2/832",
+      "observed_short_values": [
+        "agent"
+      ]
+    },
+    "star_count": {
+      "types": [
+        "number"
+      ],
+      "presence": "263/832",
+      "observed_short_values": [
+        "0"
+      ]
+    },
+    "starred_by": {
+      "types": [
+        "array"
+      ],
+      "presence": "263/832"
+    },
+    "status": {
+      "types": [
+        "string"
+      ],
+      "presence": "832/832",
+      "observed_short_values": [
+        "accepted",
+        "acknowledged",
+        "pending",
+        "rejected"
+      ]
+    },
+    "tags": {
+      "types": [
+        "array"
+      ],
+      "presence": "832/832"
+    },
+    "text": {
+      "types": [
+        "string"
+      ],
+      "presence": "832/832",
+      "observed_short_values": [
+        "-",
+        "Cap me please",
+        "First payload",
+        "Mode without open_loop",
+        "Review architecture",
+        "Review this design",
+        "Share rollout checklist",
+        "advise on X"
+      ]
+    },
+    "thread_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "189/832"
+    },
+    "to": {
+      "types": [
+        "string"
+      ],
+      "presence": "569/832",
+      "observed_short_values": [
+        "antigravity",
+        "bclaw_coordinate",
+        "claude-code",
+        "claude-sonnet",
+        "cline",
+        "codex",
+        "continue",
+        "coordinator",
+        "github-copilot",
+        "hermes",
+        "kilocode",
+        "mistral-vibe"
+      ]
+    },
+    "type": {
+      "types": [
+        "string"
+      ],
+      "presence": "832/832",
+      "observed_short_values": [
+        "assign",
+        "constraint",
+        "decision",
+        "handoff",
+        "info",
+        "reply",
+        "review",
+        "rfc",
+        "trap"
+      ]
+    },
+    "updated_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "569/832",
+      "observed_short_values": [
+        "2026-04-12T14:53:12.418Z",
+        "2026-04-12T14:53:46.248Z",
+        "2026-04-16T20:38:22.641Z",
+        "2026-04-17T07:59:36.908Z",
+        "2026-05-03T19:09:36.454Z",
+        "2026-05-05T13:10:23.372Z",
+        "2026-05-06T22:22:34.732Z",
+        "2026-05-06T22:22:48.062Z",
+        "2026-06-10T09:25:36.042Z",
+        "2026-06-10T11:59:43.196Z",
+        "2026-07-04T15:37:30.448Z",
+        "2026-07-19T21:41:43.687Z"
+      ]
+    },
+    "usage_count": {
+      "types": [
+        "number"
+      ],
+      "presence": "263/832",
+      "observed_short_values": [
+        "0"
+      ]
+    },
+    "usage_events": {
+      "types": [
+        "array"
+      ],
+      "presence": "263/832"
+    }
+  }
+}

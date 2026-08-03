@@ -1,0 +1,148 @@
+{
+  "entity": "sequence",
+  "sampled": 59,
+  "fields": {
+    "author": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "author_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "41/59"
+    },
+    "created_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59",
+      "observed_short_values": [
+        "2026-04-05T13:59:07.562Z",
+        "2026-04-05T22:08:10.735Z",
+        "2026-04-07T10:49:23.224Z",
+        "2026-04-07T14:46:47.214Z",
+        "2026-04-08T06:27:28.204Z",
+        "2026-04-14T13:16:10.928Z",
+        "2026-04-15T11:06:33.497Z",
+        "2026-04-25T19:45:36.552Z",
+        "2026-06-10T19:06:26.678Z",
+        "2026-07-03T15:14:55.110Z",
+        "2026-07-04T21:03:15.749Z",
+        "2026-07-15T16:45:31.986Z"
+      ]
+    },
+    "description": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "id": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59"
+    },
+    "items": {
+      "types": [
+        "array"
+      ],
+      "presence": "59/59"
+    },
+    "name": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59",
+      "observed_short_values": [
+        "codev-v3-implementation",
+        "coordinate-assign-e2e",
+        "e2e-gap-fixes-2026-04-13",
+        "post-gpt4-review",
+        "roadmap-now-2026-04",
+        "roadmap-w3-loop-engine",
+        "sprint-1-fiabilite",
+        "sprint-v0.55-dx-polish",
+        "sprint-v0.56-foundations",
+        "sprint/dx-quick-wins",
+        "sprint/dx-quick-wins-2",
+        "vscode-ext-final-sprint"
+      ]
+    },
+    "owner": {
+      "types": [
+        "string"
+      ],
+      "presence": "18/59"
+    },
+    "schema_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "59/59",
+      "observed_short_values": [
+        "2"
+      ]
+    },
+    "short_label": {
+      "types": [
+        "string"
+      ],
+      "presence": "57/59",
+      "observed_short_values": [
+        "seq#11",
+        "seq#12",
+        "seq#16",
+        "seq#31",
+        "seq#34",
+        "seq#37",
+        "seq#46",
+        "seq#5",
+        "seq#53",
+        "seq#57",
+        "seq#59",
+        "seq#6"
+      ]
+    },
+    "status": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59",
+      "observed_short_values": [
+        "active",
+        "archived",
+        "draft"
+      ]
+    },
+    "tags": {
+      "types": [
+        "array"
+      ],
+      "presence": "59/59"
+    },
+    "updated_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "59/59",
+      "observed_short_values": [
+        "2026-04-06T10:48:22.399Z",
+        "2026-04-06T21:30:27.823Z",
+        "2026-04-07T22:49:42.146Z",
+        "2026-04-07T22:49:43.325Z",
+        "2026-04-08T09:20:46.988Z",
+        "2026-06-11T21:06:34.172Z",
+        "2026-06-11T21:07:21.487Z",
+        "2026-06-11T21:07:34.089Z",
+        "2026-06-11T21:08:13.695Z",
+        "2026-07-03T15:14:55.110Z",
+        "2026-07-10T14:00:31.425Z",
+        "2026-07-15T21:10:44.808Z"
+      ]
+    }
+  }
+}

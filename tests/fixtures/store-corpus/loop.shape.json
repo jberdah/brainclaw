@@ -1,0 +1,463 @@
+{
+  "entity": "loop",
+  "sampled": 240,
+  "fields": {
+    "agent": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "codex"
+      ]
+    },
+    "agent_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "artifacts": {
+      "types": [
+        "array"
+      ],
+      "presence": "221/240"
+    },
+    "at": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "2026-08-02T20:40:44.046Z",
+        "2026-08-03T07:02:45.674Z",
+        "2026-08-03T08:31:44.725Z"
+      ]
+    },
+    "base_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "10/240",
+      "observed_short_values": [
+        "10",
+        "11",
+        "14",
+        "6",
+        "7"
+      ]
+    },
+    "child_ids": {
+      "types": [
+        "object"
+      ],
+      "presence": "3/240"
+    },
+    "claim_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "closed_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "217/240",
+      "observed_short_values": [
+        "2026-04-22T23:26:28.169Z",
+        "2026-05-15T13:04:14.563Z",
+        "2026-05-21T23:08:59.309Z",
+        "2026-05-27T11:10:07.753Z",
+        "2026-06-20T12:00:20.424Z",
+        "2026-07-10T11:29:29.394Z",
+        "2026-07-19T22:22:22.922Z",
+        "2026-07-21T09:11:42.965Z",
+        "2026-07-21T09:11:43.007Z",
+        "2026-07-21T09:11:43.030Z",
+        "2026-07-21T09:11:43.051Z",
+        "2026-07-21T09:11:43.076Z"
+      ]
+    },
+    "completion_mode": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "file"
+      ]
+    },
+    "created_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "234/240",
+      "observed_short_values": [
+        "2026-08-02T20:40:43.979Z",
+        "2026-08-02T20:53:12.545Z",
+        "2026-08-02T20:53:27.026Z",
+        "2026-08-02T20:57:22.479Z",
+        "2026-08-03T07:20:38.159Z",
+        "2026-08-03T07:20:47.217Z",
+        "2026-08-03T07:32:24.743Z",
+        "2026-08-03T07:37:38.941Z",
+        "2026-08-03T08:31:44.640Z",
+        "2026-08-03T08:47:38.259Z",
+        "2026-08-03T08:47:43.938Z",
+        "2026-08-03T08:53:40.884Z"
+      ]
+    },
+    "created_by": {
+      "types": [
+        "string"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "bclaw_coordinate",
+        "bclaw_loop"
+      ]
+    },
+    "current_phase": {
+      "types": [
+        "string"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "change_summary",
+        "critique",
+        "findings",
+        "followup_review",
+        "handoff_ready",
+        "proposal",
+        "survey",
+        "synthesis",
+        "verdict"
+      ]
+    },
+    "cwd": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "decided_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "2026-08-02T20:40:43.993Z",
+        "2026-08-03T07:02:45.634Z",
+        "2026-08-03T08:31:44.667Z"
+      ]
+    },
+    "decision": {
+      "types": [
+        "string"
+      ],
+      "presence": "6/240",
+      "observed_short_values": [
+        "committed",
+        "crossed"
+      ]
+    },
+    "epoch": {
+      "types": [
+        "number"
+      ],
+      "presence": "6/240",
+      "observed_short_values": [
+        "0"
+      ]
+    },
+    "events": {
+      "types": [
+        "array"
+      ],
+      "presence": "10/240"
+    },
+    "expected_artifacts": {
+      "types": [
+        "array"
+      ],
+      "presence": "3/240"
+    },
+    "goal": {
+      "types": [
+        "string"
+      ],
+      "presence": "25/240"
+    },
+    "id": {
+      "types": [
+        "string"
+      ],
+      "presence": "221/240"
+    },
+    "intent_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "10/240"
+    },
+    "iteration": {
+      "types": [
+        "number"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "0"
+      ]
+    },
+    "iteration_count": {
+      "types": [
+        "number"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "0",
+        "2"
+      ]
+    },
+    "kind": {
+      "types": [
+        "string"
+      ],
+      "presence": "231/240",
+      "observed_short_values": [
+        "complete_turn",
+        "ideation",
+        "implementation",
+        "review"
+      ]
+    },
+    "launch": {
+      "types": [
+        "object"
+      ],
+      "presence": "3/240"
+    },
+    "lease_deadline": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "2026-08-02T21:10:43.955Z",
+        "2026-08-03T07:32:45.608Z",
+        "2026-08-03T09:01:44.630Z"
+      ]
+    },
+    "linked": {
+      "types": [
+        "object"
+      ],
+      "presence": "7/240"
+    },
+    "loop_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "13/240"
+    },
+    "loop_version_at_reserve": {
+      "types": [
+        "number"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "3"
+      ]
+    },
+    "mutation_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "221/240"
+    },
+    "open_questions": {
+      "types": [
+        "array"
+      ],
+      "presence": "198/240"
+    },
+    "owner_agent_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "phase": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "findings"
+      ]
+    },
+    "phases": {
+      "types": [
+        "array"
+      ],
+      "presence": "221/240"
+    },
+    "protocol": {
+      "types": [
+        "object"
+      ],
+      "presence": "220/240"
+    },
+    "request_hash": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "response": {
+      "types": [
+        "object"
+      ],
+      "presence": "3/240"
+    },
+    "schema_version": {
+      "types": [
+        "number"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "1"
+      ]
+    },
+    "slot_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "slots": {
+      "types": [
+        "array"
+      ],
+      "presence": "221/240"
+    },
+    "status": {
+      "types": [
+        "string"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "cancelled",
+        "completed",
+        "open"
+      ]
+    },
+    "stop_condition": {
+      "types": [
+        "object"
+      ],
+      "presence": "221/240"
+    },
+    "store_root": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "stored_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "2026-06-10T13:54:01.974Z",
+        "2026-06-10T13:55:29.976Z",
+        "2026-07-23T20:01:23.856Z"
+      ]
+    },
+    "target_slot_generation": {
+      "types": [
+        "number"
+      ],
+      "presence": "3/240",
+      "observed_short_values": [
+        "0"
+      ]
+    },
+    "thread_snapshot": {
+      "types": [
+        "object"
+      ],
+      "presence": "10/240"
+    },
+    "title": {
+      "types": [
+        "string"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "Bootstrap project memory",
+        "Cap me please",
+        "First payload",
+        "plain ideation A",
+        "plain ideation B",
+        "plain test",
+        "test",
+        "test plain"
+      ]
+    },
+    "token": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "turn_id": {
+      "types": [
+        "string"
+      ],
+      "presence": "3/240"
+    },
+    "updated_at": {
+      "types": [
+        "string"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "2026-04-22T23:26:28.169Z",
+        "2026-05-15T13:04:14.563Z",
+        "2026-05-21T23:08:59.309Z",
+        "2026-05-27T11:10:07.753Z",
+        "2026-06-20T12:00:20.424Z",
+        "2026-07-10T11:29:29.394Z",
+        "2026-07-19T22:22:22.922Z",
+        "2026-07-21T09:11:42.965Z",
+        "2026-07-21T09:11:43.007Z",
+        "2026-07-21T09:11:43.030Z",
+        "2026-07-21T09:11:43.051Z",
+        "2026-07-21T09:11:43.076Z"
+      ]
+    },
+    "version": {
+      "types": [
+        "number"
+      ],
+      "presence": "221/240",
+      "observed_short_values": [
+        "10",
+        "11",
+        "12",
+        "14",
+        "17",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "9"
+      ]
+    }
+  }
+}
