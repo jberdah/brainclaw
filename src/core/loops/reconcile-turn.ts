@@ -495,26 +495,33 @@ function convergeFailedLockedTurn(
   actor: string,
   cwd: string | undefined,
 ): ReconcileFailedTurnResult {
+  // Audit-exact release (review PR#166 point 3): the event is emitted only when
+  // THIS call performed the transition — load-check then release, and a throw
+  // from releaseClaim (raced by an external release) yields no event rather
+  // than a phantom one. Competing reconcileFailedTurn calls are already
+  // serialized by the loop lock; the residual window is an agent's own
+  // bclaw_release_claim landing between the read and the write, which at worst
+  // suppresses one observability event — never a state error.
   const releaseAudited = (claimId: string | undefined, why: string): boolean => {
     if (!claimId) return false;
-    const before = (() => { try { return loadClaim(claimId, cwd)?.status; } catch { return undefined; } })();
-    releaseCoordinatorClaim(claimId, cwd);
-    const released = before === 'active';
-    if (released) {
-      try {
-        createRuntimeEvent({
-          agent: actor,
-          event_type: 'run_failed',
-          text: `Released claim ${claimId} as the BUSINESS convergence of failed turn ${reservation.turn_id}: ${why}`,
-          tags: ['loops', 'reconcile', 'claim-release', 'effects-boundary'],
-          assignment_id: reservation.child_ids.assignment_id,
-          run_id: run.id,
-          claim_id: claimId,
-          status_reason: 'turn_failure_business_release',
-        }, cwd);
-      } catch { /* observability best-effort — never undo the release */ }
-    }
-    return released;
+    try {
+      const before = loadClaim(claimId, cwd);
+      if (!before || before.status !== 'active') return false;
+      releaseClaim(claimId, cwd);
+    } catch { return false; }
+    try {
+      createRuntimeEvent({
+        agent: actor,
+        event_type: 'run_failed',
+        text: `Released claim ${claimId} as the BUSINESS convergence of failed turn ${reservation.turn_id}: ${why}`,
+        tags: ['loops', 'reconcile', 'claim-release', 'effects-boundary'],
+        assignment_id: reservation.child_ids.assignment_id,
+        run_id: run.id,
+        claim_id: claimId,
+        status_reason: 'turn_failure_business_release',
+      }, cwd);
+    } catch { /* observability best-effort — never undo the release */ }
+    return true;
   };
 
   const loop = getLoop(reservation.loop_id, cwd);

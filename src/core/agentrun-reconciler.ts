@@ -390,6 +390,47 @@ function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string, ter
   } catch { /* best-effort — never let GC break reconciliation */ }
 }
 
+/**
+ * pln#641 review P1 — the stranded-failure retry the read path was missing.
+ *
+ * `cascadeReleaseOnFailure` fires exactly once, on the failed/cancelled
+ * TRANSITION. When the business convergence declines in that pass (loop-lock
+ * contention, transient loop read failure) or the process crashes between the
+ * loop's WAL record and the release, the run is already terminal — and every
+ * read path deliberately skips terminal runs, so the "next pass retries"
+ * promise was unreachable: the claim stranded until the 24h stale sweep,
+ * contrary to the same-lazy-pass/non-famine guarantee of dec#151.
+ *
+ * This is that retry, called from the read-path walk ON terminal runs
+ * (entity-operations.ts loadAgentRunsWithReconciliation). Cheap by
+ * construction: in-memory status/claim_id/recency guards first, ONE claim
+ * read only for RECENT failed/cancelled runs that still name a claim; the
+ * cascade re-checks everything and stays idempotent. The recency window keeps
+ * the walk from re-reading a claim file for every historical failure forever —
+ * anything older has long been the stale sweep's business anyway.
+ */
+export const STRANDED_RELEASE_RETRY_WINDOW_MS = 48 * 60 * 60_000;
+
+export function reconcileStrandedFailureClaimAtRead(run: AgentRun, cwd?: string, options: ReconcileOptions = {}): boolean {
+  if (run.status !== 'failed' && run.status !== 'cancelled') return false;
+  if (!run.claim_id) return false;
+  const now = options.nowMs ?? Date.now();
+  const anchor = Date.parse(run.completed_at ?? run.updated_at ?? run.created_at);
+  if (Number.isFinite(anchor) && now - anchor > STRANDED_RELEASE_RETRY_WINDOW_MS) return false;
+  try {
+    const claim = loadClaim(run.claim_id, cwd);
+    if (!claim || claim.status !== 'active') return false;
+  } catch { return false; }
+  cascadeReleaseOnFailure(
+    run,
+    options.actor ?? 'reconciler',
+    cwd,
+    run.status,
+    run.status_reason ?? `stranded ${run.status} run — read-path retry`,
+  );
+  return true;
+}
+
 function anyCompletionEvidence(evidence: ReconcileEvidence): boolean {
   // pln#630 PR2b-c (§13 R3): a turn-owned run is completed ONLY on turn-keyed
   // evidence — never a bare presence sentinel or an assignment-keyed proxy

@@ -10,15 +10,20 @@ import { openLoop, getLoop } from '../../src/core/loops/store.js';
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds, deriveTurnId,
 } from '../../src/core/loops/attempt-reservation.js';
+import { complete_turn } from '../../src/core/loops/verbs.js';
+import { withLoopLock } from '../../src/core/loops/lock.js';
+import { listEntities } from '../../src/core/entity-operations.js';
 import { listRuntimeEvents } from '../../src/core/events.js';
 import {
   reconcileAgentRun,
   reconcileAllOpenRuns,
   reconcileDeadPidRunningAgentRunAtRead,
+  reconcileStrandedFailureClaimAtRead,
   sweepDeadPidRunningAgentRunsAtRead,
   isProcessAlive,
   collectEvidence,
   DEFAULT_HEALTH_CHECK_GRACE_MS,
+  STRANDED_RELEASE_RETRY_WINDOW_MS,
 } from '../../src/core/agentrun-reconciler.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -436,12 +441,9 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     assert.equal(loadClaim('clm_test', ws.dir).status, 'active', 'claim untouched while run still running');
   });
 
-  it('pln#641 — a TURN-OWNED transport failure releases the claim through the LOOP, never the GC cascade', () => {
-    // dec#151 option (b): the lane's claim is business state owned by its loop.
-    // The transport reconciler still infers the run failed (a transport fact),
-    // but the claim release must arrive as a loop-recorded business decision —
-    // slot marked failed via complete_turn, audited as such — in the SAME lazy
-    // pass, so retry lanes are never starved.
+  // ── pln#641 (dec#151 option b) — turn-owned failure = loop business decision ──
+
+  function makeTurnOwnedLane(): { loopId: string; turnId: string; runId: string; assignmentId: string } {
     const loop = openLoop({
       kind: 'review', title: 'turn-owned failure', created_by: 'coord', mode: 'symmetric',
       phases: [{ name: 'findings' }],
@@ -461,19 +463,30 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     consumeLaunchGrant(turnId, 'gen-1', 1, ws.dir);
     makeClaim({ id: 'clm_turn' });
     makeAssignment({ id: assignment_id, claim_id: 'clm_turn' });
-    const run = createAgentRun({
+    createAgentRun({
       id: run_id, short_label: run_id, assignment_id, claim_id: 'clm_turn', agent: 'codex',
       transport: 'cli_spawn', scope: 'review-loop', description: 'turn-owned lane',
       status: 'running', pid: 999_999,
     }, ws.dir);
+    return { loopId: loop.id, turnId, runId: run_id, assignmentId: assignment_id };
+  }
 
-    const result = reconcileAgentRun(run.id, ws.dir, {
+  it('pln#641 — a TURN-OWNED transport failure releases the claim through the LOOP, never the GC cascade', () => {
+    // dec#151 option (b): the lane's claim is business state owned by its loop.
+    // The transport reconciler still infers the run failed (a transport fact),
+    // but the claim release must arrive as a loop-recorded business decision —
+    // slot marked failed via complete_turn, audited as such — in the SAME lazy
+    // pass, so retry lanes are never starved.
+    const { loopId, runId } = makeTurnOwnedLane();
+    const run = loadAgentRun(runId, ws.dir)!;
+
+    const result = reconcileAgentRun(runId, ws.dir, {
       nowMs: new Date(run.created_at).getTime() + 35 * 60_000, // past stale, dead pid, no evidence
     });
     assert.equal(result.action, 'inferred_failed');
     assert.equal(loadClaim('clm_turn', ws.dir).status, 'released', 'non-famine: released in the same lazy pass');
     // The release is the LOOP's business decision, recorded and audited as such.
-    const reloaded = getLoop(loop.id, ws.dir)!;
+    const reloaded = getLoop(loopId, ws.dir)!;
     assert.equal(reloaded.slots.find((s) => s.slot_id === 'lsl_r')!.status, 'failed',
       'the loop journal carries the failure record');
     const events = listRuntimeEvents(ws.dir);
@@ -481,6 +494,82 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
       'audited as a business release');
     assert.equal(events.filter((e) => e.status_reason === 'gc_cascade_release_on_failure').length, 0,
       'the transport GC cascade must NOT fire for a turn-owned lane (pln#638 6c)');
+  });
+
+  // ── pln#641 review P1 — the stranded-failure retry must be REACHABLE ──
+  // The cascade fires only on the terminal TRANSITION; a convergence that
+  // declined (lock contention) or crashed mid-way leaves a terminal run whose
+  // claim is still active, and no read path revisited terminal runs.
+
+  it('pln#641 P1 — a terminal run whose convergence never ran is retried at read (decline-before-WAL)', () => {
+    const { loopId, runId } = makeTurnOwnedLane();
+    // Simulate "cascade declined in the transition pass": run goes terminal
+    // WITHOUT any business convergence (direct transition, no reconciler).
+    transitionAgentRun(runId, 'failed', { actor: 'test', status_reason: 'stalled: simulated decline' }, ws.dir);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'active', 'precondition: claim stranded');
+
+    const retried = reconcileStrandedFailureClaimAtRead(loadAgentRun(runId, ws.dir)!, ws.dir);
+    assert.equal(retried, true);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'released', 'the read-path retry converges the release');
+    assert.equal(getLoop(loopId, ws.dir)!.slots.find((s) => s.slot_id === 'lsl_r')!.status, 'failed',
+      'the retry still records the failure ON the loop first');
+  });
+
+  it('pln#641 P1 — crash AFTER the loop WAL record but BEFORE the release: retry releases without double-recording', () => {
+    const { loopId, runId } = makeTurnOwnedLane();
+    // The WAL record landed (slot failed)…
+    complete_turn({ id: loopId, slot_id: 'lsl_r', actor: 'test', outcome: 'failed', failure_reason: 'pre-crash record' }, ws.dir);
+    // …then the process died before releasing: run terminal, claim active.
+    transitionAgentRun(runId, 'failed', { actor: 'test', status_reason: 'crashed before release' }, ws.dir);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'active', 'precondition: claim stranded post-WAL');
+
+    const retried = reconcileStrandedFailureClaimAtRead(loadAgentRun(runId, ws.dir)!, ws.dir);
+    assert.equal(retried, true);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'released');
+    assert.equal(listRuntimeEvents(ws.dir).filter((e) => e.status_reason === 'turn_failure_business_release').length, 1,
+      'exactly one business release event — the terminal slot is not re-recorded');
+  });
+
+  it('pln#641 P1 — a FORCED lock decline retains the claim; the next read-path pass converges it', () => {
+    const { loopId, runId } = makeTurnOwnedLane();
+    transitionAgentRun(runId, 'failed', { actor: 'test', status_reason: 'stalled' }, ws.dir);
+    const run = loadAgentRun(runId, ws.dir)!;
+    // Hold the loop lock and attempt the retry from INSIDE it: the business
+    // convergence must DEFER (LockTimeoutError → declined), never force a
+    // release around the lock.
+    withLoopLock({
+      cwd: ws.dir, intent: 'test-hold', agentId: 'test',
+      scope: { kind: 'loop', loopId },
+      work: () => {
+        reconcileStrandedFailureClaimAtRead(run, ws.dir);
+        assert.equal(loadClaim('clm_turn', ws.dir).status, 'active',
+          'under contention the claim is retained — never a forced release');
+      },
+    });
+    // Lock released → the next read-path pass converges.
+    const retried = reconcileStrandedFailureClaimAtRead(run, ws.dir);
+    assert.equal(retried, true);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'released', 'the promised lazy retry actually lands');
+  });
+
+  it('pln#641 P1 — the retry recency window: an OLD terminal failure is the stale sweep\'s business', () => {
+    const { runId } = makeTurnOwnedLane();
+    transitionAgentRun(runId, 'failed', { actor: 'test', status_reason: 'ancient failure' }, ws.dir);
+    const retried = reconcileStrandedFailureClaimAtRead(loadAgentRun(runId, ws.dir)!, ws.dir, {
+      nowMs: Date.now() + STRANDED_RELEASE_RETRY_WINDOW_MS + 60_000,
+    });
+    assert.equal(retried, false);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'active', 'outside the window the sweep owns it');
+  });
+
+  it('pln#641 P1 — the ACTUAL read surface (listEntities agent_run) converges a stranded claim', () => {
+    // trp#1292 discipline: test the delivered surface, not just the helper.
+    const { runId } = makeTurnOwnedLane();
+    transitionAgentRun(runId, 'failed', { actor: 'test', status_reason: 'stalled: stranded' }, ws.dir);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'active');
+    listEntities('agent_run', ws.dir);
+    assert.equal(loadClaim('clm_turn', ws.dir).status, 'released',
+      'a plain bclaw_find(agent_run) read pass converges the stranded release');
   });
 
   it('sweep never cancels — defers dead-pid runs lacking evidence', () => {

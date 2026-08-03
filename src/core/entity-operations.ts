@@ -47,7 +47,7 @@ import { loadAllSessions } from './identity.js';
 import { loadInstructions } from './instructions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
-import { reconcileAgentRun, reconcileDeadPidRunningAgentRunAtRead, TERMINAL_STATUSES } from './agentrun-reconciler.js';
+import { reconcileAgentRun, reconcileDeadPidRunningAgentRunAtRead, reconcileStrandedFailureClaimAtRead, TERMINAL_STATUSES } from './agentrun-reconciler.js';
 import { isObserverMode } from './observer-mode.js';
 import {
   deleteRuntimeNote,
@@ -389,7 +389,14 @@ function loadAgentRunsWithReconciliation(cwd: string): unknown[] {
     }
     if (!TERMINAL_STATUSES.has(run.status)) {
       try { reconcileAgentRun(run.id, cwd); } catch { /* best-effort: never block reads on reconciliation errors */ }
+      continue;
     }
+    // pln#641 review P1 — the failure cascade fires only on the terminal
+    // TRANSITION, and this walk used to skip terminal runs entirely, so a
+    // declined/crashed business release stranded its claim until the 24h
+    // sweep. Recent failed/cancelled runs still holding an active claim
+    // retry the (idempotent) convergence here.
+    try { reconcileStrandedFailureClaimAtRead(run, cwd); } catch { /* best-effort: never block reads on reconciliation errors */ }
   }
   // Re-list to capture any transitions made above.
   return listAgentRuns(cwd);
