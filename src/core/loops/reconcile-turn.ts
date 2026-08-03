@@ -6,7 +6,7 @@ import { complete_turn, add_artifact, advance } from './verbs.js';
 import { reducerForKind, type ReducerInput } from './result-reducers.js';
 import { loadAgentRun, transitionAgentRun } from '../agentruns.js';
 import { loadAssignment, transitionAssignment } from '../assignments.js';
-import { loadClaim, releaseClaim } from '../claims.js';
+import { loadClaim, releaseClaim, releaseClaimIfActive } from '../claims.js';
 import { createRuntimeEvent } from '../events.js';
 import { readCompletionSignals } from '../runtime-signals.js';
 import { buildFixCycleTask, type ReviewLoopNextTurn } from '../review-loop-close.js';
@@ -495,19 +495,16 @@ function convergeFailedLockedTurn(
   actor: string,
   cwd: string | undefined,
 ): ReconcileFailedTurnResult {
-  // Audit-exact release (review PR#166 point 3): the event is emitted only when
-  // THIS call performed the transition — load-check then release, and a throw
-  // from releaseClaim (raced by an external release) yields no event rather
-  // than a phantom one. Competing reconcileFailedTurn calls are already
-  // serialized by the loop lock; the residual window is an agent's own
-  // bclaw_release_claim landing between the read and the write, which at worst
-  // suppresses one observability event — never a state error.
+  // Audit-exact release (review PR#166 round-2 P1): the event is emitted only
+  // when THIS call performed the active→released transition. The check lives
+  // INSIDE the claim store's own mutation (releaseClaimIfActive), so an
+  // external bclaw_release_claim landing concurrently can no longer slip
+  // between a caller-side check and the write and produce a phantom
+  // business-release event.
   const releaseAudited = (claimId: string | undefined, why: string): boolean => {
     if (!claimId) return false;
     try {
-      const before = loadClaim(claimId, cwd);
-      if (!before || before.status !== 'active') return false;
-      releaseClaim(claimId, cwd);
+      if (!releaseClaimIfActive(claimId, cwd).released) return false;
     } catch { return false; }
     try {
       createRuntimeEvent({

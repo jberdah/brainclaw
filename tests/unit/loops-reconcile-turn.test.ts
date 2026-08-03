@@ -11,7 +11,7 @@ import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveChildIds, getReservation,
 } from '../../src/core/loops/attempt-reservation.js';
 import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
-import { saveClaim, loadClaim } from '../../src/core/claims.js';
+import { saveClaim, loadClaim, releaseClaim, releaseClaimIfActive } from '../../src/core/claims.js';
 import { listRuntimeEvents } from '../../src/core/events.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
 import type { LaneResult } from '../../src/core/schema.js';
@@ -257,5 +257,32 @@ describe('reconcileFailedTurn — business convergence of a transport failure (p
     assert.equal(r.converged, false);
     assert.match(r.reason, /containment/);
     assert.equal(loadClaim('clm_x', cwd).status, 'active', 'never a forced release across store boundaries');
+  });
+
+  it('an EXTERNAL release winning the race → converged, but NO phantom business event (round-2 P1)', () => {
+    const { loopId, run, reservation } = failedSetup();
+    // The agent's own bclaw_release_claim lands first.
+    releaseClaim('clm_x', cwd);
+    const r = reconcileFailedTurn({ reservation, run, reason: 'stalled', cwd });
+    assert.equal(r.converged, true, 'the loop record still converges');
+    assert.equal(r.claim_released, false, 'this call performed no transition');
+    assert.equal(getLoop(loopId, cwd)!.slots.find((sl) => sl.slot_id === 'lsl_r')!.status, 'failed');
+    assert.equal(
+      listRuntimeEvents(cwd).filter((e) => e.status_reason === 'turn_failure_business_release').length, 0,
+      'no event for a transition this call did not perform',
+    );
+  });
+
+  it('releaseClaimIfActive: the atomic contract the audit relies on (round-2 P1)', () => {
+    // `releaseClaim` re-releases an already-released claim silently, which is
+    // exactly why a caller-side check-then-release audit could lie. The
+    // primitive must answer "did THIS call transition it" — exactly once true.
+    saveClaim({
+      schema_version: 2, id: 'clm_atomic', agent: 'codex', scope: 's',
+      description: 'd', created_at: new Date().toISOString(), status: 'active',
+    }, cwd);
+    assert.equal(releaseClaimIfActive('clm_atomic', cwd).released, true, 'first caller wins the transition');
+    assert.equal(releaseClaimIfActive('clm_atomic', cwd).released, false, 'second caller is told the truth');
+    assert.equal(loadClaim('clm_atomic', cwd).status, 'released');
   });
 });
