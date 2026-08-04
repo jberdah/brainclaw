@@ -886,10 +886,15 @@ export const AssignmentSchema = z.object({
    * read/mutation of this assignment must reach THAT store — that is what makes
    * entity-authoritative routing possible instead of ambient resolution.
    * OPTIONAL by design: assignments written before this field existed must stay
-   * schema-valid (trp#d5595086 — a zod-invalid record is silently deleted on the
-   * next syncDirectory), and an absent owner means "fall back to current
-   * behaviour", never "refuse". Filled by createAssignment via
-   * resolveOwnerProjectId(cwd).
+   * loadable — a required field would make every pre-existing record fail
+   * schema.parse and drop out of the loaded state. An absent owner means "legacy,
+   * fall back to current behaviour", never "refuse".
+   *
+   * Always derived from the store being written to (createAssignment via
+   * resolveOwnerProjectId(cwd)); there is deliberately NO caller override. An
+   * override let a record be saved in store A while declaring owner B, which the
+   * step-4 refusal would then read as a divergence and reject a correctly routed
+   * mutation (review P1-1).
    */
   project_id: z.string().optional(),
 
@@ -975,8 +980,8 @@ export const AgentRunSchema = z.object({
   /**
    * OWNER project — same contract as Assignment.project_id (pln#649 step 1,
    * dec#153): the `project_id` of the store this run was created in, captured
-   * once at creation. Optional for backward compatibility; filled by
-   * createAgentRun via resolveOwnerProjectId(cwd).
+   * once at creation, always derived from the write cwd and never overridable.
+   * Optional so pre-existing records stay loadable.
    */
   project_id: z.string().optional(),
 

@@ -359,12 +359,11 @@ export interface CreateAssignmentOptions {
   id?: string;
   /** Pre-generated short label. Auto-generated if omitted. */
   short_label?: string;
-  /**
-   * Override the OWNER project id (pln#649 step 1). Omit in production — it is
-   * derived from the store being written to. Present for tests and for a caller
-   * that legitimately knows the owner differs from `cwd`.
-   */
-  project_id?: string;
+  // NO project_id here, deliberately (review P1-1). The owner is ALWAYS derived
+  // from the store this assignment is written into. An override could save the
+  // record in store A while declaring owner B — and step 4 would then read that
+  // as a divergence and refuse a correctly routed mutation. A forgeable owner is
+  // worse than no owner.
   claim_id: string;
   message_id?: string;
   plan_id?: string;
@@ -412,7 +411,7 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
     // without an owner. The claim surface does this in TWO command-layer sites
     // that already disagree (mcp-write-claims.ts uses loadConfig(claimCwd),
     // claim.ts uses actor.project_id); core is the one place that cannot drift.
-    project_id: options.project_id ?? resolveOwnerProjectId(cwd),
+    project_id: resolveOwnerProjectId(cwd),
     scope: options.scope,
     description: options.description,
     lane: options.lane,

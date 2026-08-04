@@ -130,8 +130,8 @@ const VALID_TRANSITIONS = new Map<AgentRunStatus, Set<AgentRunStatus>>([
 export interface CreateAgentRunOptions {
   id?: string;
   short_label?: string;
-  /** Override the OWNER project id (pln#649 step 1). Omit in production. */
-  project_id?: string;
+  // NO project_id override — same reasoning as CreateAssignmentOptions (review P1-1):
+  // the owner is always the store being written to, never a caller's claim about it.
   assignment_id: string;
   claim_id: string;
   message_id?: string;
@@ -173,7 +173,7 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
     agent_id: options.agent_id,
     session_id: options.session_id,
     // OWNER project — same core-level capture as createAssignment (pln#649 step 1).
-    project_id: options.project_id ?? resolveOwnerProjectId(cwd),
+    project_id: resolveOwnerProjectId(cwd),
     transport: options.transport,
     status: options.status ?? 'created',
     status_reason: options.status_reason,

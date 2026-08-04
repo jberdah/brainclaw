@@ -129,16 +129,28 @@ export function loadConfig(cwd?: string, preferredDirName?: string): Config {
  * project-ish field would have been the same defect one level up, so this reuses
  * the id and leaves the label alone. Operator decision, 2026-08-04.
  *
- * Returns undefined rather than throwing: an uninitialised or unreadable store
- * must not make entity creation fail, and the field is optional on every schema
- * precisely so a record written by an older version stays valid (a zod-invalid
- * record is silently deleted on the next syncDirectory — trp#d5595086).
+ * SWALLOWS ONLY "there is no store here" (ENOENT / ENOTDIR). Everything else —
+ * malformed YAML, schema-invalid config, permission denied, I/O failure — is
+ * RETHROWN (review P1-2). A catch-all was the first version and it was wrong in a
+ * way that defeated the whole point: a store with a corrupt config but writable
+ * coordination dirs would create entities with NO owner, and step 4 would then
+ * read the absent owner as "legacy", skip its refusal, and silently hand back the
+ * guarantee this field exists to provide. Degrading quietly is exactly the failure
+ * mode dec#153 is against.
+ *
+ * The field is optional on every schema so a record written before it existed
+ * stays loadable. (An earlier version of this comment claimed a zod-invalid record
+ * is DELETED on the next syncDirectory — that is false for the current code:
+ * state.ts preserves unparseable files precisely so a parse failure cannot corrupt
+ * data (trp#126). Required would make old records unloadable, not deleted.)
  */
 export function resolveOwnerProjectId(cwd?: string): string | undefined {
   try {
     return loadConfig(cwd).project_id;
-  } catch {
-    return undefined;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined; // no store here
+    throw err;
   }
 }
 
