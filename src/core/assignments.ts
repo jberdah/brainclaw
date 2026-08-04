@@ -12,6 +12,7 @@
  */
 import fs from 'node:fs';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
+import { resolveOwnerProjectId } from './config.js';
 import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, generateIdWithLabel } from './ids.js';
@@ -358,6 +359,12 @@ export interface CreateAssignmentOptions {
   id?: string;
   /** Pre-generated short label. Auto-generated if omitted. */
   short_label?: string;
+  /**
+   * Override the OWNER project id (pln#649 step 1). Omit in production — it is
+   * derived from the store being written to. Present for tests and for a caller
+   * that legitimately knows the owner differs from `cwd`.
+   */
+  project_id?: string;
   claim_id: string;
   message_id?: string;
   plan_id?: string;
@@ -399,6 +406,13 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
     agent_id: options.agent_id,
     dispatcher_agent: options.dispatcher_agent,
     dispatcher_session_id: options.dispatcher_session_id,
+    // OWNER project, captured HERE in core (pln#649 step 1) rather than in the
+    // command layer: every caller — MCP, CLI, dispatcher, loop engine — writes
+    // into `cwd`, so deriving it here means no path can create an assignment
+    // without an owner. The claim surface does this in TWO command-layer sites
+    // that already disagree (mcp-write-claims.ts uses loadConfig(claimCwd),
+    // claim.ts uses actor.project_id); core is the one place that cannot drift.
+    project_id: options.project_id ?? resolveOwnerProjectId(cwd),
     scope: options.scope,
     description: options.description,
     lane: options.lane,

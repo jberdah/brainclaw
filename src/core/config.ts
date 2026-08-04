@@ -111,6 +111,37 @@ export function loadConfig(cwd?: string, preferredDirName?: string): Config {
   return loadVersionedYamlFile<Config>('config', filepath).document;
 }
 
+/**
+ * pln#649 step 1 (dec#153) — the OWNER project of an execution entity: the
+ * `project_id` of the store the entity is being written into, captured once at
+ * creation and never re-derived.
+ *
+ * This is the anchor the entity-authoritative routing of dec#153 compares
+ * against: for any work unit, `owner_project` is fixed at creation and every
+ * read/mutation of that unit must reach THAT store — regardless of pid, cwd,
+ * session or the shared global pointer. Without a persisted owner there is
+ * nothing for the hard-refusal check to compare, and nothing for a worker to
+ * derive its project from.
+ *
+ * DELIBERATELY `project_id`, not a new field. `ClaimSchema` already carries BOTH
+ * `project_id` (a stable prj_* id) and `project` (a free-text namespace LABEL
+ * consumed by filters — mcp-read-handlers.ts / coordination.ts). Adding a third
+ * project-ish field would have been the same defect one level up, so this reuses
+ * the id and leaves the label alone. Operator decision, 2026-08-04.
+ *
+ * Returns undefined rather than throwing: an uninitialised or unreadable store
+ * must not make entity creation fail, and the field is optional on every schema
+ * precisely so a record written by an older version stays valid (a zod-invalid
+ * record is silently deleted on the next syncDirectory — trp#d5595086).
+ */
+export function resolveOwnerProjectId(cwd?: string): string | undefined {
+  try {
+    return loadConfig(cwd).project_id;
+  } catch {
+    return undefined;
+  }
+}
+
 export function saveConfig(config: Config, cwd?: string, preferredDirName?: string): void {
   const filepath = memoryPath(CONFIG_FILE, cwd, preferredDirName);
   saveVersionedYamlFile('config', filepath, ConfigSchema.parse(config));

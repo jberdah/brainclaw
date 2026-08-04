@@ -880,6 +880,19 @@ export const AssignmentSchema = z.object({
   dispatcher_agent: z.string(),
   dispatcher_session_id: z.string().optional(),
 
+  /**
+   * OWNER project (pln#649 step 1, dec#153): the `project_id` of the store this
+   * assignment was created in, captured once and never re-derived. Every
+   * read/mutation of this assignment must reach THAT store — that is what makes
+   * entity-authoritative routing possible instead of ambient resolution.
+   * OPTIONAL by design: assignments written before this field existed must stay
+   * schema-valid (trp#d5595086 — a zod-invalid record is silently deleted on the
+   * next syncDirectory), and an absent owner means "fall back to current
+   * behaviour", never "refuse". Filled by createAssignment via
+   * resolveOwnerProjectId(cwd).
+   */
+  project_id: z.string().optional(),
+
   // Task metadata
   scope: z.string(),
   description: z.string(),
@@ -958,6 +971,14 @@ export const AgentRunSchema = z.object({
   agent: z.string(),
   agent_id: z.string().optional(),
   session_id: z.string().optional(),
+
+  /**
+   * OWNER project — same contract as Assignment.project_id (pln#649 step 1,
+   * dec#153): the `project_id` of the store this run was created in, captured
+   * once at creation. Optional for backward compatibility; filled by
+   * createAgentRun via resolveOwnerProjectId(cwd).
+   */
+  project_id: z.string().optional(),
 
   transport: AgentRunTransportSchema,
   status: AgentRunStatusSchema,

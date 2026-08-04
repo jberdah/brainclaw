@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs';
 import { AgentRunSchema, type AgentRun, type AgentRunStatus, type AgentRunTransport, type Assignment, type AssignmentArtifact } from './schema.js';
+import { resolveOwnerProjectId } from './config.js';
 import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, generateIdWithLabel } from './ids.js';
@@ -129,6 +130,8 @@ const VALID_TRANSITIONS = new Map<AgentRunStatus, Set<AgentRunStatus>>([
 export interface CreateAgentRunOptions {
   id?: string;
   short_label?: string;
+  /** Override the OWNER project id (pln#649 step 1). Omit in production. */
+  project_id?: string;
   assignment_id: string;
   claim_id: string;
   message_id?: string;
@@ -169,6 +172,8 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
     agent: options.agent,
     agent_id: options.agent_id,
     session_id: options.session_id,
+    // OWNER project — same core-level capture as createAssignment (pln#649 step 1).
+    project_id: options.project_id ?? resolveOwnerProjectId(cwd),
     transport: options.transport,
     status: options.status ?? 'created',
     status_reason: options.status_reason,
