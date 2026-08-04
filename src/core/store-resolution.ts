@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
-import { loadCurrentSession, loadSessionById } from './identity.js';
+import { loadCurrentSession, loadSessionById, resolveExplicitSessionId } from './identity.js';
 import { MEMORY_DIR } from './io.js';
 import { summarizeWorkspaceProjects } from './workspace-projects.js';
 
@@ -218,8 +218,45 @@ export function resolveEffectiveCwdInfo(
   //    anchor, the physical baseCwd, and the workspace root for each; the first
   //    session carrying a still-valid active_project wins (anchor first preserves
   //    prior precedence when the session lives where we expect).
+  //
+  //    pln#648 — the probe set must cover EVERY selector that could have been
+  //    effective when the session file was written, because that is what decided
+  //    its directory. Two were missing, and both are reachable:
+  //      - the cwd_child of step 5: an agent in `apps/api/src` writes its session
+  //        under `apps/api`, which is neither baseCwd nor the workspace root;
+  //      - the shared global pointer of step 6: a session created while another
+  //        agent's `switch --global` was in force lands under THAT project.
+  //    The second one was reproduced end-to-end on 2026-08-03 (/c/tmp/bclaw-mono,
+  //    v1.20.4): global pointer = web, `bclaw_switch(api)` reported
+  //    `{scope: session, name: api}` and `switch --json` read it back as api —
+  //    while the session file itself sat in `apps/web/.brainclaw/sessions/`, unseen
+  //    here, so every WRITE silently landed in web. Status green, data in the wrong
+  //    project: the worst failure mode a shared memory can have. The switch handler
+  //    finds the record (it resolves cwd first, landing on web, then reads the
+  //    session there); this resolver did not. Same file, two verdicts.
+  //    Both new candidates are lazy + memoized and are shared with steps 5/6. When
+  //    an earlier probe hits, neither helper runs and the cost is unchanged; after
+  //    all three miss, the pointer probe does add one session read before returning
+  //    the same `global` answer (review P3-5 — the claim is bounded to the hit path).
+  //
+  //    STRONG IDENTITY REQUIRED ON THE ADDED CANDIDATES (review P1-1/P1-2, both
+  //    scenarios reproduced by the reviewer). `loadCurrentSession` can return a
+  //    record this process does not own: the pidless candidate it adopts on
+  //    agent+user alone (identity.ts ~145 — agent_id and host_id are NOT compared),
+  //    and the legacy `.current-session` fallback (identity.ts ~158), returned with
+  //    no agent/user/pid/TTL check whatsoever. Honouring those from a store the
+  //    agent never named would let ANOTHER instance's stale intent outrank F1/F2
+  //    physical-child isolation — a behavioural expansion, not a bug fix. So the two
+  //    NEW candidates accept a session only on strong identity: an explicitly named
+  //    session id (argument or env — exact-file lookup), or a record whose pid is
+  //    this very process. The three original candidates keep their historical
+  //    behaviour untouched: this restriction narrows only what the fix added.
+  const explicitSessionId = options.sessionId ?? resolveExplicitSessionId();
   const probedSessionCwds = new Set<string>();
-  const probeSessionAt = (candidate: string | undefined): ResolvedEffectiveCwd | undefined => {
+  const probeSessionAt = (
+    candidate: string | undefined,
+    opts?: { requireStrongIdentity?: boolean },
+  ): ResolvedEffectiveCwd | undefined => {
     if (!candidate) return undefined;
     const probeCwd = path.resolve(candidate);
     if (probedSessionCwds.has(probeCwd)) return undefined; // dedup — no double read
@@ -227,20 +264,64 @@ export function resolveEffectiveCwdInfo(
     const session = options.sessionId
       ? loadSessionById(options.sessionId, probeCwd)
       : loadCurrentSession(probeCwd);
-    const sp = session?.active_project;
+    if (!session) return undefined;
+    // A named id is an exact-file lookup, so the record IS the one asked for; the
+    // pid check covers the unnamed case. Anything else is a weak adoption.
+    if (opts?.requireStrongIdentity && !explicitSessionId && session.pid !== process.pid) {
+      return undefined;
+    }
+    const sp = session.active_project;
     if (sp && fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
       return { cwd: sp.path, active_source: 'session', resolved_project: { path: sp.path, name: sp.name } };
     }
     return undefined;
   };
+  // The step-5 child and the step-6 shared pointer, each resolved AT MOST ONCE
+  // and shared with the step that owns it — so adding them to the probe set costs
+  // no extra disk work, and a probe can never disagree with the step it mirrors.
+  let cwdChildResolved = false;
+  let cwdChildValue: string | undefined;
+  const cwdChildCandidate = (): string | undefined => {
+    if (!cwdChildResolved) {
+      cwdChildResolved = true;
+      // Anchored (step 5): ceiling = the anchor. Unanchored (step 5b, F2
+      // trp_71accb07): ceiling = the discovered workspace root — never homedir.
+      const ceiling = hasEnvWorkspace ? anchorCwd : resolveWorkspaceRoot(baseCwd, options.storeChainOptions);
+      if (ceiling && baseCwd !== path.resolve(ceiling) && isAtOrBelow(baseCwd, ceiling)) {
+        const child = findClosestStoreBelow(baseCwd, ceiling);
+        // findClosestStoreBelow walks up EXCLUSIVELY of the ceiling, so a
+        // single-project repo can never yield its own root store here.
+        if (child && path.resolve(child) !== path.resolve(ceiling)) cwdChildValue = child;
+      }
+    }
+    return cwdChildValue;
+  };
+
+  let globalPointerResolved = false;
+  let globalPointerValue: { path: string; name?: string } | undefined;
+  const globalPointerCandidate = (): { path: string; name?: string } | undefined => {
+    if (!globalPointerResolved) {
+      globalPointerResolved = true;
+      const wsRoot = hasEnvWorkspace ? anchorCwd : resolveWorkspaceRoot(anchorCwd, options.storeChainOptions);
+      const active = wsRoot ? loadActiveProject(wsRoot) : undefined;
+      if (active && fs.existsSync(path.join(active.path, MEMORY_DIR, 'config.yaml'))) {
+        globalPointerValue = { path: active.path, name: active.name };
+      }
+    }
+    return globalPointerValue;
+  };
+
   // `??` short-circuits: the common case (agent at the anchor, session there)
   // costs exactly one session load and never walks for the workspace root. The
-  // baseCwd / workspace-root probes only run when the cheap ones miss — i.e. the
-  // monorepo case where the session was stored under the physical child.
+  // later probes only run when the cheap ones miss — i.e. the monorepo case where
+  // the session was stored under whichever project a PREVIOUS resolution picked
+  // (physical child, or the shared pointer — pln#648).
   const sessionHit =
     probeSessionAt(anchorCwd)
     ?? probeSessionAt(baseCwd)
-    ?? probeSessionAt(resolveWorkspaceRoot(baseCwd, options.storeChainOptions));
+    ?? probeSessionAt(resolveWorkspaceRoot(baseCwd, options.storeChainOptions))
+    ?? probeSessionAt(cwdChildCandidate(), { requireStrongIdentity: true })
+    ?? probeSessionAt(globalPointerCandidate()?.path, { requireStrongIdentity: true });
   if (sessionHit) return sessionHit;
 
   // 5. cwd_child — when anchored and the agent is physically inside a child store
@@ -253,11 +334,13 @@ export function resolveEffectiveCwdInfo(
   //    at/below it. `findClosestStoreBelow` walks UP to the ceiling but does NOT prove
   //    baseCwd sits below it — without the `isAtOrBelow` guard a baseCwd OUTSIDE the
   //    anchor could match an unrelated `.brainclaw` before hitting the filesystem root.
-  if (baseCwd !== anchorCwd && isAtOrBelow(baseCwd, anchorCwd)) {
-    const child = findClosestStoreBelow(baseCwd, anchorCwd);
-    if (child && path.resolve(child) !== path.resolve(anchorCwd)) {
-      return { cwd: child, active_source: 'cwd_child', resolved_project: projectInfo(child) };
-    }
+  //
+  //    pln#648: the candidate itself now comes from cwdChildCandidate() so this
+  //    step and the session probe above cannot drift apart. Both anchored (5) and
+  //    unanchored (5b) cases live in that one helper.
+  const cwdChild = cwdChildCandidate();
+  if (cwdChild) {
+    return { cwd: cwdChild, active_source: 'cwd_child', resolved_project: projectInfo(cwdChild) };
   }
 
   // 5b. cwd_child (NO anchor) — F2 [trp_71accb07]: even without a BRAINCLAW_CWD
@@ -270,23 +353,16 @@ export function resolveEffectiveCwdInfo(
   //     For a single-project repo this is a strict no-op: findClosestStoreBelow
   //     walks UP to the ceiling EXCLUSIVELY, so it can never return the lone root
   //     store (Codex cadrage non-regression proof, batch 2).
-  if (!hasEnvWorkspace) {
-    const physicalRoot = resolveWorkspaceRoot(baseCwd, options.storeChainOptions);
-    if (physicalRoot && isAtOrBelow(baseCwd, physicalRoot)) {
-      const child = findClosestStoreBelow(baseCwd, physicalRoot);
-      if (child && path.resolve(child) !== path.resolve(physicalRoot)) {
-        return { cwd: child, active_source: 'cwd_child', resolved_project: projectInfo(child) };
-      }
-    }
-  }
+  //     pln#648: both cases are now the single `cwdChildCandidate()` above.
 
   // 6. Global active-project.json from workspace root
-  const wsRoot = hasEnvWorkspace ? anchorCwd : resolveWorkspaceRoot(anchorCwd, options.storeChainOptions);
-  if (wsRoot) {
-    const active = loadActiveProject(wsRoot);
-    if (active && fs.existsSync(path.join(active.path, MEMORY_DIR, 'config.yaml'))) {
-      return { cwd: active.path, active_source: 'global', resolved_project: { path: active.path, name: active.name } };
-    }
+  const globalPointer = globalPointerCandidate();
+  if (globalPointer) {
+    return {
+      cwd: globalPointer.path,
+      active_source: 'global',
+      resolved_project: { path: globalPointer.path, name: globalPointer.name },
+    };
   }
 
   // 7. Default

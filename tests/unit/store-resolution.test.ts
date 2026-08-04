@@ -778,3 +778,255 @@ describe('core/store-resolution — monorepo root switchability (DGX Finding 1)'
     }
   });
 });
+
+// pln#648 — a session record lives under whichever store resolution picked WHEN
+// IT WAS WRITTEN, so the probe set must cover every selector that could have been
+// effective then. Two were missing and both are reachable in a monorepo; the
+// shared-pointer one was reproduced end-to-end on 2026-08-03 (/c/tmp/bclaw-mono,
+// v1.20.4): `switch` reported api while every WRITE landed in web. A resolver that
+// reports one project and writes to another is the worst failure mode a shared
+// memory can have, so each hole gets its own pin.
+describe('core/store-resolution — session found under a previously-resolved store (pln#648)', () => {
+  const SESSION_ENV_KEYS = [
+    'BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID',
+    'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID', 'BRAINCLAW_AGENT_NAME',
+  ];
+  function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+    const saved: Record<string, string | undefined> = {};
+    for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+    try {
+      for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      return fn();
+    } finally {
+      for (const k of SESSION_ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  }
+
+  function makeMonorepo(): { ws: string; api: string; web: string } {
+    const ws = tmpDir('bclaw-pln648-');
+    makeStore(ws, 'workspace');
+    saveConfig(defaultConfig('workspace', {
+      projectId: 'prj_workspace', projectMode: 'multi-project', projectStrategy: 'folder',
+    }), ws);
+    const api = path.join(ws, 'apps', 'api');
+    fs.mkdirSync(api, { recursive: true });
+    makeStore(api, 'repo');
+    saveConfig(defaultConfig('api', { projectId: 'prj_api' }), api);
+    const web = path.join(ws, 'apps', 'web');
+    fs.mkdirSync(web, { recursive: true });
+    makeStore(web, 'repo');
+    saveConfig(defaultConfig('web', { projectId: 'prj_web' }), web);
+    return { ws, api, web };
+  }
+
+  function session(sessionId: string, activeProject: { path: string; name: string }) {
+    const now = new Date().toISOString();
+    return {
+      session_id: sessionId, started_at: now, last_seen_at: now,
+      agent: 'claude', agent_id: 'agt_648', host_id: 'host_648',
+      active_project: { ...activeProject, switched_at: now },
+    };
+  }
+
+  it('THE REPRO: session stored under the shared-pointer project still wins over that pointer', () => {
+    const { ws, api, web } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws }, () => {
+        // Another agent's `switch --global` put the shared pointer on web…
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: new Date().toISOString() });
+        // …so this agent's session-start wrote its record UNDER WEB, and its own
+        // session-scoped `switch api` updated that record in place.
+        saveCurrentSession(session('sess_648_repro', { path: api, name: 'api' }), web);
+
+        const info = resolveEffectiveCwdInfo({ baseCwd: ws, sessionId: 'sess_648_repro' });
+        assert.equal(info.active_source, 'session', 'the session switch must not be invisible');
+        assert.equal(info.cwd, path.resolve(api), 'pre-fix this silently resolved web (the global pointer)');
+        assert.equal(info.resolved_project?.name, 'api');
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('session stored under the cwd_child still wins over that child (deep subdir, so baseCwd != child)', () => {
+    const { ws, api, web } = makeMonorepo();
+    const deep = path.join(api, 'src', 'handlers');
+    fs.mkdirSync(deep, { recursive: true });
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws }, () => {
+        // Agent working in apps/api/src/handlers: its session was written under
+        // apps/api (the cwd_child), and it then switched to web.
+        saveCurrentSession(session('sess_648_child', { path: web, name: 'web' }), api);
+
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep, sessionId: 'sess_648_child' });
+        assert.equal(info.active_source, 'session', 'the switch must beat physical location');
+        assert.equal(info.cwd, path.resolve(web), 'pre-fix this silently resolved api (cwd_child)');
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('NON-REGRESSION: no session anywhere → the shared pointer still wins (the probe invents nothing)', () => {
+    const { ws, web } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: new Date().toISOString() });
+        const info = resolveEffectiveCwdInfo({ baseCwd: ws, sessionId: 'sess_648_absent' });
+        assert.equal(info.active_source, 'global');
+        assert.equal(info.cwd, path.resolve(web));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('NON-REGRESSION: a session under the pointer project belonging to ANOTHER agent is not adopted', () => {
+    const { ws, api, web } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: new Date().toISOString() });
+        saveCurrentSession(session('sess_648_other', { path: api, name: 'api' }), web);
+        // Asking for a DIFFERENT session id must not pick up the stranger's switch.
+        const info = resolveEffectiveCwdInfo({ baseCwd: ws, sessionId: 'sess_648_mine' });
+        assert.equal(info.active_source, 'global');
+        assert.equal(info.cwd, path.resolve(web));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
+
+// pln#648 review P1-1 / P1-2 (codex, both scenarios reproduced by the reviewer).
+// `loadCurrentSession` can hand back a record this process does NOT own: the
+// pidless candidate it adopts on agent+user alone (agent_id / host_id are never
+// compared), and the legacy `.current-session` fallback, returned with no
+// agent/user/pid/TTL check at all. The pln#648 probes opened two NEW directories
+// to that adoption — which would let another instance's stale intent outrank F1/F2
+// physical-child isolation. These pins hold the line: on the ADDED candidates a
+// session steers resolution only on strong identity (named id, or this pid).
+describe('core/store-resolution — added probes require strong session identity (pln#648 review)', () => {
+  const SESSION_ENV_KEYS = [
+    'BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID',
+    'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID', 'BRAINCLAW_AGENT_NAME',
+  ];
+  function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+    const saved: Record<string, string | undefined> = {};
+    for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+    try {
+      for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      return fn();
+    } finally {
+      for (const k of SESSION_ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  }
+
+  function makeMonorepo(): { ws: string; api: string; web: string; deep: string } {
+    const ws = tmpDir('bclaw-648id-');
+    makeStore(ws, 'workspace');
+    saveConfig(defaultConfig('workspace', {
+      projectId: 'prj_workspace', projectMode: 'multi-project', projectStrategy: 'folder',
+    }), ws);
+    const api = path.join(ws, 'apps', 'api');
+    fs.mkdirSync(api, { recursive: true });
+    makeStore(api, 'repo');
+    saveConfig(defaultConfig('api', { projectId: 'prj_api' }), api);
+    const web = path.join(ws, 'apps', 'web');
+    fs.mkdirSync(web, { recursive: true });
+    makeStore(web, 'repo');
+    saveConfig(defaultConfig('web', { projectId: 'prj_web' }), web);
+    const deep = path.join(api, 'src', 'handlers');
+    fs.mkdirSync(deep, { recursive: true });
+    return { ws, api, web, deep };
+  }
+
+  /** A record owned by ANOTHER instance: no pid, and a foreign agent_id / host_id. */
+  function foreignPidlessSession(activeProject: { path: string; name: string }) {
+    const now = new Date().toISOString();
+    return {
+      session_id: 'sess_648_foreign', started_at: now, last_seen_at: now,
+      agent: 'shared-agent',            // same NAME — that is all the adopter compares
+      agent_id: 'agt_someone_else',     // different instance
+      host_id: 'host_someone_else',     // different machine
+      active_project: { ...activeProject, switched_at: now },
+    };
+  }
+
+  it('P1-2: a foreign PIDLESS session under the pointer project does NOT hijack a physical child', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: new Date().toISOString() });
+        saveCurrentSession(foreignPidlessSession({ path: web, name: 'web' }), web);
+        // No session id named anywhere: the record is only adoptable by agent+user.
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep });
+        assert.equal(info.active_source, 'cwd_child', 'F1/F2 physical isolation must hold');
+        assert.equal(info.cwd, path.resolve(api));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('P1-2: a foreign PIDLESS session under the cwd_child does NOT outrank the child itself', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveCurrentSession(foreignPidlessSession({ path: web, name: 'web' }), api);
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep });
+        assert.equal(info.active_source, 'cwd_child');
+        assert.equal(info.cwd, path.resolve(api), 'a foreign record must not redirect to web');
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('P1-2: the legacy .current-session fallback under the pointer project cannot steer either', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: new Date().toISOString() });
+        // The legacy path is returned with NO agent/user/pid/TTL validation at all.
+        fs.writeFileSync(
+          path.join(web, '.brainclaw', '.current-session'),
+          JSON.stringify(foreignPidlessSession({ path: web, name: 'web' })),
+          'utf-8',
+        );
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep });
+        assert.equal(info.active_source, 'cwd_child');
+        assert.equal(info.cwd, path.resolve(api));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('STILL WORKS: the same layout with a NAMED session id resolves the switch (strong identity)', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    const now = new Date().toISOString();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: now });
+        saveCurrentSession({
+          session_id: 'sess_648_named', started_at: now, last_seen_at: now,
+          agent: 'shared-agent', agent_id: 'agt_648', host_id: 'host_648',
+          active_project: { path: api, name: 'api', switched_at: now },
+        }, web);
+        // Naming the id is an exact-file lookup: this record IS the one asked for.
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep, sessionId: 'sess_648_named' });
+        assert.equal(info.active_source, 'session');
+        assert.equal(info.cwd, path.resolve(api));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
