@@ -1,0 +1,172 @@
+/**
+ * pln#649 step 2 — locating the store that owns an entity, by id.
+ *
+ * The cost pins matter as much as the correctness pins: this function sits on the
+ * routing path of every entity-discriminated mutation, so "how many stores did it
+ * touch" is part of its contract. They count FS PROBES (`result.probed`), not wall
+ * clock — a timing assertion measures the machine's load, not the code.
+ *
+ * The ambiguity pin is the one step 4 depends on: two stores holding the same id
+ * must surface as `ambiguous` with both matches, never be silently resolved by
+ * first-wins. That is the divergence the hard refusal exists for.
+ *
+ * @module
+ */
+import { describe, it, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { defaultConfig, saveConfig } from '../../src/core/config.js';
+import { createAssignment } from '../../src/core/assignments.js';
+import { enumerateCandidateStores, locateEntity } from '../../src/core/entity-locator.js';
+
+const ENV_KEYS = ['BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID', 'BRAINCLAW_STORE_BOUNDARY'];
+let cleanups: Array<() => void> = [];
+
+afterEach(() => {
+  for (const c of cleanups.reverse()) c();
+  cleanups = [];
+});
+
+function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+    return fn();
+  } finally {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+
+function store(dir: string, name: string, projectId: string, opts: { workspace?: boolean } = {}): string {
+  fs.mkdirSync(path.join(dir, '.brainclaw'), { recursive: true });
+  saveConfig(
+    defaultConfig(name, { projectId, ...(opts.workspace ? { projectMode: 'multi-project', projectStrategy: 'folder' } : {}) }),
+    dir,
+  );
+  if (opts.workspace) {
+    // `store_type` is read from the YAML by the store-chain walk but is not part of
+    // the typed Config surface — the store-resolution tests write it raw for the
+    // same reason. Appending keeps this fixture honest without widening the type.
+    const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+    fs.appendFileSync(configPath, '\nstore_type: workspace\n', 'utf-8');
+  }
+  return dir;
+}
+
+function monorepo(): { ws: string; api: string; web: string } {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-'));
+  cleanups.push(() => fs.rmSync(ws, { recursive: true, force: true }));
+  store(ws, 'workspace', 'prj_ws', { workspace: true });
+  const api = store(path.join(ws, 'apps', 'api'), 'api', 'prj_api');
+  const web = store(path.join(ws, 'apps', 'web'), 'web', 'prj_web');
+  return { ws, api, web };
+}
+
+function seedAssignment(cwd: string, id: string): void {
+  createAssignment({
+    id,
+    short_label: id,
+    claim_id: 'clm_locator',
+    agent: 'worker',
+    dispatcher_agent: 'coordinator',
+    scope: 'src/x.ts',
+    description: 'locator fixture',
+  }, cwd);
+}
+
+describe('core/entity-locator (pln#649 step 2)', () => {
+  it('COST: a single-project store costs exactly ONE probe', () => {
+    const solo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-solo-'));
+    cleanups.push(() => fs.rmSync(solo, { recursive: true, force: true }));
+    store(solo, 'solo', 'prj_solo');
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: solo }, () => {
+      seedAssignment(solo, 'asgn_solo');
+      const result = locateEntity('assignment', 'asgn_solo', solo);
+      assert.equal(result.status, 'found');
+      assert.deepEqual(result.probed, [path.resolve(solo)], 'the common case must not walk siblings');
+    });
+  });
+
+  it('probes the CALLER store first, so a local hit never pays for the workspace', () => {
+    const { ws, api } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      seedAssignment(api, 'asgn_local');
+      const result = locateEntity('assignment', 'asgn_local', api);
+      assert.equal(result.status, 'found');
+      assert.equal(result.probed[0], path.resolve(api));
+      assert.equal(result.location?.project_id, 'prj_api');
+    });
+  });
+
+  it('finds an entity that lives in a SIBLING project (the worker case)', () => {
+    const { ws, api } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      seedAssignment(api, 'asgn_sibling');
+      // Called from the workspace root — where ambient resolution would have
+      // landed a worker with no session.
+      const result = locateEntity('assignment', 'asgn_sibling', ws);
+      assert.equal(result.status, 'found');
+      assert.equal(result.location?.cwd, path.resolve(api));
+      assert.equal(result.location?.project_id, 'prj_api');
+      assert.equal(result.location?.project_name, 'api');
+    });
+  });
+
+  it('AMBIGUOUS: the same id in two stores is reported, never resolved by first-wins', () => {
+    const { ws, api, web } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      seedAssignment(api, 'asgn_dup');
+      seedAssignment(web, 'asgn_dup');
+      const result = locateEntity('assignment', 'asgn_dup', ws);
+      assert.equal(result.status, 'ambiguous', 'step 4 refuses on exactly this');
+      assert.equal(result.matches.length, 2);
+      assert.equal(result.location, undefined, 'no winner may be invented');
+      const ids = result.matches.map((m) => m.project_id).sort();
+      assert.deepEqual(ids, ['prj_api', 'prj_web']);
+    });
+  });
+
+  it('not_found is a status, not a throw — and the probe stays bounded', () => {
+    const { ws } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      const result = locateEntity('assignment', 'asgn_nowhere', ws);
+      assert.equal(result.status, 'not_found');
+      assert.equal(result.matches.length, 0);
+      // ws + api + web, each probed at most once.
+      assert.equal(new Set(result.probed).size, result.probed.length, 'no candidate probed twice');
+      assert.ok(result.probed.length <= 3, `expected ≤3 probes, got ${result.probed.length}`);
+    });
+  });
+
+  it('enumeration rejects paths that are not stores, and never repeats one', () => {
+    const { ws, api, web } = monorepo();
+    fs.mkdirSync(path.join(ws, 'apps', 'not-a-project'), { recursive: true });
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      const candidates = enumerateCandidateStores(ws);
+      assert.equal(new Set(candidates).size, candidates.length);
+      for (const c of candidates) {
+        assert.ok(fs.existsSync(path.join(c, '.brainclaw', 'config.yaml')), `${c} must be a real store`);
+      }
+      assert.ok(candidates.includes(path.resolve(api)));
+      assert.ok(candidates.includes(path.resolve(web)));
+      assert.ok(!candidates.some((c) => c.endsWith('not-a-project')));
+    });
+  });
+
+  it('an uninitialised caller store yields no candidates instead of throwing', () => {
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-bare-'));
+    cleanups.push(() => fs.rmSync(bare, { recursive: true, force: true }));
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: bare }, () => {
+      assert.deepEqual(enumerateCandidateStores(bare), []);
+      const result = locateEntity('assignment', 'asgn_x', bare);
+      assert.equal(result.status, 'not_found');
+      assert.deepEqual(result.probed, []);
+    });
+  });
+});
