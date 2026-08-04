@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
-import { loadCurrentSession, loadSessionById } from './identity.js';
+import { loadCurrentSession, loadSessionById, resolveExplicitSessionId } from './identity.js';
 import { MEMORY_DIR } from './io.js';
 import { summarizeWorkspaceProjects } from './workspace-projects.js';
 
@@ -234,10 +234,29 @@ export function resolveEffectiveCwdInfo(
   //    project: the worst failure mode a shared memory can have. The switch handler
   //    finds the record (it resolves cwd first, landing on web, then reads the
   //    session there); this resolver did not. Same file, two verdicts.
-  //    Both new candidates are lazy + memoized and are shared with steps 5/6, so a
-  //    hot path where an earlier probe hits costs exactly what it did before.
+  //    Both new candidates are lazy + memoized and are shared with steps 5/6. When
+  //    an earlier probe hits, neither helper runs and the cost is unchanged; after
+  //    all three miss, the pointer probe does add one session read before returning
+  //    the same `global` answer (review P3-5 — the claim is bounded to the hit path).
+  //
+  //    STRONG IDENTITY REQUIRED ON THE ADDED CANDIDATES (review P1-1/P1-2, both
+  //    scenarios reproduced by the reviewer). `loadCurrentSession` can return a
+  //    record this process does not own: the pidless candidate it adopts on
+  //    agent+user alone (identity.ts ~145 — agent_id and host_id are NOT compared),
+  //    and the legacy `.current-session` fallback (identity.ts ~158), returned with
+  //    no agent/user/pid/TTL check whatsoever. Honouring those from a store the
+  //    agent never named would let ANOTHER instance's stale intent outrank F1/F2
+  //    physical-child isolation — a behavioural expansion, not a bug fix. So the two
+  //    NEW candidates accept a session only on strong identity: an explicitly named
+  //    session id (argument or env — exact-file lookup), or a record whose pid is
+  //    this very process. The three original candidates keep their historical
+  //    behaviour untouched: this restriction narrows only what the fix added.
+  const explicitSessionId = options.sessionId ?? resolveExplicitSessionId();
   const probedSessionCwds = new Set<string>();
-  const probeSessionAt = (candidate: string | undefined): ResolvedEffectiveCwd | undefined => {
+  const probeSessionAt = (
+    candidate: string | undefined,
+    opts?: { requireStrongIdentity?: boolean },
+  ): ResolvedEffectiveCwd | undefined => {
     if (!candidate) return undefined;
     const probeCwd = path.resolve(candidate);
     if (probedSessionCwds.has(probeCwd)) return undefined; // dedup — no double read
@@ -245,7 +264,13 @@ export function resolveEffectiveCwdInfo(
     const session = options.sessionId
       ? loadSessionById(options.sessionId, probeCwd)
       : loadCurrentSession(probeCwd);
-    const sp = session?.active_project;
+    if (!session) return undefined;
+    // A named id is an exact-file lookup, so the record IS the one asked for; the
+    // pid check covers the unnamed case. Anything else is a weak adoption.
+    if (opts?.requireStrongIdentity && !explicitSessionId && session.pid !== process.pid) {
+      return undefined;
+    }
+    const sp = session.active_project;
     if (sp && fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
       return { cwd: sp.path, active_source: 'session', resolved_project: { path: sp.path, name: sp.name } };
     }
@@ -295,8 +320,8 @@ export function resolveEffectiveCwdInfo(
     probeSessionAt(anchorCwd)
     ?? probeSessionAt(baseCwd)
     ?? probeSessionAt(resolveWorkspaceRoot(baseCwd, options.storeChainOptions))
-    ?? probeSessionAt(cwdChildCandidate())
-    ?? probeSessionAt(globalPointerCandidate()?.path);
+    ?? probeSessionAt(cwdChildCandidate(), { requireStrongIdentity: true })
+    ?? probeSessionAt(globalPointerCandidate()?.path, { requireStrongIdentity: true });
   if (sessionHit) return sessionHit;
 
   // 5. cwd_child — when anchored and the agent is physically inside a child store

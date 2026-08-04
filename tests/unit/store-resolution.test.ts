@@ -900,3 +900,133 @@ describe('core/store-resolution — session found under a previously-resolved st
     }
   });
 });
+
+// pln#648 review P1-1 / P1-2 (codex, both scenarios reproduced by the reviewer).
+// `loadCurrentSession` can hand back a record this process does NOT own: the
+// pidless candidate it adopts on agent+user alone (agent_id / host_id are never
+// compared), and the legacy `.current-session` fallback, returned with no
+// agent/user/pid/TTL check at all. The pln#648 probes opened two NEW directories
+// to that adoption — which would let another instance's stale intent outrank F1/F2
+// physical-child isolation. These pins hold the line: on the ADDED candidates a
+// session steers resolution only on strong identity (named id, or this pid).
+describe('core/store-resolution — added probes require strong session identity (pln#648 review)', () => {
+  const SESSION_ENV_KEYS = [
+    'BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID',
+    'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID', 'BRAINCLAW_AGENT_NAME',
+  ];
+  function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+    const saved: Record<string, string | undefined> = {};
+    for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+    try {
+      for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      return fn();
+    } finally {
+      for (const k of SESSION_ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  }
+
+  function makeMonorepo(): { ws: string; api: string; web: string; deep: string } {
+    const ws = tmpDir('bclaw-648id-');
+    makeStore(ws, 'workspace');
+    saveConfig(defaultConfig('workspace', {
+      projectId: 'prj_workspace', projectMode: 'multi-project', projectStrategy: 'folder',
+    }), ws);
+    const api = path.join(ws, 'apps', 'api');
+    fs.mkdirSync(api, { recursive: true });
+    makeStore(api, 'repo');
+    saveConfig(defaultConfig('api', { projectId: 'prj_api' }), api);
+    const web = path.join(ws, 'apps', 'web');
+    fs.mkdirSync(web, { recursive: true });
+    makeStore(web, 'repo');
+    saveConfig(defaultConfig('web', { projectId: 'prj_web' }), web);
+    const deep = path.join(api, 'src', 'handlers');
+    fs.mkdirSync(deep, { recursive: true });
+    return { ws, api, web, deep };
+  }
+
+  /** A record owned by ANOTHER instance: no pid, and a foreign agent_id / host_id. */
+  function foreignPidlessSession(activeProject: { path: string; name: string }) {
+    const now = new Date().toISOString();
+    return {
+      session_id: 'sess_648_foreign', started_at: now, last_seen_at: now,
+      agent: 'shared-agent',            // same NAME — that is all the adopter compares
+      agent_id: 'agt_someone_else',     // different instance
+      host_id: 'host_someone_else',     // different machine
+      active_project: { ...activeProject, switched_at: now },
+    };
+  }
+
+  it('P1-2: a foreign PIDLESS session under the pointer project does NOT hijack a physical child', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: new Date().toISOString() });
+        saveCurrentSession(foreignPidlessSession({ path: web, name: 'web' }), web);
+        // No session id named anywhere: the record is only adoptable by agent+user.
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep });
+        assert.equal(info.active_source, 'cwd_child', 'F1/F2 physical isolation must hold');
+        assert.equal(info.cwd, path.resolve(api));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('P1-2: a foreign PIDLESS session under the cwd_child does NOT outrank the child itself', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveCurrentSession(foreignPidlessSession({ path: web, name: 'web' }), api);
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep });
+        assert.equal(info.active_source, 'cwd_child');
+        assert.equal(info.cwd, path.resolve(api), 'a foreign record must not redirect to web');
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('P1-2: the legacy .current-session fallback under the pointer project cannot steer either', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: new Date().toISOString() });
+        // The legacy path is returned with NO agent/user/pid/TTL validation at all.
+        fs.writeFileSync(
+          path.join(web, '.brainclaw', '.current-session'),
+          JSON.stringify(foreignPidlessSession({ path: web, name: 'web' })),
+          'utf-8',
+        );
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep });
+        assert.equal(info.active_source, 'cwd_child');
+        assert.equal(info.cwd, path.resolve(api));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('STILL WORKS: the same layout with a NAMED session id resolves the switch (strong identity)', () => {
+    const { ws, api, web, deep } = makeMonorepo();
+    const now = new Date().toISOString();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_AGENT_NAME: 'shared-agent' }, () => {
+        saveActiveProject(ws, { path: web, name: 'web', switched_at: now });
+        saveCurrentSession({
+          session_id: 'sess_648_named', started_at: now, last_seen_at: now,
+          agent: 'shared-agent', agent_id: 'agt_648', host_id: 'host_648',
+          active_project: { path: api, name: 'api', switched_at: now },
+        }, web);
+        // Naming the id is an exact-file lookup: this record IS the one asked for.
+        const info = resolveEffectiveCwdInfo({ baseCwd: deep, sessionId: 'sess_648_named' });
+        assert.equal(info.active_source, 'session');
+        assert.equal(info.cwd, path.resolve(api));
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});

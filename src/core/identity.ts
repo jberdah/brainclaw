@@ -298,7 +298,15 @@ function resolveCurrentAgentName(): string | undefined {
   return detectAiAgent()?.name;
 }
 
-function resolveExplicitSessionId(env: NodeJS.ProcessEnv = process.env): string | undefined {
+/**
+ * The session id the CALLER named, via argument or env. Exported (pln#648 review
+ * P1) because store-resolution must tell a STRONGLY identified session (exact id,
+ * or a record whose pid is this process) from a WEAKLY adopted one (the pidless
+ * candidate at line ~145, or the legacy `.current-session` fallback, which is
+ * returned with no agent/user/pid/TTL check at all). Only the former may steer
+ * resolution from a store the agent never named.
+ */
+export function resolveExplicitSessionId(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return env.BRAINCLAW_SESSION_ID?.trim()
     || env.OPENCLAW_SESSION_ID?.trim()
     || env.CLAUDE_SESSION_ID?.trim()
