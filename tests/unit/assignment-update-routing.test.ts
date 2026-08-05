@@ -1,0 +1,159 @@
+/**
+ * pln#649 step 3 (F5 of dec#153) — `bclaw_assignment_update` is routed by the
+ * ENTITY, not by ambient resolution.
+ *
+ * PINNED AT THE SURFACE, deliberately. The locator has its own unit pins, but green
+ * core tests are exactly what shipped two inert features before
+ * (feedback_verify_at_the_surface_not_the_core): what has to hold is that the MCP
+ * HANDLER a worker actually calls reaches the right store. So these drive
+ * `handleBclawAssignmentUpdate` and then assert the transition ON DISK in the target
+ * project.
+ *
+ * The first pin is the field defect that started this whole thread: a worker whose
+ * resolved store was not the assignment's got `Assignment not found` and the
+ * assignment stayed `offered` forever, with no route for the coordinator to fix it.
+ *
+ * @module
+ */
+import { describe, it, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { defaultConfig, saveConfig } from '../../src/core/config.js';
+import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
+import { handleBclawAssignmentUpdate } from '../../src/commands/mcp-write-claims.js';
+import type { McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
+import type { McpToolExecutionPayload } from '../../src/commands/mcp-contract.js';
+
+const ENV_KEYS = ['BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID', 'BRAINCLAW_STORE_BOUNDARY', 'BRAINCLAW_AGENT_NAME'];
+let cleanups: Array<() => void> = [];
+
+afterEach(() => {
+  for (const c of cleanups.reverse()) c();
+  cleanups = [];
+});
+
+function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+    return fn();
+  } finally {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+
+/**
+ * Only `ensureTrust` is reachable on the path under test, so the rest of the context
+ * is intentionally absent — a full fake would assert nothing extra and would rot
+ * every time the interface grows.
+ */
+function fakeCtx(agentName: string): McpWriteClaimsContext {
+  return {
+    ensureTrust: () => ({
+      identity: { agent_name: agentName, agent_id: 'agt_test' } as unknown as ReturnType<McpWriteClaimsContext['ensureTrust']>['identity'],
+    }),
+  } as unknown as McpWriteClaimsContext;
+}
+
+function payload(args: Record<string, unknown>, cwd: string): McpToolExecutionPayload {
+  return { name: 'bclaw_assignment_update', args, cwd };
+}
+
+function makeStore(dir: string, name: string, projectId: string): string {
+  fs.mkdirSync(path.join(dir, '.brainclaw'), { recursive: true });
+  saveConfig(defaultConfig(name, { projectId }), dir);
+  return dir;
+}
+
+/** Workspace root with two sibling projects — the topology the defect needs. */
+function monorepo(): { ws: string; api: string; web: string } {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-route-'));
+  cleanups.push(() => fs.rmSync(ws, { recursive: true, force: true }));
+  makeStore(ws, 'workspace', 'prj_ws');
+  const config = defaultConfig('workspace', { projectId: 'prj_ws', projectMode: 'multi-project', projectStrategy: 'folder' });
+  saveConfig(config, ws);
+  return {
+    ws,
+    api: makeStore(path.join(ws, 'apps', 'api'), 'api', 'prj_api'),
+    web: makeStore(path.join(ws, 'apps', 'web'), 'web', 'prj_web'),
+  };
+}
+
+function seed(cwd: string, id: string): void {
+  createAssignment({
+    id, short_label: id, claim_id: 'clm_route', agent: 'worker',
+    dispatcher_agent: 'coordinator', scope: 'src/x.ts', description: 'routing fixture',
+  }, cwd);
+  transitionAssignment(id, 'offered', { actor: 'coordinator' }, cwd);
+}
+
+describe('bclaw_assignment_update routing (pln#649 step 3)', () => {
+  it('THE FIELD DEFECT: an update from the WRONG ambient store still reaches the owner', async () => {
+    const { ws, api } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      seed(api, 'asgn_routed');
+      assert.equal(loadAssignment('asgn_routed', api)?.status, 'offered');
+
+      // Ambient cwd is the WORKSPACE ROOT — where a worker with no session lands.
+      const outcome = await handleBclawAssignmentUpdate(
+        payload({ assignment_id: 'asgn_routed', status: 'accepted' }, ws),
+        fakeCtx('worker'),
+      );
+
+      assert.ok(!outcome.response.isError, `expected success, got ${JSON.stringify(outcome.response.content)}`);
+      // Asserted ON DISK in the owning project: this is the whole point.
+      assert.equal(loadAssignment('asgn_routed', api)?.status, 'accepted');
+    });
+  });
+
+  it('AMBIGUOUS: the same id in two projects is REFUSED, and both are named', async () => {
+    const { ws, api, web } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      seed(api, 'asgn_dup');
+      seed(web, 'asgn_dup');
+
+      const outcome = await handleBclawAssignmentUpdate(
+        payload({ assignment_id: 'asgn_dup', status: 'accepted' }, ws),
+        fakeCtx('worker'),
+      );
+
+      assert.ok(outcome.response.isError, 'a guess here would be a silent cross-project write');
+      const text = JSON.stringify(outcome.response.content);
+      assert.match(text, /api/);
+      assert.match(text, /web/);
+      // Neither store may have been mutated.
+      assert.equal(loadAssignment('asgn_dup', api)?.status, 'offered');
+      assert.equal(loadAssignment('asgn_dup', web)?.status, 'offered');
+    });
+  });
+
+  it('an id that could escape the store is rejected before any path is built', async () => {
+    const { ws } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      const outcome = await handleBclawAssignmentUpdate(
+        payload({ assignment_id: '../../etc/passwd', status: 'accepted' }, ws),
+        fakeCtx('worker'),
+      );
+      assert.ok(outcome.response.isError);
+      assert.match(JSON.stringify(outcome.response.content), /Invalid assignment_id/);
+    });
+  });
+
+  it('not_found says WHERE it looked, so it cannot be confused with a routing miss', async () => {
+    const { ws } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      const outcome = await handleBclawAssignmentUpdate(
+        payload({ assignment_id: 'asgn_absent', status: 'accepted' }, ws),
+        fakeCtx('worker'),
+      );
+      assert.ok(outcome.response.isError);
+      assert.match(JSON.stringify(outcome.response.content), /searched/);
+    });
+  });
+});

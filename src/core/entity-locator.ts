@@ -119,6 +119,18 @@ function subdirFor(entity: Exclude<LocatableEntity, 'loop'>): string {
  * never looked at. Choosing a directory is the wrong primitive for a per-file
  * question, so both layouts are probed by FILE and the caller sees one hit.
  */
+/**
+ * The identifier shape `JsonStore` enforces before building a record path
+ * (json-store.ts:78). Duplicated HERE rather than trusted from the caller (review
+ * P2-6): this module joins an id into a filesystem path, so an id containing `..`
+ * or a separator would escape the store it is supposed to be probing. Callers on
+ * the MCP surface validate too and return a clean input_error — this is the
+ * backstop that makes the escape impossible rather than merely unlikely.
+ */
+export function isLocatableId(id: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(id);
+}
+
 function recordPaths(entity: LocatableEntity, id: string, storeCwd: string): string[] {
   const base = path.join(storeCwd, MEMORY_DIR);
   if (entity === 'loop') {
@@ -294,6 +306,13 @@ export function locateEntity(
   cwd: string,
   options: { candidates?: string[]; maxDepth?: number } = {},
 ): LocateEntityResult {
+  // An unusable id never touches the filesystem: no path is built, nothing is
+  // probed. Reported as not_found rather than thrown so an MCP handler can turn it
+  // into a clean input_error without a crash, while an internal caller that forgot
+  // to validate still cannot escape a store.
+  if (!isLocatableId(id)) {
+    return { status: 'not_found', matches: [], probed: [], enumeration_incomplete: false };
+  }
   const enumeration = options.candidates
     ? { stores: options.candidates, incomplete: false }
     : enumerateCandidates(cwd, { maxDepth: options.maxDepth });

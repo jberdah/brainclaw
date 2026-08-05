@@ -18,6 +18,7 @@ import { buildContext } from '../core/context.js';
 import { detectCommitsBehindMainDetailed } from '../core/execution-context.js';
 import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
+import { isLocatableId, locateEntity } from '../core/entity-locator.js';
 import { generateClaimId, loadClaim, saveClaim, adoptClaimSession, releaseClaimWithCascade, claimBaselineFields } from '../core/claims.js';
 import { releaseClaimNextActions } from '../core/next-actions.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
@@ -610,7 +611,40 @@ export async function handleBclawSessionEnd(payload: McpToolExecutionPayload, ct
 }
 
 export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
-  const { args, cwd, connectionSessionId } = payload;
+  const { args, connectionSessionId } = payload;
+
+  // ── pln#649 step 3 (F5 of dec#153): the ENTITY routes this call, not the ambient
+  // cwd. This is the surface where the field defect was reproduced: a worker whose
+  // resolved store was not the assignment's got `Assignment not found`, and the
+  // assignment stayed `offered` forever with no way for the coordinator to fix it.
+  //
+  // ORDER IS LOAD-BEARING (review P2-6 of step 2). Routing MUST happen before
+  // ensureTrust: that call resolves identity and trust FROM A STORE, so running it
+  // on the ambient store can reject the caller before the locator ever gets to say
+  // which store owns the work. Same for loadAssignment below. So `cwd` is rebound
+  // once, here, and every downstream use is routed by construction — there is no
+  // second site to forget.
+  const assignmentIdArg = typeof args.assignment_id === 'string' ? args.assignment_id : undefined;
+  if (!assignmentIdArg) return { response: createToolErrorResponse('input_error', 'assignment_id is required') };
+  if (!isLocatableId(assignmentIdArg)) {
+    return { response: createToolErrorResponse('input_error', `Invalid assignment_id '${assignmentIdArg}'`) };
+  }
+  const located = locateEntity('assignment', assignmentIdArg, payload.cwd);
+  if (located.status === 'ambiguous') {
+    // Two stores hold this id. Refusing is the point (T3): picking one would be a
+    // silent cross-project write, which is the failure mode dec#153 exists against.
+    return {
+      response: createToolErrorResponse(
+        'validation_error',
+        `Assignment ${assignmentIdArg} exists in ${located.matches.length} projects `
+        + `(${located.matches.map((m) => m.project_name ?? m.cwd).join(', ')}). Refusing to guess which one you meant — `
+        + 'resolve the duplicate, or call from the project that owns the work.',
+        { assignment_id: assignmentIdArg, matches: located.matches },
+      ),
+    };
+  }
+  const cwd = located.location?.cwd ?? payload.cwd;
+
   // Contributor trust: lowest dispatchable level. The agent-owner guard
   // below ensures only the assigned agent can update its own assignment.
   const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
@@ -618,9 +652,8 @@ export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPaylo
     return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
   }
   try {
-    const assignmentId = typeof args.assignment_id === 'string' ? args.assignment_id : undefined;
+    const assignmentId = assignmentIdArg;
     const status = typeof args.status === 'string' ? args.status : undefined;
-    if (!assignmentId) return { response: createToolErrorResponse('input_error', 'assignment_id is required') };
     if (!status) return { response: createToolErrorResponse('input_error', 'status is required') };
     const message = args.message as string | undefined;
     const errorMessage = args.error_message as string | undefined;
@@ -635,7 +668,20 @@ export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPaylo
 
     const assignment = loadAssignment(assignmentId, cwd);
     if (!assignment) {
-      return { response: createToolErrorResponse('not_found', `Assignment not found: ${assignmentId}`) };
+      // Say WHERE we looked. "not found" used to be indistinguishable from "found
+      // in a store I was not routed to" — the exact ambiguity that made the field
+      // report hard to diagnose. And an incomplete enumeration must never read as a
+      // confident absence (step 2, enumeration_incomplete).
+      const scope = located.enumeration_incomplete
+        ? `${located.probed.length} reachable project(s), and the search hit its depth ceiling so deeper projects were NOT examined`
+        : `all ${located.probed.length} reachable project(s)`;
+      return {
+        response: createToolErrorResponse(
+          'not_found',
+          `Assignment not found: ${assignmentId} (searched ${scope})`,
+          { assignment_id: assignmentId, searched: located.probed, enumeration_incomplete: located.enumeration_incomplete },
+        ),
+      };
     }
 
     // Agent guard: only the assigned agent can update
