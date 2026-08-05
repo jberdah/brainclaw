@@ -111,6 +111,65 @@ export function loadConfig(cwd?: string, preferredDirName?: string): Config {
   return loadVersionedYamlFile<Config>('config', filepath).document;
 }
 
+/**
+ * pln#649 step 1 (dec#153) — the OWNER project of an execution entity: the
+ * `project_id` of the store the entity is being written into, captured once at
+ * creation and never re-derived.
+ *
+ * This is the anchor the entity-authoritative routing of dec#153 compares
+ * against: for any work unit, `owner_project` is fixed at creation and every
+ * read/mutation of that unit must reach THAT store — regardless of pid, cwd,
+ * session or the shared global pointer. Without a persisted owner there is
+ * nothing for the hard-refusal check to compare, and nothing for a worker to
+ * derive its project from.
+ *
+ * DELIBERATELY `project_id`, not a new field. `ClaimSchema` already carries BOTH
+ * `project_id` (a stable prj_* id) and `project` (a free-text namespace LABEL
+ * consumed by filters — mcp-read-handlers.ts / coordination.ts). Adding a third
+ * project-ish field would have been the same defect one level up, so this reuses
+ * the id and leaves the label alone. Operator decision, 2026-08-04.
+ *
+ * SWALLOWS ONLY "there is no store here" (ENOENT / ENOTDIR). Everything else —
+ * malformed YAML, schema-invalid config, permission denied, I/O failure — is
+ * RETHROWN (review P1-2). A catch-all was the first version and it was wrong in a
+ * way that defeated the whole point: a store with a corrupt config but writable
+ * coordination dirs would create entities with NO owner, and step 4 would then
+ * read the absent owner as "legacy", skip its refusal, and silently hand back the
+ * guarantee this field exists to provide. Degrading quietly is exactly the failure
+ * mode dec#153 is against.
+ *
+ * The field is optional on every schema so a record written before it existed
+ * stays loadable. (An earlier version of this comment claimed a zod-invalid record
+ * is DELETED on the next syncDirectory — that is false for the current code:
+ * state.ts preserves unparseable files precisely so a parse failure cannot corrupt
+ * data (trp#126). Required would make old records unloadable, not deleted.)
+ */
+export function resolveOwnerProjectId(
+  cwd?: string,
+  options: { strict?: boolean } = {},
+): string | undefined {
+  try {
+    return loadConfig(cwd).project_id;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined; // no store here
+    // A store that EXISTS but cannot be read (malformed YAML, schema-invalid,
+    // permission, I/O). Review P1-2 asked for a rethrow so a corrupt store could
+    // not quietly produce ownerless entities that a later refusal would wave
+    // through as "legacy". The intent is right and the placement was not: a
+    // rethrow HERE made `createAssignment` throw, the dispatcher swallowed it, and
+    // every dispatch silently lost its assignment_id — six CI jobs, caught only by
+    // the full suite. Breaking dispatch is worse than a missing owner.
+    //
+    // So the default is lenient — CREATION MUST NEVER FAIL because a config is
+    // corrupt — and the strictness moves to the consumer that actually needs it:
+    // pass `strict` from the refusal path (pln#649 step 4), where "I could not read
+    // the owner" must be a loud stop rather than an implicit "legacy".
+    if (options.strict) throw err;
+    return undefined;
+  }
+}
+
 export function saveConfig(config: Config, cwd?: string, preferredDirName?: string): void {
   const filepath = memoryPath(CONFIG_FILE, cwd, preferredDirName);
   saveVersionedYamlFile('config', filepath, ConfigSchema.parse(config));
