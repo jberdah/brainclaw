@@ -152,12 +152,35 @@ describe('core/owner project id (pln#649 step 1)', () => {
   // review P1-2: a corrupt config must NOT degrade to "no owner". Silently
   // producing an ownerless entity would make step 4 treat it as legacy and skip
   // the refusal — handing back the guarantee this field exists to provide.
-  it('a MALFORMED config throws instead of yielding an ownerless entity', () => {
+  // A MALFORMED config is loud only where loudness is affordable. The first version
+  // of this pin asserted an unconditional throw, per review P1-2 — and that broke
+  // every dispatch: createAssignment threw, the dispatcher swallowed it, and six CI
+  // jobs failed on a missing assignment_id. Creation must never fail because a config
+  // is corrupt, so the default is lenient and the strictness belongs to the refusal
+  // path that actually needs it (pln#649 step 4).
+  it('a MALFORMED config is lenient by default and loud on demand', () => {
     const broken = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-owner-broken-'));
     try {
       fs.mkdirSync(path.join(broken, '.brainclaw'), { recursive: true });
       fs.writeFileSync(path.join(broken, '.brainclaw', 'config.yaml'), 'project_name: [unclosed\n', 'utf-8');
-      assert.throws(() => resolveOwnerProjectId(broken), 'a corrupt store must be loud, not ownerless');
+      assert.equal(resolveOwnerProjectId(broken), undefined, 'creation must not be blocked by a corrupt store');
+      assert.throws(
+        () => resolveOwnerProjectId(broken, { strict: true }),
+        'the refusal path must be able to tell unreadable from absent',
+      );
+    } finally {
+      fs.rmSync(broken, { recursive: true, force: true });
+    }
+  });
+
+  it('a corrupt store still yields a usable assignment — dispatch is never blocked', () => {
+    const broken = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-owner-corrupt-'));
+    try {
+      fs.mkdirSync(path.join(broken, '.brainclaw'), { recursive: true });
+      fs.writeFileSync(path.join(broken, '.brainclaw', 'config.yaml'), 'project_name: [unclosed\n', 'utf-8');
+      const assignment = newAssignment(broken);
+      assert.ok(assignment.id, 'the assignment must exist even with no readable owner');
+      assert.equal(assignment.project_id, undefined);
     } finally {
       fs.rmSync(broken, { recursive: true, force: true });
     }

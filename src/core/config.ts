@@ -144,13 +144,29 @@ export function loadConfig(cwd?: string, preferredDirName?: string): Config {
  * state.ts preserves unparseable files precisely so a parse failure cannot corrupt
  * data (trp#126). Required would make old records unloadable, not deleted.)
  */
-export function resolveOwnerProjectId(cwd?: string): string | undefined {
+export function resolveOwnerProjectId(
+  cwd?: string,
+  options: { strict?: boolean } = {},
+): string | undefined {
   try {
     return loadConfig(cwd).project_id;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined; // no store here
-    throw err;
+    // A store that EXISTS but cannot be read (malformed YAML, schema-invalid,
+    // permission, I/O). Review P1-2 asked for a rethrow so a corrupt store could
+    // not quietly produce ownerless entities that a later refusal would wave
+    // through as "legacy". The intent is right and the placement was not: a
+    // rethrow HERE made `createAssignment` throw, the dispatcher swallowed it, and
+    // every dispatch silently lost its assignment_id — six CI jobs, caught only by
+    // the full suite. Breaking dispatch is worse than a missing owner.
+    //
+    // So the default is lenient — CREATION MUST NEVER FAIL because a config is
+    // corrupt — and the strictness moves to the consumer that actually needs it:
+    // pass `strict` from the refusal path (pln#649 step 4), where "I could not read
+    // the owner" must be a loud stop rather than an implicit "legacy".
+    if (options.strict) throw err;
+    return undefined;
   }
 }
 
