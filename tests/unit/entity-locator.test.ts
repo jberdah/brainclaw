@@ -216,6 +216,30 @@ describe('core/entity-locator (pln#649 step 2)', () => {
     });
   });
 
+  // review P1-1, his exact reproduction: a store BELOW the ceiling with nothing in
+  // between. The old heuristic (deepest RESULT near the ceiling) reported
+  // completeness here, so the handler emitted a CONFIDENT not_found. Truncation now
+  // comes from the walk, which sees the branch being cut whether or not it found
+  // anything.
+  it('DEPTH: a store below the ceiling yields not_found flagged as INCOMPLETE, never a confident miss', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-depth-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    store(root, 'root', 'prj_depth_root', { workspace: true });
+    const deep = path.join(root, 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7');
+    fs.mkdirSync(deep, { recursive: true });
+    store(deep, 'buried', 'prj_buried');
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: root }, () => {
+      seedAssignment(deep, 'asgn_depth7');
+      const result = locateEntity('assignment', 'asgn_depth7', root);
+      assert.equal(result.status, 'not_found');
+      assert.equal(
+        result.enumeration_incomplete,
+        true,
+        'a cut branch must be reported, or a refusal downstream would be built on a lie',
+      );
+    });
+  });
+
   it('an uninitialised caller store yields no candidates instead of throwing', () => {
     const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-bare-'));
     cleanups.push(() => fs.rmSync(bare, { recursive: true, force: true }));

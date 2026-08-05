@@ -92,12 +92,29 @@ export function summarizeWorkspaceProjects(cwd: string, config: Pick<Config, 'pr
   };
 }
 
-export function scanNestedBrainclawProjects(rootDir: string, maxDepth = 6): RegisteredProject[] {
+/**
+ * pln#649 step 3 review P1-1 — the scan plus whether it was TRUNCATED.
+ *
+ * A caller that turns "no project found" into a refusal must be able to tell that
+ * apart from "I stopped looking". Inferring it from the results is not enough, and
+ * that mistake was reproduced: with a store at `root/d1/…/d7` and nothing in
+ * `d1…d6`, the walk cut the branch without ever returning a project near the
+ * ceiling, so a heuristic based on the deepest RESULT reported completeness while
+ * the target sat one level below the cut. Truncation is a property of the WALK, so
+ * only the walk can report it.
+ */
+export function scanNestedBrainclawProjectsDetailed(
+  rootDir: string,
+  maxDepth = 6,
+): { projects: RegisteredProject[]; truncated: boolean } {
   const resolvedRoot = path.resolve(rootDir);
   const results = new Map<string, RegisteredProject>();
+  let truncated = false;
 
   function walk(dir: string, depth: number): void {
     if (depth > maxDepth) {
+      // A branch we were asked to descend is being cut: anything below is unseen.
+      truncated = true;
       return;
     }
 
@@ -123,7 +140,15 @@ export function scanNestedBrainclawProjects(rootDir: string, maxDepth = 6): Regi
   }
 
   walk(resolvedRoot, 1);
-  return [...results.values()].sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    projects: [...results.values()].sort((a, b) => a.path.localeCompare(b.path)),
+    truncated,
+  };
+}
+
+/** Backward-compatible projection: the projects only, for every existing caller. */
+export function scanNestedBrainclawProjects(rootDir: string, maxDepth = 6): RegisteredProject[] {
+  return scanNestedBrainclawProjectsDetailed(rootDir, maxDepth).projects;
 }
 
 function collectRegistryProjectsUnder(rootDir: string): RegisteredProject[] {

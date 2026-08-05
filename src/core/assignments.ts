@@ -11,9 +11,10 @@
  * @module
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
 import { resolveOwnerProjectId } from './config.js';
-import { resolveEntityDir } from './io.js';
+import { memoryDir, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, generateIdWithLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
@@ -34,6 +35,18 @@ function ensureAssignmentsDir(cwd?: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+}
+
+/**
+ * Both directories an assignment record can live in, canonical first: the entity
+ * layout and the pre-migration flat one. Reads that target a SPECIFIC id must try
+ * both (review P1-2); writes keep using `assignmentsDir(cwd, 'write')`, which is
+ * always canonical, so nothing new is ever created in the legacy location.
+ */
+function assignmentDirCandidates(cwd?: string): string[] {
+  const canonical = resolveEntityDir('assignments', cwd ?? process.cwd(), 'write');
+  const legacy = path.join(memoryDir(cwd ?? process.cwd()), 'assignments');
+  return canonical === legacy ? [canonical] : [canonical, legacy];
 }
 
 function assignmentStore(cwd?: string): JsonStore<Assignment> {
@@ -69,11 +82,25 @@ export function loadAssignment(id: string, cwd?: string): Assignment | undefined
   // JsonStore.load throws when the id is missing; honor the declared
   // "| undefined" return type so callers (e.g. transitionAssignment)
   // can emit their own 'Assignment not found' error with the right wording.
-  try {
-    return assignmentStore(cwd).load(id);
-  } catch {
-    return undefined;
+  //
+  // RECORD-SPECIFIC ACROSS BOTH LAYOUTS (pln#649 step 3 review P1-2, reproduced).
+  // `assignmentStore` resolves a DIRECTORY via resolveEntityDir(..., 'read'), which
+  // picks the canonical one as soon as it holds ANY file — so in a store
+  // mid-migration a legacy `assignments/asgn_x.json` was invisible even though the
+  // step-2 locator had just found it. Locator said `found`, this said `not found`:
+  // the same defect one layer down. Asking "where is THIS record" needs both
+  // layouts, exactly as recordPaths does in the locator.
+  for (const dirPath of assignmentDirCandidates(cwd)) {
+    try {
+      return new JsonStore<Assignment>({
+        dirPath,
+        documentType: 'assignment',
+        getId: (a) => a.id,
+        sort: (a, b) => a.created_at.localeCompare(b.created_at),
+      }).load(id);
+    } catch { /* not in this layout — try the other */ }
   }
+  return undefined;
 }
 
 export interface ListAssignmentsFilter {

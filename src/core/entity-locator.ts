@@ -38,7 +38,7 @@ import { loadConfig } from './config.js';
 import { resolveCrossProjectLinks } from './cross-project.js';
 import { ENTITY_DIR_MAP, MEMORY_DIR } from './io.js';
 import { resolvePrimaryStore, resolveWorkspaceRoot } from './store-resolution.js';
-import { scanNestedBrainclawProjects, summarizeWorkspaceProjects } from './workspace-projects.js';
+import { scanNestedBrainclawProjectsDetailed, summarizeWorkspaceProjects } from './workspace-projects.js';
 
 /** Entity kinds whose records live in a per-store directory keyed by id. */
 export type LocatableEntity = 'assignment' | 'claim' | 'agent_run' | 'plan' | 'loop';
@@ -238,19 +238,20 @@ export function enumerateCandidates(
     ordered.push(abs);
   };
   /**
-   * ONE nested scan per root, with truncation inferred from the results it already
-   * returned: a store found at exactly the ceiling depth means deeper ones may
-   * exist unseen. Probing for that with an extra deeper scan would have doubled the
-   * I/O this very review flagged as hidden, so the signal is computed for free.
+   * ONE nested scan per root, with truncation reported BY THE WALK.
+   *
+   * An earlier version inferred it from the deepest RESULT — a store found at the
+   * ceiling depth meant deeper ones might exist. Review P1-1 reproduced why that is
+   * wrong: with a store at `root/d1/…/d7` and nothing in `d1…d6`, the walk cut the
+   * branch without returning anything near the ceiling, so the heuristic reported
+   * completeness while the target sat just below the cut — and the handler emitted a
+   * CONFIDENT `not_found`. Truncation is a property of the traversal, not of what it
+   * happened to find, so the scanner now says it (still one scan, no extra I/O).
    */
   const addNested = (root: string): void => {
-    const rootDepth = path.resolve(root).split(path.sep).length;
-    for (const project of scanNestedBrainclawProjects(root, maxDepth)) {
-      add(project.path);
-      if (path.resolve(project.path).split(path.sep).length - rootDepth >= maxDepth) {
-        incomplete = true;
-      }
-    }
+    const scan = scanNestedBrainclawProjectsDetailed(root, maxDepth);
+    for (const project of scan.projects) add(project.path);
+    if (scan.truncated) incomplete = true;
   };
 
   const here = path.resolve(cwd);

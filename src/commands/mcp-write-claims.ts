@@ -19,6 +19,7 @@ import { detectCommitsBehindMainDetailed } from '../core/execution-context.js';
 import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { isLocatableId, locateEntity } from '../core/entity-locator.js';
+import { logger } from '../core/logger.js';
 import { generateClaimId, loadClaim, saveClaim, adoptClaimSession, releaseClaimWithCascade, claimBaselineFields } from '../core/claims.js';
 import { releaseClaimNextActions } from '../core/next-actions.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
@@ -632,14 +633,26 @@ export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPaylo
   const located = locateEntity('assignment', assignmentIdArg, payload.cwd);
   if (located.status === 'ambiguous') {
     // Two stores hold this id. Refusing is the point (T3): picking one would be a
-    // silent cross-project write, which is the failure mode dec#153 exists against.
+    // silent cross-project write, the failure mode dec#153 exists against.
+    //
+    // BUT SAY NOTHING ABOUT WHICH PROJECTS (review P2-3). This branch runs BEFORE
+    // ensureTrust — it has to, because trust is resolved FROM a store and the owning
+    // store is not known yet — so an unauthenticated caller who guesses a duplicated
+    // id would otherwise be handed project names and absolute paths. The first
+    // version of this message did exactly that. Routing before trust is required;
+    // DISCLOSING before trust is not, so the operator-facing detail goes to the
+    // server log and the caller gets a count and an action.
+    logger.warn(
+      `ambiguous assignment routing: ${assignmentIdArg} found in `
+      + located.matches.map((m) => `${m.project_name ?? '(unnamed)'} @ ${m.cwd}`).join(', '),
+    );
     return {
       response: createToolErrorResponse(
         'validation_error',
-        `Assignment ${assignmentIdArg} exists in ${located.matches.length} projects `
-        + `(${located.matches.map((m) => m.project_name ?? m.cwd).join(', ')}). Refusing to guess which one you meant — `
-        + 'resolve the duplicate, or call from the project that owns the work.',
-        { assignment_id: assignmentIdArg, matches: located.matches },
+        `Assignment ${assignmentIdArg} exists in ${located.matches.length} projects reachable from here. `
+        + 'Refusing to guess which one you meant — call from the project that owns the work, '
+        + 'or ask an operator to resolve the duplicate (details are in the server log).',
+        { assignment_id: assignmentIdArg, match_count: located.matches.length },
       ),
     };
   }
@@ -672,14 +685,22 @@ export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPaylo
       // in a store I was not routed to" — the exact ambiguity that made the field
       // report hard to diagnose. And an incomplete enumeration must never read as a
       // confident absence (step 2, enumeration_incomplete).
+      // The COUNT and the truncation flag are actionable and disclose nothing; the
+      // absolute store PATHS did (review P2-4: a contributor in A could submit an
+      // absent id and enumerate linked/nested project paths), so they go to the log.
       const scope = located.enumeration_incomplete
         ? `${located.probed.length} reachable project(s), and the search hit its depth ceiling so deeper projects were NOT examined`
         : `all ${located.probed.length} reachable project(s)`;
+      logger.warn(`assignment not found: ${assignmentId} — searched ${located.probed.join(', ')}`);
       return {
         response: createToolErrorResponse(
           'not_found',
           `Assignment not found: ${assignmentId} (searched ${scope})`,
-          { assignment_id: assignmentId, searched: located.probed, enumeration_incomplete: located.enumeration_incomplete },
+          {
+            assignment_id: assignmentId,
+            searched_count: located.probed.length,
+            enumeration_incomplete: located.enumeration_incomplete,
+          },
         ),
       };
     }

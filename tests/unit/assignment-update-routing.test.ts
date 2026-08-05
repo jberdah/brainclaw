@@ -52,12 +52,22 @@ function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
  * Only `ensureTrust` is reachable on the path under test, so the rest of the context
  * is intentionally absent — a full fake would assert nothing extra and would rot
  * every time the interface grows.
+ *
+ * IT REFUSES ANY STORE BUT `trustedCwd` (review P2-5). The first version invented an
+ * identity regardless of the cwd it was handed, so the field-defect pin could not
+ * actually prove that routing happened BEFORE trust — the handler would have passed
+ * with the ambient store too. Modelling the real constraint (an agent registered
+ * only in the owning project) is what makes that pin load-bearing: if routing
+ * regresses, ensureTrust is called with the workspace root and the call fails.
  */
-function fakeCtx(agentName: string): McpWriteClaimsContext {
+function fakeCtx(agentName: string, trustedCwd: string): McpWriteClaimsContext {
   return {
-    ensureTrust: () => ({
-      identity: { agent_name: agentName, agent_id: 'agt_test' } as unknown as ReturnType<McpWriteClaimsContext['ensureTrust']>['identity'],
-    }),
+    ensureTrust: (_args: unknown, _fields: unknown, _level: unknown, cwd?: string) => {
+      if (path.resolve(cwd ?? '') !== path.resolve(trustedCwd)) {
+        return { error: { kind: 'trust_error', message: `agent not registered in ${cwd}` } };
+      }
+      return { identity: { agent_name: agentName, agent_id: 'agt_test' } };
+    },
   } as unknown as McpWriteClaimsContext;
 }
 
@@ -103,7 +113,7 @@ describe('bclaw_assignment_update routing (pln#649 step 3)', () => {
       // Ambient cwd is the WORKSPACE ROOT — where a worker with no session lands.
       const outcome = await handleBclawAssignmentUpdate(
         payload({ assignment_id: 'asgn_routed', status: 'accepted' }, ws),
-        fakeCtx('worker'),
+        fakeCtx('worker', api),
       );
 
       assert.ok(!outcome.response.isError, `expected success, got ${JSON.stringify(outcome.response.content)}`);
@@ -112,7 +122,11 @@ describe('bclaw_assignment_update routing (pln#649 step 3)', () => {
     });
   });
 
-  it('AMBIGUOUS: the same id in two projects is REFUSED, and both are named', async () => {
+  // CONTRACT INVERTED after review P2-3. The first version of this pin asserted the
+  // error NAMED both projects — which was the disclosure defect, pinned as a
+  // feature. This branch runs before ensureTrust by necessity, so an unauthenticated
+  // caller must learn a count and an action, never project names or store paths.
+  it('AMBIGUOUS: the same id in two projects is REFUSED without disclosing which ones', async () => {
     const { ws, api, web } = monorepo();
     await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
       seed(api, 'asgn_dup');
@@ -120,16 +134,42 @@ describe('bclaw_assignment_update routing (pln#649 step 3)', () => {
 
       const outcome = await handleBclawAssignmentUpdate(
         payload({ assignment_id: 'asgn_dup', status: 'accepted' }, ws),
-        fakeCtx('worker'),
+        fakeCtx('worker', api),
       );
 
       assert.ok(outcome.response.isError, 'a guess here would be a silent cross-project write');
       const text = JSON.stringify(outcome.response.content);
-      assert.match(text, /api/);
-      assert.match(text, /web/);
+      assert.match(text, /2 projects/, 'the count is actionable and discloses nothing');
+      assert.doesNotMatch(text, /prj_api|prj_web/, 'no project id may leak pre-auth');
+      assert.doesNotMatch(text, /apps[\\/](api|web)/, 'no store path may leak pre-auth');
       // Neither store may have been mutated.
       assert.equal(loadAssignment('asgn_dup', api)?.status, 'offered');
       assert.equal(loadAssignment('asgn_dup', web)?.status, 'offered');
+    });
+  });
+
+  // review P1-2, his exact reproduction: the locator found the legacy record but
+  // loadAssignment lost it again, because it resolved a DIRECTORY that the canonical
+  // sibling had made non-empty. Pinned at the HANDLER, which is where the
+  // contradiction showed (locator: found / handler: not found).
+  it('MIXED LAYOUT: a legacy record is updated, not lost between locator and loader', async () => {
+    const { ws, api } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      seed(api, 'asgn_legacy');
+      seed(api, 'asgn_canonical_sibling'); // makes the canonical dir non-empty
+      // Move ONLY the legacy one to the pre-migration flat layout.
+      const canonicalDir = path.join(api, '.brainclaw', 'coordination', 'assignments');
+      const legacyDir = path.join(api, '.brainclaw', 'assignments');
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.renameSync(path.join(canonicalDir, 'asgn_legacy.json'), path.join(legacyDir, 'asgn_legacy.json'));
+
+      const outcome = await handleBclawAssignmentUpdate(
+        payload({ assignment_id: 'asgn_legacy', status: 'accepted' }, ws),
+        fakeCtx('worker', api),
+      );
+
+      assert.ok(!outcome.response.isError, `expected success, got ${JSON.stringify(outcome.response.content)}`);
+      assert.equal(loadAssignment('asgn_legacy', api)?.status, 'accepted');
     });
   });
 
@@ -138,7 +178,7 @@ describe('bclaw_assignment_update routing (pln#649 step 3)', () => {
     await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
       const outcome = await handleBclawAssignmentUpdate(
         payload({ assignment_id: '../../etc/passwd', status: 'accepted' }, ws),
-        fakeCtx('worker'),
+        fakeCtx('worker', ws),
       );
       assert.ok(outcome.response.isError);
       assert.match(JSON.stringify(outcome.response.content), /Invalid assignment_id/);
@@ -150,7 +190,7 @@ describe('bclaw_assignment_update routing (pln#649 step 3)', () => {
     await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
       const outcome = await handleBclawAssignmentUpdate(
         payload({ assignment_id: 'asgn_absent', status: 'accepted' }, ws),
-        fakeCtx('worker'),
+        fakeCtx('worker', ws),
       );
       assert.ok(outcome.response.isError);
       assert.match(JSON.stringify(outcome.response.content), /searched/);
