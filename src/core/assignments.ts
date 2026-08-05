@@ -12,7 +12,8 @@
  */
 import fs from 'node:fs';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
-import { resolveEntityDir } from './io.js';
+import { resolveOwnerProjectId } from './config.js';
+import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, generateIdWithLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
@@ -68,11 +69,25 @@ export function loadAssignment(id: string, cwd?: string): Assignment | undefined
   // JsonStore.load throws when the id is missing; honor the declared
   // "| undefined" return type so callers (e.g. transitionAssignment)
   // can emit their own 'Assignment not found' error with the right wording.
-  try {
-    return assignmentStore(cwd).load(id);
-  } catch {
-    return undefined;
+  //
+  // RECORD-SPECIFIC ACROSS BOTH LAYOUTS (pln#649 step 3 review P1-2, reproduced).
+  // `assignmentStore` resolves a DIRECTORY via resolveEntityDir(..., 'read'), which
+  // picks the canonical one as soon as it holds ANY file — so in a store
+  // mid-migration a legacy `assignments/asgn_x.json` was invisible even though the
+  // step-2 locator had just found it. Locator said `found`, this said `not found`:
+  // the same defect one layer down. Asking "where is THIS record" needs both
+  // layouts, exactly as recordPaths does in the locator.
+  for (const dirPath of entityRecordDirs('assignments', cwd ?? process.cwd())) {
+    try {
+      return new JsonStore<Assignment>({
+        dirPath,
+        documentType: 'assignment',
+        getId: (a) => a.id,
+        sort: (a, b) => a.created_at.localeCompare(b.created_at),
+      }).load(id);
+    } catch { /* not in this layout — try the other */ }
   }
+  return undefined;
 }
 
 export interface ListAssignmentsFilter {
@@ -358,6 +373,11 @@ export interface CreateAssignmentOptions {
   id?: string;
   /** Pre-generated short label. Auto-generated if omitted. */
   short_label?: string;
+  // NO project_id here, deliberately (review P1-1). The owner is ALWAYS derived
+  // from the store this assignment is written into. An override could save the
+  // record in store A while declaring owner B — and step 4 would then read that
+  // as a divergence and refuse a correctly routed mutation. A forgeable owner is
+  // worse than no owner.
   claim_id: string;
   message_id?: string;
   plan_id?: string;
@@ -384,7 +404,10 @@ export interface CreateAssignmentOptions {
 export function createAssignment(options: CreateAssignmentOptions, cwd?: string): Assignment {
   const generated = options.id ? undefined : generateAssignmentId(cwd);
   const id = options.id ?? generated!.id;
-  const short_label = options.short_label ?? generated!.short_label;
+  // `generated` is undefined whenever the caller supplied an id, so the old
+  // `generated!.short_label` threw a TypeError on the perfectly reasonable call
+  // "give me this id, derive the rest". Found while pinning the layout primitive.
+  const short_label = options.short_label ?? generated?.short_label ?? id;
 
   const assignment: Assignment = AssignmentSchema.parse({
     schema_version: 1,
@@ -399,6 +422,13 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
     agent_id: options.agent_id,
     dispatcher_agent: options.dispatcher_agent,
     dispatcher_session_id: options.dispatcher_session_id,
+    // OWNER project, captured HERE in core (pln#649 step 1) rather than in the
+    // command layer: every caller — MCP, CLI, dispatcher, loop engine — writes
+    // into `cwd`, so deriving it here means no path can create an assignment
+    // without an owner. The claim surface does this in TWO command-layer sites
+    // that already disagree (mcp-write-claims.ts uses loadConfig(claimCwd),
+    // claim.ts uses actor.project_id); core is the one place that cannot drift.
+    project_id: resolveOwnerProjectId(cwd),
     scope: options.scope,
     description: options.description,
     lane: options.lane,

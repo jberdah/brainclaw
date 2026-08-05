@@ -880,6 +880,24 @@ export const AssignmentSchema = z.object({
   dispatcher_agent: z.string(),
   dispatcher_session_id: z.string().optional(),
 
+  /**
+   * OWNER project (pln#649 step 1, dec#153): the `project_id` of the store this
+   * assignment was created in, captured once and never re-derived. Every
+   * read/mutation of this assignment must reach THAT store — that is what makes
+   * entity-authoritative routing possible instead of ambient resolution.
+   * OPTIONAL by design: assignments written before this field existed must stay
+   * loadable — a required field would make every pre-existing record fail
+   * schema.parse and drop out of the loaded state. An absent owner means "legacy,
+   * fall back to current behaviour", never "refuse".
+   *
+   * Always derived from the store being written to (createAssignment via
+   * resolveOwnerProjectId(cwd)); there is deliberately NO caller override. An
+   * override let a record be saved in store A while declaring owner B, which the
+   * step-4 refusal would then read as a divergence and reject a correctly routed
+   * mutation (review P1-1).
+   */
+  project_id: z.string().optional(),
+
   // Task metadata
   scope: z.string(),
   description: z.string(),
@@ -958,6 +976,14 @@ export const AgentRunSchema = z.object({
   agent: z.string(),
   agent_id: z.string().optional(),
   session_id: z.string().optional(),
+
+  /**
+   * OWNER project — same contract as Assignment.project_id (pln#649 step 1,
+   * dec#153): the `project_id` of the store this run was created in, captured
+   * once at creation, always derived from the write cwd and never overridable.
+   * Optional so pre-existing records stay loadable.
+   */
+  project_id: z.string().optional(),
 
   transport: AgentRunTransportSchema,
   status: AgentRunStatusSchema,

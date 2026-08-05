@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ClaimSchema, type Claim, type PlanStatus } from './schema.js';
-import { resolveEntityDir } from './io.js';
+import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO } from './ids.js';
 import { JsonStore } from './json-store.js';
@@ -33,12 +33,19 @@ function claimsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('claims', cwd ?? process.cwd(), mode);
 }
 
+/**
+ * Both layouts a claim record can occupy, canonical first (pln#649).
+ *
+ * The previous shape — `Set([claimsDir(write), claimsDir(read)])` — LOOKED like it
+ * covered both and did not: `write` is always canonical, and `read` also returns
+ * canonical as soon as that directory holds any file, so the Set collapsed to ONE
+ * entry and a legacy claim went invisible mid-migration. Same defect as the one
+ * reproduced twice on assignments; found here by a Fable audit before it reached a
+ * field report. Now derived from the shared io.ts primitive, so there is one
+ * definition instead of four look-alikes.
+ */
 function claimDirs(cwd?: string): string[] {
-  const effectiveCwd = cwd ?? process.cwd();
-  return Array.from(new Set([
-    claimsDir(effectiveCwd, 'write'),
-    claimsDir(effectiveCwd, 'read'),
-  ]));
+  return entityRecordDirs('claims', cwd ?? process.cwd());
 }
 
 export function ensureClaimsDir(cwd?: string): void {

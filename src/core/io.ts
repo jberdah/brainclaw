@@ -23,7 +23,15 @@ interface AtomicWriteOptions {
  * Maps legacy flat directory names to their entity-partitioned paths.
  * Used by resolveEntityDir() for backward-compatible reads and forward writes.
  */
-const ENTITY_DIR_MAP: Record<string, string> = {
+/**
+ * Exported (pln#649 step 2, review P1-1) so a caller that needs the CANONICAL
+ * relative path for a kind can build a file path directly. `resolveEntityDir`
+ * answers "where do records of this kind generally live" by picking whichever
+ * directory has content — which is the wrong primitive when the question is
+ * "where is THIS record", because a mid-migration store makes the other layout
+ * invisible. Read-only by contract: never mutate this map.
+ */
+export const ENTITY_DIR_MAP: Record<string, string> = {
   // memory/ — Project entity: durable knowledge
   'constraints': 'memory/constraints',
   'decisions': 'memory/decisions',
@@ -104,6 +112,37 @@ export function resolveEntityDir(
 
   // Neither exists — return entity path (caller will handle missing dir)
   return entityPath;
+}
+
+/**
+ * EVERY directory a record of `subdir` can occupy in ONE store, canonical first.
+ *
+ * THE PRIMITIVE THAT WAS MISSING (pln#649, after three reviews found the same defect
+ * at three different call sites). `resolveEntityDir(mode='read')` answers a
+ * DIRECTORY question — "where do records of this kind generally live" — using a
+ * `hasContent` heuristic. Every by-id loader used it for a FILE question — "where is
+ * THIS record" — and the two are not the same: in a store mid-migration, one file in
+ * the canonical directory makes every legacy record invisible. That produced a
+ * reproduced defect in the entity locator, then again in `loadAssignment`, and it is
+ * still latent wherever a loader resolves a directory before looking for an id.
+ *
+ * Callers that need a specific record MUST iterate these, not pick one. Writes keep
+ * using `resolveEntityDir(..., 'write')`, which is always canonical, so nothing new
+ * is ever created in the legacy layout — this is a read-compatibility primitive, not
+ * a migration.
+ */
+export function entityRecordDirs(subdir: string, cwd: string = process.cwd(), preferredDirName?: string): string[] {
+  const base = memoryDir(cwd, preferredDirName);
+  const mapped = ENTITY_DIR_MAP[subdir];
+  const legacy = path.join(base, subdir);
+  if (!mapped) return [legacy];
+  const canonical = path.join(base, mapped);
+  return canonical === legacy ? [canonical] : [canonical, legacy];
+}
+
+/** The same, as record file paths for one id. */
+export function entityRecordPaths(subdir: string, id: string, cwd?: string, preferredDirName?: string): string[] {
+  return entityRecordDirs(subdir, cwd ?? process.cwd(), preferredDirName).map((d) => path.join(d, `${id}.json`));
 }
 
 export function memoryDir(cwd: string = process.cwd(), preferredDirName?: string): string {
