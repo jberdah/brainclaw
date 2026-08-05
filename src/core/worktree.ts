@@ -1533,7 +1533,10 @@ export function removeWorktree(
   let force = options.force === true;
   if (!force && fs.existsSync(worktreePath)) {
     const status = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], worktreePath);
-    if (status.ok && status.stdout.trim().length > 0 && worktreeHasOnlyBirthNoise(status.stdout)) {
+    // `isAutoForcibleDebris`, NOT `worktreeHasOnlyBirthNoise`: the latter also
+    // forgives agent-config dirs, which is safe for gating and post-merge gc but not
+    // for a destruction with no merge gate (review of pln#647).
+    if (status.ok && status.stdout.trim().length > 0 && isAutoForcibleDebris(status.stdout)) {
       force = true;
     }
   }
@@ -1594,6 +1597,37 @@ export function worktreeHasOnlyBirthNoise(statusZStdout: string): boolean {
       || norm.startsWith('.brainclaw-heartbeat-') // worker liveness sentinel (sprint 1.5)
       || norm === 'LANE-RESULT.json'              // worker outcome report — harvested, never committed
       || isSystemDirtyPath(norm);
+  });
+}
+
+/**
+ * The ONLY paths an explicit `worktree remove` may force through on its own.
+ *
+ * NARROWER THAN `worktreeHasOnlyBirthNoise` ON PURPOSE (review of pln#647).
+ * That predicate folds in `isSystemDirtyPath`, which classes agent-config dirs
+ * (`.claude/`, `.cursor/`, `.codex/`) as noise — calibrated for two jobs that destroy
+ * nothing: dispatch GATING, and the POST-MERGE gc where the content is already
+ * integrated. Reusing it for a removal with NO merge gate would let
+ * `brainclaw worktree remove`, without `--force`, silently delete an agent's
+ * uncommitted `.claude/agents/x.md` or a modified tracked `.claude/settings.json`.
+ *
+ * So this lists brainclaw's OWN protocol artifacts by name and nothing else. A
+ * worktree holding anything else — including agent config — still refuses and needs
+ * an explicit force, which is what the pln#647 commit claimed and did not deliver.
+ */
+export function isAutoForcibleDebris(statusZStdout: string): boolean {
+  const paths = parsePorcelainZ(statusZStdout);
+  if (paths.length === 0) return false;
+  return paths.every((p) => {
+    const norm = p.replace(/\\/g, '/');
+    return norm === '.gitignore'                    // copied at birth; CRLF-flipped on Windows
+      || norm === '.brainclaw-worktree.json'         // sidecar metadata
+      || norm === 'LANE-RESULT.json'                 // worker outcome report — harvested
+      || norm === 'REVIEW-FINDINGS.md'
+      || norm === 'REVIEW_FINDINGS.md'
+      || norm === 'TRIAGE-REPORT.json'
+      || norm.startsWith('.brainclaw-heartbeat-')    // worker liveness sentinel
+      || norm === '.brainclaw' || norm.startsWith('.brainclaw/'); // coordination store
   });
 }
 
