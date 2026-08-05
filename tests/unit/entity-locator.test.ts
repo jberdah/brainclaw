@@ -81,7 +81,29 @@ function seedAssignment(cwd: string, id: string): void {
 }
 
 describe('core/entity-locator (pln#649 step 2)', () => {
-  it('COST: a single-project store costs exactly ONE probe', () => {
+  // review P1-1, reproduced by the reviewer: resolveEntityDir picks the canonical
+  // directory as soon as it holds ANY file, which made a legacy record invisible in
+  // a mid-migration store. Both layouts must be probed by FILE.
+  it('MIXED LAYOUT: a legacy record is found even when the canonical dir has content', () => {
+    const solo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-mixed-'));
+    cleanups.push(() => fs.rmSync(solo, { recursive: true, force: true }));
+    store(solo, 'solo', 'prj_mixed');
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: solo }, () => {
+      seedAssignment(solo, 'asgn_canonical');           // lands in coordination/assignments
+      const legacyDir = path.join(solo, '.brainclaw', 'assignments');
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, 'asgn_legacy.json'), '{"id":"asgn_legacy"}', 'utf-8');
+
+      assert.equal(locateEntity('assignment', 'asgn_canonical', solo).status, 'found');
+      assert.equal(
+        locateEntity('assignment', 'asgn_legacy', solo).status,
+        'found',
+        'a pre-migration record must stay routable',
+      );
+    });
+  });
+
+  it('COST: a single-project store costs exactly ONE record probe (enumeration is extra — see the type doc)', () => {
     const solo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-solo-'));
     cleanups.push(() => fs.rmSync(solo, { recursive: true, force: true }));
     store(solo, 'solo', 'prj_solo');
@@ -93,7 +115,12 @@ describe('core/entity-locator (pln#649 step 2)', () => {
     });
   });
 
-  it('probes the CALLER store first, so a local hit never pays for the workspace', () => {
+  // Title corrected after review P2-4: the caller store is probed FIRST, but the
+  // loop does NOT stop there — every candidate is probed by design so a duplicate
+  // elsewhere still surfaces as `ambiguous`. Claiming "never pays for the
+  // workspace" was false, and a test title that overstates its assertion is how a
+  // cost guarantee gets believed without being held.
+  it('probes the CALLER store first (without short-circuiting — duplicates must still surface)', () => {
     const { ws, api } = monorepo();
     withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
       seedAssignment(api, 'asgn_local');
@@ -156,6 +183,36 @@ describe('core/entity-locator (pln#649 step 2)', () => {
       assert.ok(candidates.includes(path.resolve(api)));
       assert.ok(candidates.includes(path.resolve(web)));
       assert.ok(!candidates.some((c) => c.endsWith('not-a-project')));
+    });
+  });
+
+  // review P2-3, reproduced by the reviewer: `path.resolve` is lexical, so a
+  // junction/symlink/case alias of a store already enumerated survived as a SECOND
+  // candidate, the same record was found twice, and the result was `ambiguous` — a
+  // false positive that blocks a healthy mutation.
+  //
+  // Asserted on the ALIAS-AWARE DEDUP DIRECTLY, with an explicit candidate list, so
+  // the pin costs two stats instead of a full enumeration. An earlier version of
+  // this test called enumerateCandidateStores against a tmpdir-rooted workspace and
+  // took 130 SECONDS — see DEFAULT_SCAN_DEPTH.
+  it('ALIAS: two spellings of ONE physical store collapse instead of faking ambiguity', () => {
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-real-'));
+    cleanups.push(() => fs.rmSync(real, { recursive: true, force: true }));
+    store(real, 'solo', 'prj_alias');
+    const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-locator-alias-'));
+    cleanups.push(() => fs.rmSync(aliasParent, { recursive: true, force: true }));
+    const alias = path.join(aliasParent, 'link');
+    try {
+      fs.symlinkSync(real, alias, 'junction');
+    } catch {
+      return; // junction creation not permitted in this environment — nothing to assert
+    }
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: real }, () => {
+      seedAssignment(real, 'asgn_alias');
+      // Feed BOTH spellings as candidates: pre-fix this yielded two matches.
+      const result = locateEntity('assignment', 'asgn_alias', real, { candidates: [real, alias] });
+      assert.equal(result.status, 'found', 'an alias of the same store is not a divergence');
+      assert.equal(result.matches.length, 1);
     });
   });
 

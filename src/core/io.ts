@@ -23,7 +23,15 @@ interface AtomicWriteOptions {
  * Maps legacy flat directory names to their entity-partitioned paths.
  * Used by resolveEntityDir() for backward-compatible reads and forward writes.
  */
-const ENTITY_DIR_MAP: Record<string, string> = {
+/**
+ * Exported (pln#649 step 2, review P1-1) so a caller that needs the CANONICAL
+ * relative path for a kind can build a file path directly. `resolveEntityDir`
+ * answers "where do records of this kind generally live" by picking whichever
+ * directory has content — which is the wrong primitive when the question is
+ * "where is THIS record", because a mid-migration store makes the other layout
+ * invisible. Read-only by contract: never mutate this map.
+ */
+export const ENTITY_DIR_MAP: Record<string, string> = {
   // memory/ — Project entity: durable knowledge
   'constraints': 'memory/constraints',
   'decisions': 'memory/decisions',
