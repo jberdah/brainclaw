@@ -435,6 +435,26 @@ const UNIVERSAL_SKILL_RELATIVE_PATH = '.agents/skills/brainclaw/SKILL.md';
  * Directories exclusively managed by brainclaw — safe to gitignore as a whole.
  * Individual files in these directories don't need separate gitignore entries.
  */
+/**
+ * pln#647 — coordination artifacts brainclaw writes at a WORKTREE ROOT, which must
+ * never be tracked and must not show up as untracked debris in a user's project.
+ *
+ * brainclaw's own repo lists these by hand (added after trp#546: a committed
+ * LANE-RESULT.json is inherited by every new worktree from HEAD and poisons
+ * dispatch-status into a false "completed" verdict). Nothing propagated them to a
+ * target project, so every OTHER repo got the debris — and `.brainclaw-heartbeat-*`
+ * was ignored nowhere at all, including here, which is what blocked worktree removal
+ * on 2026-08-04 (see removeWorktree).
+ */
+export const BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES = [
+  'LANE-RESULT.json',
+  'REVIEW-FINDINGS.md',
+  'REVIEW_FINDINGS.md',
+  'TRIAGE-REPORT.json',
+  '.brainclaw-heartbeat-*',
+  '.brainclaw-worktree.json',
+] as const;
+
 export const BRAINCLAW_EXCLUSIVE_DIRECTORIES = [
   '.roo/',
   '.kilo/',

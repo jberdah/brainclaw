@@ -1512,8 +1512,32 @@ export function removeWorktree(
     detachWorktreeJunctions(worktreePath);
   }
 
+  // pln#647 — PROTOCOL DEBRIS MUST NOT BLOCK AN EXPLICIT REMOVE.
+  //
+  // The bulk `worktree clean` path already knows that a heartbeat, a LANE-RESULT or
+  // a copied .gitignore are brainclaw's OWN artifacts and not user work
+  // (worktreeHasOnlyBirthNoise). This path did not, so `git worktree remove` refused
+  // with "contains modified or untracked files" over a file brainclaw itself wrote
+  // and never gitignores. Observed 2026-08-04 in brainclaw's own repo: two of three
+  // worker worktrees refused removal, blocked by a lone
+  // `.brainclaw-heartbeat-<asgn>`. That is not cosmetic — a worktree surviving its
+  // lane is what makes a re-dispatch on the same loop scope collide
+  // (`spawn_no_worktree`), and the retry then wedges the scope with a claim that has
+  // no worktree (trp#72b4e9b3, whose documented recovery begins by deleting exactly
+  // this heartbeat by hand).
+  //
+  // So: consult the SAME predicate the clean path uses. Only brainclaw's own noise is
+  // forced through; a worktree holding real user work still refuses, and the caller
+  // must pass force explicitly.
   const args = ['worktree', 'remove', worktreePath];
-  if (options.force) args.push('--force');
+  let force = options.force === true;
+  if (!force && fs.existsSync(worktreePath)) {
+    const status = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], worktreePath);
+    if (status.ok && status.stdout.trim().length > 0 && worktreeHasOnlyBirthNoise(status.stdout)) {
+      force = true;
+    }
+  }
+  if (force) args.push('--force');
 
   const result = runGit(args, mainWorktreePath);
   if (!result.ok) {

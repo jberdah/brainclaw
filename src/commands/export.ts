@@ -19,6 +19,7 @@ import {
   collectExportGitignoreEntries,
   ensureGitignoreEntries,
   BRAINCLAW_EXCLUSIVE_DIRECTORIES,
+  BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES,
   type ExportFormat,
 } from '../core/agent-files.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
@@ -97,7 +98,7 @@ export function runExport(options: ExportOptions): void {
       includeTarget: !options.shared,
     });
     if (liveResult) gitignoreEntries.push(liveResult.relativePath);
-    ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
+    ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES, ...BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES]);
     declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
     console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
     if (liveResult) {
@@ -134,7 +135,7 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
   const autoConfigs = writeExportCompanionFiles(target.format, cwd);
   const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs);
   if (liveResult) gitignoreEntries.push(liveResult.relativePath);
-  ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
+  ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES, ...BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES]);
   declareAgentIntegrationFromTarget(cwd, target.agentName, detected ? 'detected' : 'manual');
   const source = detected ? `${detected.name} [${detected.detection_source}]` : 'fallback (no agent detected)';
   console.log(`✔ Detected: ${source}`);
