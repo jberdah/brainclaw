@@ -1,0 +1,104 @@
+/**
+ * pln#647 — brainclaw's own protocol artifacts must not block worktree removal, and
+ * must not land as debris in a user's project.
+ *
+ * Observed 2026-08-04 in brainclaw's own repo: two of three worker worktrees refused
+ * `brainclaw worktree remove` with "contains modified or untracked files", blocked by
+ * a lone `.brainclaw-heartbeat-<asgn>` — a file brainclaw writes itself and ignores
+ * nowhere. Not cosmetic: a worktree surviving its lane makes a re-dispatch on the same
+ * loop scope collide (`spawn_no_worktree`), and the retry wedges the scope with a claim
+ * that has no worktree (trp#72b4e9b3, whose recovery starts by deleting that heartbeat
+ * by hand).
+ *
+ * @module
+ */
+import { describe, it, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES } from '../../src/core/agent-files.js';
+import { isAutoForcibleDebris, worktreeHasOnlyBirthNoise } from '../../src/core/worktree.js';
+
+let dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  dirs = [];
+});
+
+/**
+ * porcelain `-z` separates entries with a NUL. Built with an ESCAPE, never a literal
+ * NUL byte: a literal one makes git classify this file as BINARY, and the PR diff then
+ * shows `Bin 0 -> 4136 bytes` instead of the test — the only test of the change becomes
+ * invisible in review, and stays invisible in every future diff. Caught by a Fable
+ * review of this very PR.
+ */
+const zz = (...entries: string[]): string => entries.map((e) => `${e}\0`).join('');
+
+function git(args: string[], cwd: string): { ok: boolean; stdout: string } {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf-8', windowsHide: true });
+  return { ok: r.status === 0, stdout: r.stdout ?? '' };
+}
+
+function repo(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-debris-'));
+  dirs.push(dir);
+  git(['init', '-q'], dir);
+  git(['config', 'user.email', 't@t.local'], dir);
+  git(['config', 'user.name', 'test'], dir);
+  fs.writeFileSync(path.join(dir, 'README.md'), '# x\n', 'utf-8');
+  git(['add', '-A'], dir);
+  git(['commit', '-qm', 'init'], dir);
+  return dir;
+}
+
+describe('worktree protocol debris (pln#647)', () => {
+  it('the ignore list covers every artifact brainclaw writes at a worktree root', () => {
+    // The heartbeat is the one that was missing EVERYWHERE, including brainclaw's own
+    // .gitignore — hence the removal failure. Pin it by name.
+    assert.ok(BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES.includes('.brainclaw-heartbeat-*'));
+    assert.ok(BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES.includes('LANE-RESULT.json'));
+    assert.ok(BRAINCLAW_PROTOCOL_ARTIFACT_IGNORES.includes('.brainclaw-worktree.json'));
+  });
+
+  it('a heartbeat ALONE is auto-forcible; real work never is', () => {
+    assert.equal(isAutoForcibleDebris(zz('?? .brainclaw-heartbeat-asgn_deadbeef')), true);
+    assert.equal(isAutoForcibleDebris(zz('?? src/feature.ts')), false);
+    // A mix refuses too: one real file is enough.
+    assert.equal(isAutoForcibleDebris(zz('?? .brainclaw-heartbeat-asgn_x', '?? src/feature.ts')), false);
+    // An empty status is not "debris" — nothing to force.
+    assert.equal(isAutoForcibleDebris(''), false);
+  });
+
+  // The load-bearing distinction (review of this PR). `worktreeHasOnlyBirthNoise`
+  // forgives agent-config dirs — correct for dispatch gating and post-merge gc, both
+  // of which destroy nothing. An explicit remove destroys with NO merge gate, so it
+  // must use the narrower predicate or it silently deletes an agent's uncommitted work.
+  it('agent-config dirs are NOT auto-forcible, even though birth-noise forgives them', () => {
+    const agentWork = zz('?? .claude/agents/custom.md');
+    assert.equal(worktreeHasOnlyBirthNoise(agentWork), true, 'documents the wider predicate as-is');
+    assert.equal(
+      isAutoForcibleDebris(agentWork),
+      false,
+      'an explicit remove must still refuse over uncommitted agent config',
+    );
+    assert.equal(isAutoForcibleDebris(zz('?? .brainclaw-heartbeat-asgn_x', '?? LANE-RESULT.json')), true);
+  });
+
+  it('a real worktree holding only debris: raw git refuses, the predicate allows', () => {
+    const main = repo();
+    const wt = path.resolve(path.join(main, '..', `wt-${path.basename(main)}`));
+    dirs.push(wt);
+    assert.ok(git(['worktree', 'add', '-q', '-b', 'lane', wt], main).ok, 'worktree add must succeed');
+    fs.writeFileSync(path.join(wt, '.brainclaw-heartbeat-asgn_x'), 'work_loop_reached\n', 'utf-8');
+    fs.writeFileSync(path.join(wt, 'LANE-RESULT.json'), '{"status":"completed"}', 'utf-8');
+
+    // The failure that was observed in production.
+    assert.equal(git(['worktree', 'remove', wt], main).ok, false, 'raw git must still refuse');
+
+    const status = git(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], wt);
+    assert.ok(status.ok);
+    assert.equal(isAutoForcibleDebris(status.stdout), true);
+  });
+});

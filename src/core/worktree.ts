@@ -1512,8 +1512,35 @@ export function removeWorktree(
     detachWorktreeJunctions(worktreePath);
   }
 
+  // pln#647 — PROTOCOL DEBRIS MUST NOT BLOCK AN EXPLICIT REMOVE.
+  //
+  // The bulk `worktree clean` path already knows that a heartbeat, a LANE-RESULT or
+  // a copied .gitignore are brainclaw's OWN artifacts and not user work
+  // (worktreeHasOnlyBirthNoise). This path did not, so `git worktree remove` refused
+  // with "contains modified or untracked files" over a file brainclaw itself wrote
+  // and never gitignores. Observed 2026-08-04 in brainclaw's own repo: two of three
+  // worker worktrees refused removal, blocked by a lone
+  // `.brainclaw-heartbeat-<asgn>`. That is not cosmetic — a worktree surviving its
+  // lane is what makes a re-dispatch on the same loop scope collide
+  // (`spawn_no_worktree`), and the retry then wedges the scope with a claim that has
+  // no worktree (trp#72b4e9b3, whose documented recovery begins by deleting exactly
+  // this heartbeat by hand).
+  //
+  // So: consult the SAME predicate the clean path uses. Only brainclaw's own noise is
+  // forced through; a worktree holding real user work still refuses, and the caller
+  // must pass force explicitly.
   const args = ['worktree', 'remove', worktreePath];
-  if (options.force) args.push('--force');
+  let force = options.force === true;
+  if (!force && fs.existsSync(worktreePath)) {
+    const status = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], worktreePath);
+    // `isAutoForcibleDebris`, NOT `worktreeHasOnlyBirthNoise`: the latter also
+    // forgives agent-config dirs, which is safe for gating and post-merge gc but not
+    // for a destruction with no merge gate (review of pln#647).
+    if (status.ok && status.stdout.trim().length > 0 && isAutoForcibleDebris(status.stdout)) {
+      force = true;
+    }
+  }
+  if (force) args.push('--force');
 
   const result = runGit(args, mainWorktreePath);
   if (!result.ok) {
@@ -1570,6 +1597,37 @@ export function worktreeHasOnlyBirthNoise(statusZStdout: string): boolean {
       || norm.startsWith('.brainclaw-heartbeat-') // worker liveness sentinel (sprint 1.5)
       || norm === 'LANE-RESULT.json'              // worker outcome report — harvested, never committed
       || isSystemDirtyPath(norm);
+  });
+}
+
+/**
+ * The ONLY paths an explicit `worktree remove` may force through on its own.
+ *
+ * NARROWER THAN `worktreeHasOnlyBirthNoise` ON PURPOSE (review of pln#647).
+ * That predicate folds in `isSystemDirtyPath`, which classes agent-config dirs
+ * (`.claude/`, `.cursor/`, `.codex/`) as noise — calibrated for two jobs that destroy
+ * nothing: dispatch GATING, and the POST-MERGE gc where the content is already
+ * integrated. Reusing it for a removal with NO merge gate would let
+ * `brainclaw worktree remove`, without `--force`, silently delete an agent's
+ * uncommitted `.claude/agents/x.md` or a modified tracked `.claude/settings.json`.
+ *
+ * So this lists brainclaw's OWN protocol artifacts by name and nothing else. A
+ * worktree holding anything else — including agent config — still refuses and needs
+ * an explicit force, which is what the pln#647 commit claimed and did not deliver.
+ */
+export function isAutoForcibleDebris(statusZStdout: string): boolean {
+  const paths = parsePorcelainZ(statusZStdout);
+  if (paths.length === 0) return false;
+  return paths.every((p) => {
+    const norm = p.replace(/\\/g, '/');
+    return norm === '.gitignore'                    // copied at birth; CRLF-flipped on Windows
+      || norm === '.brainclaw-worktree.json'         // sidecar metadata
+      || norm === 'LANE-RESULT.json'                 // worker outcome report — harvested
+      || norm === 'REVIEW-FINDINGS.md'
+      || norm === 'REVIEW_FINDINGS.md'
+      || norm === 'TRIAGE-REPORT.json'
+      || norm.startsWith('.brainclaw-heartbeat-')    // worker liveness sentinel
+      || norm === '.brainclaw' || norm.startsWith('.brainclaw/'); // coordination store
   });
 }
 
