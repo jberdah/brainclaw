@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import { AgentRunSchema, type AgentRun, type AgentRunStatus, type AgentRunTransport, type Assignment, type AssignmentArtifact } from './schema.js';
 import { resolveOwnerProjectId } from './config.js';
-import { resolveEntityDir } from './io.js';
+import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, generateIdWithLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
@@ -61,11 +61,25 @@ export function saveAgentRun(run: AgentRun, cwd?: string): void {
 }
 
 export function loadAgentRun(id: string, cwd?: string): AgentRun | undefined {
-  try {
-    return agentRunStore(cwd).load(id);
-  } catch {
-    return undefined;
+  // Record-specific across both layouts (pln#649, shared io.ts primitive). Resolving
+  // a single directory made a legacy run invisible as soon as the canonical one held
+  // any file — the same defect reproduced twice on assignments, found here by a Fable
+  // audit before it reached a field report.
+  for (const dirPath of entityRecordDirs('runs', cwd ?? process.cwd())) {
+    try {
+      return new JsonStore<AgentRun>({
+        dirPath,
+        documentType: 'agent_run',
+        getId: (run) => run.id,
+        sort: (a, b) => {
+          const byAssignment = a.assignment_id.localeCompare(b.assignment_id);
+          if (byAssignment !== 0) return byAssignment;
+          return a.created_at.localeCompare(b.created_at);
+        },
+      }).load(id);
+    } catch { /* not in this layout — try the other */ }
   }
+  return undefined;
 }
 
 export interface ListAgentRunsFilter {
@@ -161,7 +175,9 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
   const run: AgentRun = AgentRunSchema.parse({
     schema_version: 1,
     id: options.id ?? generated!.id,
-    short_label: options.short_label ?? generated!.short_label,
+    // Same landmine as createAssignment: `generated` is undefined when the caller
+    // supplied an id, so `generated!` threw on "this id, derive the rest".
+    short_label: options.short_label ?? generated?.short_label ?? (options.id ?? generated!.id),
     assignment_id: options.assignment_id,
     claim_id: options.claim_id,
     message_id: options.message_id,

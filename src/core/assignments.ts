@@ -11,10 +11,9 @@
  * @module
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
 import { resolveOwnerProjectId } from './config.js';
-import { memoryDir, resolveEntityDir } from './io.js';
+import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, generateIdWithLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
@@ -35,18 +34,6 @@ function ensureAssignmentsDir(cwd?: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-}
-
-/**
- * Both directories an assignment record can live in, canonical first: the entity
- * layout and the pre-migration flat one. Reads that target a SPECIFIC id must try
- * both (review P1-2); writes keep using `assignmentsDir(cwd, 'write')`, which is
- * always canonical, so nothing new is ever created in the legacy location.
- */
-function assignmentDirCandidates(cwd?: string): string[] {
-  const canonical = resolveEntityDir('assignments', cwd ?? process.cwd(), 'write');
-  const legacy = path.join(memoryDir(cwd ?? process.cwd()), 'assignments');
-  return canonical === legacy ? [canonical] : [canonical, legacy];
 }
 
 function assignmentStore(cwd?: string): JsonStore<Assignment> {
@@ -90,7 +77,7 @@ export function loadAssignment(id: string, cwd?: string): Assignment | undefined
   // step-2 locator had just found it. Locator said `found`, this said `not found`:
   // the same defect one layer down. Asking "where is THIS record" needs both
   // layouts, exactly as recordPaths does in the locator.
-  for (const dirPath of assignmentDirCandidates(cwd)) {
+  for (const dirPath of entityRecordDirs('assignments', cwd ?? process.cwd())) {
     try {
       return new JsonStore<Assignment>({
         dirPath,
@@ -417,7 +404,10 @@ export interface CreateAssignmentOptions {
 export function createAssignment(options: CreateAssignmentOptions, cwd?: string): Assignment {
   const generated = options.id ? undefined : generateAssignmentId(cwd);
   const id = options.id ?? generated!.id;
-  const short_label = options.short_label ?? generated!.short_label;
+  // `generated` is undefined whenever the caller supplied an id, so the old
+  // `generated!.short_label` threw a TypeError on the perfectly reasonable call
+  // "give me this id, derive the rest". Found while pinning the layout primitive.
+  const short_label = options.short_label ?? generated?.short_label ?? id;
 
   const assignment: Assignment = AssignmentSchema.parse({
     schema_version: 1,

@@ -36,7 +36,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { resolveCrossProjectLinks } from './cross-project.js';
-import { ENTITY_DIR_MAP, MEMORY_DIR } from './io.js';
+import { entityRecordPaths, MEMORY_DIR } from './io.js';
 import { resolvePrimaryStore, resolveWorkspaceRoot } from './store-resolution.js';
 import { scanNestedBrainclawProjectsDetailed, summarizeWorkspaceProjects } from './workspace-projects.js';
 
@@ -132,15 +132,14 @@ export function isLocatableId(id: string): boolean {
 }
 
 function recordPaths(entity: LocatableEntity, id: string, storeCwd: string): string[] {
-  const base = path.join(storeCwd, MEMORY_DIR);
   if (entity === 'loop') {
     // Loops are not in ENTITY_DIR_MAP — their threads live under loops/threads.
-    return [path.join(base, 'loops', 'threads', `${id}.json`)];
+    return [path.join(storeCwd, MEMORY_DIR, 'loops', 'threads', `${id}.json`)];
   }
-  const subdir = subdirFor(entity);
-  const canonical = path.join(base, ENTITY_DIR_MAP[subdir] ?? subdir, `${id}.json`);
-  const legacy = path.join(base, subdir, `${id}.json`);
-  return canonical === legacy ? [canonical] : [canonical, legacy];
+  // Shared primitive (io.ts): this module had a hand-made copy, and so did two
+  // loaders. One export, four consumers — a fourth review would otherwise have
+  // found the same defect one layer further down.
+  return entityRecordPaths(subdirFor(entity), id, storeCwd);
 }
 
 /**
