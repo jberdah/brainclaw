@@ -2252,23 +2252,50 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
   ]);
   let cwd = effective.cwd;
   if (envClaimId && WORKER_AMBIENT_MUTATIONS.has(payload.name) && isLocatableId(envClaimId)) {
+    let ambiguity: number | undefined;
     try {
       const owner = locateEntity('claim', envClaimId, cwd);
-      // Only a single unambiguous owner reroutes. An ambiguity is left to the ambient
-      // answer rather than guessed — the refusal contract belongs to the surfaces that
-      // can report it, not to a silent reroute here. The caller must not be told about
-      // the duplicate (this wrapper has no refusal surface), but the operator needs an
-      // auditable signal: falling back to ambient can still put the mutation elsewhere.
       if (owner.status === 'ambiguous') {
-        logger.warn(
-          `ambiguous worker-claim routing: ${envClaimId} found in ${owner.matches.length} reachable projects; `
-          + `leaving ${payload.name} on its ambient cwd`,
-        );
-      }
-      if (owner.status === 'found' && owner.location && path.resolve(owner.location.cwd) !== path.resolve(cwd)) {
+        // RESTRICTED REFUSAL — operator decision, 2026-08-06, settling a genuine
+        // disagreement between two reviewers on this exact branch. `ambiguous` means two
+        // reachable stores hold this claim id: the divergence is PROVEN, so dec#153's
+        // refusal applies and falling back to ambient would silently write to a store the
+        // entity does not authorise — the original field defect, in a corner.
+        //
+        // NOT_FOUND DELIBERATELY KEEPS THE AMBIENT ANSWER, which is the "restricted" half
+        // and not an oversight. A claim that cannot be found is not a divergence, it is an
+        // absence, and the benign causes dominate: the enumeration may not reach the
+        // claim's store at all (`enumeration_incomplete`), and a RELEASED or archived claim
+        // legitimately stops being findable — refusing there would break every mutation a
+        // worker makes after releasing, which no decision asks for. The strict reading
+        // (refuse on both) was the other reviewer's position and was considered.
+        ambiguity = owner.matches.length;
+      } else if (owner.status === 'found' && owner.location && path.resolve(owner.location.cwd) !== path.resolve(cwd)) {
         cwd = owner.location.cwd;
       }
+      if (ambiguity !== undefined) {
+        // Names and store paths go to the OPERATOR's log, never to the caller: this branch
+        // runs before any trust check, so the response carries a count and an action only
+        // — the same disclosure rule the two entity-routed surfaces were reviewed into.
+        logger.warn(
+          `ambiguous worker-claim routing: ${envClaimId} found in `
+          + `${owner.matches.map((m) => `${m.project_name ?? '(unnamed)'} @ ${m.cwd}`).join(', ')}`,
+        );
+      }
     } catch { /* never break a tool call over routing — fall back to the ambient answer */ }
+    if (ambiguity !== undefined) {
+      return {
+        response: createToolErrorResponse(
+          'validation_error',
+          `Your claim '${envClaimId}' exists in ${ambiguity} reachable projects, so this `
+          + `${payload.name} cannot be routed to the project that owns your work. Refusing rather than `
+          + 'guessing: guessing is how a write lands in another project. Ask an operator to resolve the '
+          + 'duplicate claim id (details are in the server log).',
+          { claim_id: envClaimId, match_count: ambiguity },
+        ),
+        toolName: payload.name,
+      };
+    }
   }
 
   // ── Auto-session ────────────────────────────────────────────────────────────
