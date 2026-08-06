@@ -36,7 +36,9 @@ All commands support these global options:
 
 Set the active project for subsequent CLI and MCP commands. This eliminates the need to `cd` into a subproject directory in multi-project workspaces.
 
-**Session-scoped by default (v1.10.0).** A plain `switch <project>` only affects the **calling agent's session** — it auto-creates a session if needed and never touches the shared pointer. This is what keeps two agents working in the same monorepo independent: neither clobbers the other. `switch --list` and the no-argument "show current" reflect the session's own active project.
+**Session-scoped by default (v1.10.0).** A plain `switch <project>` only affects the **calling agent's session** — it auto-creates a session if needed and never touches the shared pointer. This is what keeps two agents working in the same monorepo independent: neither clobbers the other.
+
+**What the read paths report (v1.21.0).** `switch --list` and the no-argument "show current" both derive from the *same* resolver that routes an actual write, and echo the selector that won as `scope` (show) / `active_source` (`--list`): `session`, `global`, `cwd_child` (you are standing inside a child project), `env_project` / `explicit` (named by `$BRAINCLAW_PROJECT` or `--cwd`), or `cwd` (nothing points anywhere — commands use the current directory). Before v1.21.0 these two read paths walked their own session-then-global ladder, so an agent inside a child project was shown the *shared* pointer while its writes went to the child. Reporting a project a write would not reach is the defect that behaviour existed to hide, so the reported project and the written project are now the same one by construction.
 
 `--global` is the **only** path that writes (or, with `--clear`, removes) the shared, per-workspace `.brainclaw/active-project.json` that every agent on the host sees. Use it for an operator setting a workspace-wide default — not for per-agent work.
 
