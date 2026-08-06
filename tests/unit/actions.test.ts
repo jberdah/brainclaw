@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { executeMcpToolCall, handleMcpReadToolCall } from '../../src/commands/mcp.js';
 import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
@@ -308,5 +310,45 @@ describe('Agent SDK ActionRequired', () => {
     assert.equal(expired[0].id, action.id);
     assert.equal(loadAssignment(assignment.id, workspace.dir)?.status, 'failed');
     assert.equal(loadAgentRun(run.id, workspace.dir)?.status, 'timed_out');
+  });
+});
+
+/**
+ * pln#649 — `loadActionRequired` honours its declared `| undefined` instead of throwing.
+ *
+ * `JsonStore.load` throws on a missing id, so this function could never return undefined
+ * and every `if (!action)` branch downstream was unreachable — including the
+ * `ActionRequired not found` throw in `resolveActionRequired`, which produced the wrong
+ * wording for the wrong reason. `assignments.ts` documents this JsonStore contract and
+ * guards it; this module did not (Fable audit).
+ *
+ * WHAT THE AUDIT OVERSTATED, verified before fixing: it reported the self-approval guard in
+ * mcp-write-claims.ts as "skipped by the throw". It is not. That guard is
+ * `if (pendingAction && pendingAction.agent === caller)`, and the throw only fires when the
+ * action does NOT exist — where there is nothing to self-approve and `resolveActionRequired`
+ * refuses anyway. The dead code was the truthiness test, never the ownership test. So this
+ * is a contract fix, not a security fix, and the pin below claims only that.
+ */
+describe('loadActionRequired contract (pln#649)', () => {
+  it('returns undefined for a missing id rather than throwing', () => {
+    let result: unknown = 'not-called';
+    assert.doesNotThrow(() => { result = loadActionRequired('act_does_not_exist', workspace.dir); });
+    assert.equal(result, undefined, 'a missing action is a normal answer, not an exception');
+  });
+
+  it('still throws on an UNPARSEABLE record — absence and corruption are different facts', () => {
+    const dir = path.join(workspace.dir, '.brainclaw', 'coordination', 'actions');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'act_corrupt.json'), '{ not json', 'utf-8');
+    // A bare try/catch would have downgraded this to "not found" — the silent downgrade
+    // this codebase has already been burned by. `exists` + load keeps them distinct.
+    assert.throws(() => loadActionRequired('act_corrupt', workspace.dir));
+  });
+
+  it('still returns a real action by id', () => {
+    const created = createActionRequired({
+      kind: 'approval', title: 'gate', prompt: 'ok?', agent: 'dispatcher', assignment_id: 'asgn_contract_pin',
+    }, workspace.dir);
+    assert.equal(loadActionRequired(created.id, workspace.dir)?.id, created.id);
   });
 });
