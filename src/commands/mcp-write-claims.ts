@@ -954,17 +954,59 @@ export async function handleBclawAssignmentAction(payload: McpToolExecutionPaylo
   }
 }
 
-export async function handleBclawAddStep(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
+/**
+ * Route a plan-step mutation by its plan when one was named.  `planId` is a
+ * discriminator, not a suggestion: resolving trust and then editing the ambient
+ * store would reproduce the cross-project write defect this handler is meant to
+ * avoid.  Explicit `project` keeps its existing auto-localisation semantics.
+ */
+function resolvePlanStepWriteTarget(
+  payload: McpToolExecutionPayload,
+  ctx: McpWriteClaimsContext,
+  planId: string,
+): { targetCwd?: string; response?: McpToolResponse } {
   const { args, cwd, connectionSessionId } = payload;
-  const stepLoc = ctx.resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
-  if (stepLoc.block) {
-    return { response: stepLoc.block };
+  if (args.project !== undefined) {
+    const explicit = ctx.resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
+    if (explicit.block) return { response: explicit.block };
+    return { targetCwd: explicit.targetCwd };
   }
-  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+
+  // Short labels are resolved by the plan operation itself. They are not stable
+  // filesystem keys, so only a canonical id participates in locator routing.
+  if (!isLocatableId(planId)) return { targetCwd: cwd };
+
+  const located = locateEntity('plan', planId, cwd);
+  if (located.status === 'ambiguous') {
+    logger.warn(
+      `ambiguous plan-step routing: ${planId} found in `
+      + located.matches.map((m) => `${m.project_name ?? '(unnamed)'} @ ${m.cwd}`).join(', '),
+    );
+    return {
+      response: createToolErrorResponse(
+        'validation_error',
+        `Plan ${planId} exists in ${located.matches.length} projects reachable from here. `
+        + 'Refusing to guess which one you meant — call from the project that owns the plan, '
+        + 'or ask an operator to resolve the duplicate (details are in the server log).',
+        { plan_id: planId, match_count: located.matches.length },
+      ),
+    };
+  }
+
+  return { targetCwd: located.location?.cwd ?? cwd };
+}
+
+export async function handleBclawAddStep(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
+  const { args, connectionSessionId } = payload;
+  const stepPlanId = String(args.planId ?? '').trim();
+  if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
+  const stepTarget = resolvePlanStepWriteTarget(payload, ctx, stepPlanId);
+  if (stepTarget.response) return { response: stepTarget.response };
+  const stepTargetCwd = stepTarget.targetCwd!;
+  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', stepTargetCwd, connectionSessionId);
   if (resolved.error) {
     return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
   }
-  const stepPlanId = String(args.planId ?? '').trim();
   const stepData = args.data && typeof args.data === 'object' && !Array.isArray(args.data)
     ? args.data as Record<string, unknown>
     : {};
@@ -976,9 +1018,7 @@ export async function handleBclawAddStep(payload: McpToolExecutionPayload, ctx: 
   const stepAssignee = (stepData.assignee ?? args.assignee) as string | undefined;
   const stepEstimated = (stepData.estimated_effort ?? args.estimated_effort) as number | string | undefined;
   const stepActual = (stepData.actual_effort ?? args.actual_effort) as string | undefined;
-  if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
   if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: data.text') };
-  const stepTargetCwd = stepLoc.targetCwd;
   try {
     const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: stepAssignee, estimatedEffort: stepEstimated, actualEffort: stepActual }, stepTargetCwd);
     return {
@@ -999,20 +1039,18 @@ export async function handleBclawAddStep(payload: McpToolExecutionPayload, ctx: 
 }
 
 export async function handleBclawCompleteStep(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
-  const { args, cwd, connectionSessionId } = payload;
-  const csLoc = ctx.resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
-  if (csLoc.block) {
-    return { response: csLoc.block };
-  }
-  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-  if (resolved.error) {
-    return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-  }
+  const { args, connectionSessionId } = payload;
   const csPlanId = String(args.planId ?? '').trim();
   const csStepId = String(args.stepId ?? '').trim();
   if (!csPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
   if (!csStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
-  const csTargetCwd = csLoc.targetCwd;
+  const csTarget = resolvePlanStepWriteTarget(payload, ctx, csPlanId);
+  if (csTarget.response) return { response: csTarget.response };
+  const csTargetCwd = csTarget.targetCwd!;
+  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', csTargetCwd, connectionSessionId);
+  if (resolved.error) {
+    return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+  }
   try {
     const result = completeStepOp({ planId: csPlanId, stepId: csStepId }, csTargetCwd);
     return {
@@ -1034,15 +1072,7 @@ export async function handleBclawCompleteStep(payload: McpToolExecutionPayload, 
 }
 
 export async function handleBclawUpdateStep(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
-  const { args, cwd, connectionSessionId } = payload;
-  const usLoc = ctx.resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
-  if (usLoc.block) {
-    return { response: usLoc.block };
-  }
-  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-  if (resolved.error) {
-    return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-  }
+  const { args, connectionSessionId } = payload;
   const usPlanId = String(args.planId ?? '').trim();
   const usStepId = String(args.stepId ?? '').trim();
   if (!usPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
@@ -1051,7 +1081,13 @@ export async function handleBclawUpdateStep(payload: McpToolExecutionPayload, ct
   if (args.status && !validStatuses.includes(String(args.status))) {
     return { response: createToolErrorResponse('validation_error', `Invalid status: ${args.status}. Valid: ${validStatuses.join(', ')}`) };
   }
-  const usTargetCwd = usLoc.targetCwd;
+  const usTarget = resolvePlanStepWriteTarget(payload, ctx, usPlanId);
+  if (usTarget.response) return { response: usTarget.response };
+  const usTargetCwd = usTarget.targetCwd!;
+  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', usTargetCwd, connectionSessionId);
+  if (resolved.error) {
+    return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+  }
   try {
     const result = updateStepOp({
       planId: usPlanId,
@@ -1087,20 +1123,18 @@ export async function handleBclawUpdateStep(payload: McpToolExecutionPayload, ct
 }
 
 export async function handleBclawDeleteStep(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
-  const { args, cwd, connectionSessionId } = payload;
-  const dsLoc = ctx.resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
-  if (dsLoc.block) {
-    return { response: dsLoc.block };
-  }
-  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-  if (resolved.error) {
-    return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-  }
+  const { args, connectionSessionId } = payload;
   const dsPlanId = String(args.planId ?? '').trim();
   const dsStepId = String(args.stepId ?? '').trim();
   if (!dsPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
   if (!dsStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
-  const dsTargetCwd = dsLoc.targetCwd;
+  const dsTarget = resolvePlanStepWriteTarget(payload, ctx, dsPlanId);
+  if (dsTarget.response) return { response: dsTarget.response };
+  const dsTargetCwd = dsTarget.targetCwd!;
+  const resolved = ctx.ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', dsTargetCwd, connectionSessionId);
+  if (resolved.error) {
+    return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+  }
   try {
     const result = deleteStepOp({ planId: dsPlanId, stepId: dsStepId }, dsTargetCwd);
     return {

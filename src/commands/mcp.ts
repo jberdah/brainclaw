@@ -36,6 +36,7 @@ import { loadAllSessions } from '../core/identity.js';
 // Canonical entity write handlers now live in mcp-write-entities.ts (PR4).
 import { findOutermostBrainclawRoot, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef } from '../core/store-resolution.js';
 import { isLocatableId, locateEntity } from '../core/entity-locator.js';
+import { logger } from '../core/logger.js';
 import { switchProject } from './switch.js';
 import { assessBootstrapNeed, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation } from '../core/setup-flow.js';
 import { WorkRequestSchema, type FacadeResponse, type WarningDetail } from '../core/facade-schema.js';
@@ -2255,7 +2256,15 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const owner = locateEntity('claim', envClaimId, cwd);
       // Only a single unambiguous owner reroutes. An ambiguity is left to the ambient
       // answer rather than guessed — the refusal contract belongs to the surfaces that
-      // can report it, not to a silent reroute here.
+      // can report it, not to a silent reroute here. The caller must not be told about
+      // the duplicate (this wrapper has no refusal surface), but the operator needs an
+      // auditable signal: falling back to ambient can still put the mutation elsewhere.
+      if (owner.status === 'ambiguous') {
+        logger.warn(
+          `ambiguous worker-claim routing: ${envClaimId} found in ${owner.matches.length} reachable projects; `
+          + `leaving ${payload.name} on its ambient cwd`,
+        );
+      }
       if (owner.status === 'found' && owner.location && path.resolve(owner.location.cwd) !== path.resolve(cwd)) {
         cwd = owner.location.cwd;
       }

@@ -22,9 +22,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
-import { handleBclawAssignmentUpdate, handleBclawReleaseClaim } from '../../src/commands/mcp-write-claims.js';
+import { handleBclawAddStep, handleBclawAssignmentUpdate, handleBclawReleaseClaim } from '../../src/commands/mcp-write-claims.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
 import { registerAgentIdentity } from '../../src/core/agent-registry.js';
+import { createPlan } from '../../src/core/operations/plan.js';
+import { loadState } from '../../src/core/state.js';
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import type { McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import type { McpToolExecutionPayload } from '../../src/commands/mcp-contract.js';
@@ -37,12 +39,12 @@ afterEach(() => {
   cleanups = [];
 });
 
-function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+async function withCleanEnv<T>(vars: Record<string, string>, fn: () => T | Promise<T>): Promise<T> {
   const saved: Record<string, string | undefined> = {};
   for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
   try {
     for (const [k, v] of Object.entries(vars)) process.env[k] = v;
-    return fn();
+    return await fn();
   } finally {
     for (const k of ENV_KEYS) {
       if (saved[k] === undefined) delete process.env[k];
@@ -50,7 +52,6 @@ function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
     }
   }
 }
-
 /**
  * Only `ensureTrust` is reachable on the path under test, so the rest of the context
  * is intentionally absent — a full fake would assert nothing extra and would rot
@@ -123,35 +124,46 @@ function monorepo(): { ws: string; api: string; web: string } {
  * plain `existsSync` on the tree root proves nothing about where the note landed.
  * Returns paths RELATIVE to `root` so a failure message stays readable.
  */
-function listNoteFiles(root: string, matchText?: string): string[] {
+function listNoteFiles(root: string): string[] {
   if (!fs.existsSync(root)) return [];
   const out: string[] = [];
   const walk = (dir: string): void => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, e.name);
-      if (e.isDirectory()) { walk(full); continue; }
-      if (!e.name.endsWith('.json')) continue;
-      if (matchText !== undefined) {
-        // MATCH ON CONTENT, because the tree is shared. `startSession` writes its own
-        // `session_start` runtime note here (session-start.ts:250-263, visibility
-        // 'shared'), and the auto-session fires just AFTER the reroute with the SAME
-        // rerouted cwd — so a bare file count in this tree is satisfiable by the
-        // session's note and says nothing about the caller's. That is the THIRD time
-        // this one assertion was satisfied by the wrong effect (a directory, then a
-        // file count); caught by a Fable audit, and the reason the pin now names the
-        // text it wrote.
-        let text: unknown;
-        try { text = (JSON.parse(fs.readFileSync(full, 'utf-8')) as { text?: unknown }).text; }
-        catch { continue; }
-        if (text !== matchText) continue;
-      }
-      out.push(path.relative(root, full));
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.json')) out.push(path.relative(root, full));
     }
   };
   walk(root);
   return out;
 }
 
+interface StoredRuntimeNote {
+  id: string;
+  text: string;
+}
+
+/** Read note payloads as well as their paths: startSession itself writes a runtime
+ * note, so a non-empty directory cannot prove that bclaw_write_note persisted its
+ * own response id. */
+function readRuntimeNotes(root: string): StoredRuntimeNote[] {
+  const out: StoredRuntimeNote[] = [];
+  const walk = (dir: string): void => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.json')) {
+        const parsed = JSON.parse(fs.readFileSync(full, 'utf8')) as Partial<StoredRuntimeNote>;
+        if (typeof parsed.id === 'string' && typeof parsed.text === 'string') {
+          out.push({ id: parsed.id, text: parsed.text });
+        }
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
 function seed(cwd: string, id: string): void {
   createAssignment({
     id, short_label: id, claim_id: 'clm_route', agent: 'worker',
@@ -335,9 +347,6 @@ describe('bclaw_release_claim routing (pln#649 F5)', () => {
  * `BRAINCLAW_CLAIM_ID`, the one selector deliberately preserved in its env. So the claim
  * names the project. Pin written from that sentence of dec#153/F5, not from the code.
  */
-/** The exact text the pin writes, so the assertion can tell ITS note from the session's. */
-const NOTE_TEXT = 'observed while working the lane';
-
 describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => {
   it('a note written by a worker lands in the CLAIM\u0027s project, not the ambient one', async () => {
     const { ws, api } = monorepo();
@@ -369,7 +378,7 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
         // it went green over a call that had errored. Real agents omit the identity.
         const res = await executeMcpToolCall({
           name: 'bclaw_write_note',
-          args: { text: NOTE_TEXT, type: 'observation' },
+          args: { text: 'observed while working the lane', type: 'observation' },
           cwd: ws,
         });
         // `assert.ok(res)` was NOT enough: a failed tool call still returns a truthy
@@ -382,11 +391,21 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
 
         // Assert the note FILE, not its directory: a directory can be created for
         // unrelated reasons, so its presence proves little about where the note went.
-        const inApi = listNoteFiles(path.join(api, '.brainclaw', 'coordination', 'runtime'), NOTE_TEXT);
-        const inWs = listNoteFiles(path.join(ws, '.brainclaw', 'coordination', 'runtime'), NOTE_TEXT);
+        const apiRuntime = path.join(api, '.brainclaw', 'coordination', 'runtime');
+        const wsRuntime = path.join(ws, '.brainclaw', 'coordination', 'runtime');
+        const inApi = listNoteFiles(apiRuntime);
+        const inWs = listNoteFiles(wsRuntime);
+        const noteId = res.response.note_id;
+        assert.equal(typeof noteId, 'string', `successful note response must carry note_id — got: ${text}`);
+        const persisted = readRuntimeNotes(apiRuntime).find((note) => note.id === noteId);
+        const ambient = readRuntimeNotes(wsRuntime).find((note) => note.id === noteId);
         const diag = `api=${JSON.stringify(inApi)} ws=${JSON.stringify(inWs)} response=${text} — `;
         assert.equal(inWs.length, 0, `${diag}no note may be left in the ambient store`);
-        assert.ok(inApi.length > 0, diag + 'the note must have been written in the claim\u0027s project');
+        assert.equal(ambient, undefined, `${diag}the response note_id must not be persisted in the ambient store`);
+        // startSession writes its own session_start note. Match the write response id
+        // and payload so that side effect cannot satisfy this routing pin.
+        assert.deepEqual(persisted, { id: noteId, text: 'observed while working the lane' },
+          diag + 'the MCP response note must be persisted in the claim\u0027s project');
       });
     } finally {
       if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
@@ -394,6 +413,60 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
     }
   });
 
+  it('quick capture, send message, and generic create all use the claim project', async () => {
+    const runMutation = async (
+      name: string,
+      args: Record<string, unknown>,
+      assertPersisted: (api: string, ws: string, response: Awaited<ReturnType<typeof executeMcpToolCall>>['response']) => void,
+    ): Promise<void> => {
+      const { ws, api } = monorepo();
+      const saved = process.env.BRAINCLAW_CLAIM_ID;
+      try {
+        await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws, BRAINCLAW_AGENT_NAME: 'worker' }, async () => {
+          saveClaim({
+            id: 'clm_ambient_mutation', agent: 'worker', scope: 'src/x.ts', description: 'worker lane',
+            created_at: new Date().toISOString(), status: 'active',
+          }, api);
+          // Exactly one possible identity makes the success assertion load-bearing: a
+          // fall-through to the ambient store cannot merely return a truthy MCP error.
+          registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: api });
+          process.env.BRAINCLAW_CLAIM_ID = 'clm_ambient_mutation';
+          const outcome = await executeMcpToolCall({ name, args, cwd: ws });
+          assert.notEqual(outcome.response.isError, true,
+            `${name} must succeed in the claim project — got: ${JSON.stringify(outcome.response)}`);
+          assertPersisted(api, ws, outcome.response);
+        });
+      } finally {
+        if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
+        else process.env.BRAINCLAW_CLAIM_ID = saved;
+      }
+    };
+
+    await runMutation('bclaw_quick_capture', { text: 'captured by the worker', type: 'note' }, (api, ws, response) => {
+      const noteId = response.structuredContent?.note_id;
+      assert.equal(typeof noteId, 'string');
+      assert.deepEqual(
+        readRuntimeNotes(path.join(api, '.brainclaw', 'coordination', 'runtime')).find((note) => note.id === noteId),
+        { id: noteId, text: 'captured by the worker' },
+      );
+      assert.equal(readRuntimeNotes(path.join(ws, '.brainclaw', 'coordination', 'runtime')).some((note) => note.id === noteId), false);
+    });
+
+    await runMutation('bclaw_send_message', { to: 'coordinator', type: 'info', text: 'worker routing check' }, (api, ws, response) => {
+      const messageId = response.message_id;
+      assert.equal(typeof messageId, 'string');
+      const relative = path.join('.brainclaw', 'coordination', 'inbox', 'coordinator', `${messageId}.json`);
+      assert.equal(fs.existsSync(path.join(api, relative)), true, 'message must be written in the claim project');
+      assert.equal(fs.existsSync(path.join(ws, relative)), false, 'message must not be written in the ambient project');
+    });
+
+    await runMutation('bclaw_create', { entity: 'plan', data: { text: 'plan created by worker' } }, (api, ws, response) => {
+      const planId = response.structuredContent?.id;
+      assert.equal(typeof planId, 'string');
+      assert.equal(loadState(api).plan_items.some((plan) => plan.id === planId && plan.text === 'plan created by worker'), true);
+      assert.equal(loadState(ws).plan_items.some((plan) => plan.id === planId), false);
+    });
+  });
   it('a READ is left on the ambient anchor (dec#155: only mutations reroute)', async () => {
     const { ws, api } = monorepo();
     const saved = process.env.BRAINCLAW_CLAIM_ID;
@@ -418,11 +491,72 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
         // workspace root. `assert.ok(res)` proved neither.
         const text = JSON.stringify(res?.response ?? null);
         assert.notEqual(res?.response?.isError, true, `a read must still work — got: ${text}`);
-        assert.ok(!text.includes('prj_api'), `a read must stay on the ambient anchor — got: ${text}`);
+        assert.equal(res.response.structuredContent?.project_id, 'prj_ws',
+          `a read must be served from the ambient project — got: ${text}`);
       });
     } finally {
       if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
       else process.env.BRAINCLAW_CLAIM_ID = saved;
     }
+  });
+});
+
+describe('plan-step routing (pln#649 / dec#153)', () => {
+  it('bclaw_add_step routes by planId before resolving worker trust', async () => {
+    const { ws, api } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      const plan = createPlan({ text: 'owner-plan', author: 'worker' }, api);
+      const ctx = {
+        ...fakeCtx('worker', api),
+        // No project was supplied; the entity locator, not this fallback, must choose api.
+        resolveExecutionWriteTarget: (_entity: 'claim' | 'plan', _args: Record<string, unknown>, cwd: string) => ({ targetCwd: cwd, autoSwitched: false }),
+      } as McpWriteClaimsContext;
+
+      const outcome = await handleBclawAddStep({
+        name: 'bclaw_add_step',
+        args: { planId: plan.id, data: { text: 'routed sub-step' } },
+        cwd: ws,
+      }, ctx);
+
+      assert.notEqual(outcome.response.isError, true, `step mutation must succeed — got: ${JSON.stringify(outcome.response)}`);
+      assert.deepEqual(
+        loadState(api).plan_items.find((item) => item.id === plan.id)?.steps?.map((step) => step.text),
+        ['routed sub-step'],
+      );
+      assert.equal(loadState(ws).plan_items.some((item) => item.id === plan.id), false,
+        'the ambient project must not gain a shadow plan or step');
+    });
+  });
+});
+
+describe('worker ambient routing ambiguity telemetry (pln#649 F5)', () => {
+  it('keeps the intentional ambient fallback but emits an operator warning', async () => {
+    const { ws, api, web } = monorepo();
+    const savedClaim = process.env.BRAINCLAW_CLAIM_ID;
+    const originalError = console.error;
+    const logs: string[] = [];
+    try {
+      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws, BRAINCLAW_AGENT_NAME: 'worker' }, async () => {
+        for (const project of [api, web]) {
+          saveClaim({
+            id: 'clm_ambiguous', agent: 'worker', scope: 'src/x.ts', description: 'duplicate fixture',
+            created_at: new Date().toISOString(), status: 'active',
+          }, project);
+        }
+        registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: ws });
+        process.env.BRAINCLAW_CLAIM_ID = 'clm_ambiguous';
+        console.error = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+        const outcome = await executeMcpToolCall({
+          name: 'bclaw_write_note', args: { text: 'ambiguous fallback is observable' }, cwd: ws,
+        });
+        assert.notEqual(outcome.response.isError, true, `ambient fallback must preserve the tool contract — got: ${JSON.stringify(outcome.response)}`);
+      });
+    } finally {
+      console.error = originalError;
+      if (savedClaim === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
+      else process.env.BRAINCLAW_CLAIM_ID = savedClaim;
+    }
+    assert.ok(logs.some((line) => line.includes('ambiguous worker-claim routing: clm_ambiguous found in 2 reachable projects')),
+      `the duplicate must be visible to an operator — got: ${JSON.stringify(logs)}`);
   });
 });
