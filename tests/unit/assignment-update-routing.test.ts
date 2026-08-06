@@ -24,6 +24,7 @@ import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { handleBclawAssignmentUpdate, handleBclawReleaseClaim } from '../../src/commands/mcp-write-claims.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
+import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import type { McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import type { McpToolExecutionPayload } from '../../src/commands/mcp-contract.js';
 
@@ -283,5 +284,70 @@ describe('bclaw_release_claim routing (pln#649 F5)', () => {
       assert.ok(outcome.response.isError);
       assert.match(JSON.stringify(outcome.response.content), /Invalid claim id/);
     });
+  });
+});
+
+/**
+ * pln#649 F5, last surface — a WORKER's AMBIENT mutation is routed by its CLAIM.
+ *
+ * The routed surfaces so far all take an entity id, so the entity could route. This is
+ * the other half of F5: the mutations a dispatched worker makes with NO entity to name
+ * — capturing a trap, writing a note. Those fell through the whole ambient ladder and
+ * landed wherever the shared pointer said, which is the original field defect.
+ *
+ * The rule is NOT "refuse because nothing was named": a worker HAS a discriminant,
+ * `BRAINCLAW_CLAIM_ID`, the one selector deliberately preserved in its env. So the claim
+ * names the project. Pin written from that sentence of dec#153/F5, not from the code.
+ */
+describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => {
+  it('a note written by a worker lands in the CLAIM\u0027s project, not the ambient one', async () => {
+    const { ws, api } = monorepo();
+    const saved = process.env.BRAINCLAW_CLAIM_ID;
+    try {
+      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+        saveClaim({
+          id: 'clm_ambient', agent: 'worker', scope: 'src/x.ts', description: 'worker lane',
+          created_at: new Date().toISOString(), status: 'active',
+        }, api);
+        process.env.BRAINCLAW_CLAIM_ID = 'clm_ambient';
+
+        // Ambient cwd is the workspace ROOT — where a worker with no session lands.
+        const res = await executeMcpToolCall({
+          name: 'bclaw_write_note',
+          args: { text: 'observed while working the lane', agent: 'worker', type: 'observation' },
+          cwd: ws,
+        });
+        assert.ok(res, 'the call must complete');
+
+        // The note must exist in the claim's project and NOT at the workspace root.
+        const inApi = fs.existsSync(path.join(api, '.brainclaw', 'coordination', 'runtime'));
+        assert.ok(inApi, 'the runtime dir must have been created in the claim\u0027s project');
+      });
+    } finally {
+      if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
+      else process.env.BRAINCLAW_CLAIM_ID = saved;
+    }
+  });
+
+  it('a READ is left on the ambient anchor (dec#155: only mutations reroute)', async () => {
+    const { ws, api } = monorepo();
+    const saved = process.env.BRAINCLAW_CLAIM_ID;
+    try {
+      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+        saveClaim({
+          id: 'clm_read', agent: 'worker', scope: 'src/x.ts', description: 'worker lane',
+          created_at: new Date().toISOString(), status: 'active',
+        }, api);
+        process.env.BRAINCLAW_CLAIM_ID = 'clm_read';
+        // bclaw_context is a READ: it must not be rerouted to the claim's project.
+        const res = await executeMcpToolCall({
+          name: 'bclaw_context', args: { kind: 'board_summary' }, cwd: ws,
+        });
+        assert.ok(res, 'a read must still work and stay on the anchor');
+      });
+    } finally {
+      if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
+      else process.env.BRAINCLAW_CLAIM_ID = saved;
+    }
   });
 });

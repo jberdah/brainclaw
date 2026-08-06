@@ -35,6 +35,7 @@ import { loadAllSessions } from '../core/identity.js';
 // Setup wizard / project-init / registry helpers now live in mcp-write-admin.ts (PR4).
 // Canonical entity write handlers now live in mcp-write-entities.ts (PR4).
 import { findOutermostBrainclawRoot, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef } from '../core/store-resolution.js';
+import { isLocatableId, locateEntity } from '../core/entity-locator.js';
 import { switchProject } from './switch.js';
 import { assessBootstrapNeed, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation } from '../core/setup-flow.js';
 import { WorkRequestSchema, type FacadeResponse, type WarningDetail } from '../core/facade-schema.js';
@@ -2227,8 +2228,39 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
   const effective = payload.name === 'bclaw_switch'
     ? { cwd: baseCwd, active_source: 'cwd' as const, resolved_project: undefined }
     : resolveEffectiveCwdInfo({ baseCwd, sessionId: payload.connectionSessionId });
-  const cwd = effective.cwd;
   const envClaimId = process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined;
+
+  // ── pln#649 F5, last surface: a WORKER's ambient mutation is routed by its CLAIM.
+  //
+  // The routed surfaces so far all take an entity id, so the entity could do the
+  // routing. This covers the other half of F5: the mutations a dispatched worker makes
+  // with NO entity to name — capturing a trap, writing a note. Those fell through the
+  // whole ambient ladder (session → cwd_child → shared global pointer) and landed
+  // wherever it pointed, which for a worker is the original field defect.
+  //
+  // The rule is NOT "refuse because nothing was named" — a worker HAS a discriminant:
+  // `BRAINCLAW_CLAIM_ID`, the one selector deliberately preserved in its env
+  // (execution-profile.ts). So the claim names the project, and the write follows it.
+  //
+  // MUTATIONS ONLY, by explicit list. dec#155 keeps READS on the ambient anchor — a
+  // worker reading shared context workspace-wide is correct — and a blanket switch
+  // across ~40 tools would be a behaviour change nobody asked for. This is the set a
+  // dispatched worker actually calls without an entity id; extending it is mechanical.
+  const WORKER_AMBIENT_MUTATIONS = new Set([
+    'bclaw_write_note', 'bclaw_quick_capture', 'bclaw_send_message', 'bclaw_create',
+  ]);
+  let cwd = effective.cwd;
+  if (envClaimId && WORKER_AMBIENT_MUTATIONS.has(payload.name) && isLocatableId(envClaimId)) {
+    try {
+      const owner = locateEntity('claim', envClaimId, cwd);
+      // Only a single unambiguous owner reroutes. An ambiguity is left to the ambient
+      // answer rather than guessed — the refusal contract belongs to the surfaces that
+      // can report it, not to a silent reroute here.
+      if (owner.status === 'found' && owner.location && path.resolve(owner.location.cwd) !== path.resolve(cwd)) {
+        cwd = owner.location.cwd;
+      }
+    } catch { /* never break a tool call over routing — fall back to the ambient answer */ }
+  }
 
   // ── Auto-session ────────────────────────────────────────────────────────────
   let autoSessionId: string | undefined;
