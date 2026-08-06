@@ -116,6 +116,26 @@ function monorepo(): { ws: string; api: string; web: string } {
   };
 }
 
+/**
+ * Note files under a runtime tree, recursively — notes are nested per agent (and per
+ * host for the machine/private visibilities), so a flat readdir would miss them and a
+ * plain `existsSync` on the tree root proves nothing about where the note landed.
+ * Returns paths RELATIVE to `root` so a failure message stays readable.
+ */
+function listNoteFiles(root: string): string[] {
+  if (!fs.existsSync(root)) return [];
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.json')) out.push(path.relative(root, full));
+    }
+  };
+  walk(root);
+  return out;
+}
+
 function seed(cwd: string, id: string): void {
   createAssignment({
     id, short_label: id, claim_id: 'clm_route', agent: 'worker',
@@ -312,16 +332,31 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
         process.env.BRAINCLAW_CLAIM_ID = 'clm_ambient';
 
         // Ambient cwd is the workspace ROOT — where a worker with no session lands.
+        //
+        // NO `agent` ARG. Passing one made the call fail with `identity_error` (it must
+        // match the pinned connection principal), and the first version of this pin
+        // asserted a DIRECTORY, which the auto-session created on the rerouted cwd — so
+        // it went green over a call that had errored. Real agents omit the identity.
         const res = await executeMcpToolCall({
           name: 'bclaw_write_note',
-          args: { text: 'observed while working the lane', agent: 'worker', type: 'observation' },
+          args: { text: 'observed while working the lane', type: 'observation' },
           cwd: ws,
         });
-        assert.ok(res, 'the call must complete');
+        // `assert.ok(res)` was NOT enough: a failed tool call still returns a truthy
+        // outcome carrying `isError`, so a broken call read as a pass. Assert the call
+        // SUCCEEDED, and carry the payload into the failure message — this pin went red
+        // on CI while green on three local configurations, and the weak assertion is
+        // what made that expensive to diagnose.
+        const text = JSON.stringify(res?.response ?? null);
+        assert.notEqual(res?.response?.isError, true, `the call must succeed — got: ${text}`);
 
-        // The note must exist in the claim's project and NOT at the workspace root.
-        const inApi = fs.existsSync(path.join(api, '.brainclaw', 'coordination', 'runtime'));
-        assert.ok(inApi, 'the runtime dir must have been created in the claim\u0027s project');
+        // Assert the note FILE, not its directory: a directory can be created for
+        // unrelated reasons, so its presence proves little about where the note went.
+        const inApi = listNoteFiles(path.join(api, '.brainclaw', 'coordination', 'runtime'));
+        const inWs = listNoteFiles(path.join(ws, '.brainclaw', 'coordination', 'runtime'));
+        const diag = `api=${JSON.stringify(inApi)} ws=${JSON.stringify(inWs)} response=${text} — `;
+        assert.equal(inWs.length, 0, `${diag}no note may be left in the ambient store`);
+        assert.ok(inApi.length > 0, diag + 'the note must have been written in the claim\u0027s project');
       });
     } finally {
       if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
