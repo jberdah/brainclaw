@@ -123,14 +123,29 @@ function monorepo(): { ws: string; api: string; web: string } {
  * plain `existsSync` on the tree root proves nothing about where the note landed.
  * Returns paths RELATIVE to `root` so a failure message stays readable.
  */
-function listNoteFiles(root: string): string[] {
+function listNoteFiles(root: string, matchText?: string): string[] {
   if (!fs.existsSync(root)) return [];
   const out: string[] = [];
   const walk = (dir: string): void => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, e.name);
-      if (e.isDirectory()) walk(full);
-      else if (e.name.endsWith('.json')) out.push(path.relative(root, full));
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!e.name.endsWith('.json')) continue;
+      if (matchText !== undefined) {
+        // MATCH ON CONTENT, because the tree is shared. `startSession` writes its own
+        // `session_start` runtime note here (session-start.ts:250-263, visibility
+        // 'shared'), and the auto-session fires just AFTER the reroute with the SAME
+        // rerouted cwd — so a bare file count in this tree is satisfiable by the
+        // session's note and says nothing about the caller's. That is the THIRD time
+        // this one assertion was satisfied by the wrong effect (a directory, then a
+        // file count); caught by a Fable audit, and the reason the pin now names the
+        // text it wrote.
+        let text: unknown;
+        try { text = (JSON.parse(fs.readFileSync(full, 'utf-8')) as { text?: unknown }).text; }
+        catch { continue; }
+        if (text !== matchText) continue;
+      }
+      out.push(path.relative(root, full));
     }
   };
   walk(root);
@@ -320,6 +335,9 @@ describe('bclaw_release_claim routing (pln#649 F5)', () => {
  * `BRAINCLAW_CLAIM_ID`, the one selector deliberately preserved in its env. So the claim
  * names the project. Pin written from that sentence of dec#153/F5, not from the code.
  */
+/** The exact text the pin writes, so the assertion can tell ITS note from the session's. */
+const NOTE_TEXT = 'observed while working the lane';
+
 describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => {
   it('a note written by a worker lands in the CLAIM\u0027s project, not the ambient one', async () => {
     const { ws, api } = monorepo();
@@ -351,7 +369,7 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
         // it went green over a call that had errored. Real agents omit the identity.
         const res = await executeMcpToolCall({
           name: 'bclaw_write_note',
-          args: { text: 'observed while working the lane', type: 'observation' },
+          args: { text: NOTE_TEXT, type: 'observation' },
           cwd: ws,
         });
         // `assert.ok(res)` was NOT enough: a failed tool call still returns a truthy
@@ -364,8 +382,8 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
 
         // Assert the note FILE, not its directory: a directory can be created for
         // unrelated reasons, so its presence proves little about where the note went.
-        const inApi = listNoteFiles(path.join(api, '.brainclaw', 'coordination', 'runtime'));
-        const inWs = listNoteFiles(path.join(ws, '.brainclaw', 'coordination', 'runtime'));
+        const inApi = listNoteFiles(path.join(api, '.brainclaw', 'coordination', 'runtime'), NOTE_TEXT);
+        const inWs = listNoteFiles(path.join(ws, '.brainclaw', 'coordination', 'runtime'), NOTE_TEXT);
         const diag = `api=${JSON.stringify(inApi)} ws=${JSON.stringify(inWs)} response=${text} — `;
         assert.equal(inWs.length, 0, `${diag}no note may be left in the ambient store`);
         assert.ok(inApi.length > 0, diag + 'the note must have been written in the claim\u0027s project');

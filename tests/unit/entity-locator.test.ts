@@ -349,3 +349,85 @@ describe('core/entity-locator enumeration memo (pln#649)', () => {
     }
   });
 });
+
+/**
+ * dec#155's robustness guard: "si ≥2 matches portent le MÊME owner_project, router
+ * vers le propriétaire au lieu de refuser — ça évite un refus sur alias/miroir."
+ *
+ * PINS WRITTEN FROM THAT SENTENCE, before the implementation existed. That ordering
+ * is not ceremony: the two defects I pinned AS FEATURES earlier in this plan both
+ * came from pins derived from written behaviour instead of the decided contract.
+ *
+ * FOUR OF THE FIVE PINS DEFEND THE REFUSAL, not the new route. The ambiguity result
+ * is what the two shipped entity-routed surfaces refuse on, so a tie-break that
+ * eroded it would silently re-open the class this whole plan exists to close. The
+ * rule is narrow by construction: the winner must be justified BY THE RECORD, and
+ * every path where the data does not justify one stays `ambiguous`.
+ */
+describe('locator owner tie-break (dec#155 robustness guard)', () => {
+  /** Copy a record between stores so ONE record surfaces in two places — the alias/mirror shape. */
+  function mirrorAssignment(from: string, to: string, id: string): void {
+    const rel = path.join('.brainclaw', 'coordination', 'assignments', `${id}.json`);
+    fs.mkdirSync(path.dirname(path.join(to, rel)), { recursive: true });
+    fs.copyFileSync(path.join(from, rel), path.join(to, rel));
+  }
+
+  function writeRaw(cwd: string, id: string, body: string): void {
+    const dir = path.join(cwd, '.brainclaw', 'coordination', 'assignments');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${id}.json`), body, 'utf-8');
+  }
+
+  it('THE DECIDED CASE: two matches naming the SAME owner route to the owner store', () => {
+    const { ws, api, web } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      seedAssignment(api, 'asgn_mirror');               // project_id captured = prj_api
+      mirrorAssignment(api, web, 'asgn_mirror');        // same record, second store
+      const result = locateEntity('assignment', 'asgn_mirror', ws);
+      assert.equal(result.status, 'found', 'a mirrored record must not be refused');
+      assert.equal(result.location?.cwd, path.resolve(api), 'it must route to the OWNER, not to first-wins');
+      assert.equal(result.matches.length, 2, 'both matches stay reported — the caller can still see the mirror');
+    });
+  });
+
+  it('DIFFERENT owners stay ambiguous — the divergence the refusal exists for', () => {
+    const { ws, api, web } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      seedAssignment(api, 'asgn_two');                  // owner prj_api
+      seedAssignment(web, 'asgn_two');                  // owner prj_web
+      const result = locateEntity('assignment', 'asgn_two', ws);
+      assert.equal(result.status, 'ambiguous', 'two DIFFERENT owners must still be refused');
+    });
+  });
+
+  it('a record with NO owner stays ambiguous — step 1 decided a missing owner triggers no new behaviour', () => {
+    const { ws, api, web } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      writeRaw(api, 'asgn_legacy2', '{"id":"asgn_legacy2"}');
+      writeRaw(web, 'asgn_legacy2', '{"id":"asgn_legacy2"}');
+      assert.equal(locateEntity('assignment', 'asgn_legacy2', ws).status, 'ambiguous');
+    });
+  });
+
+  it('an owner that is NOT among the matches stays ambiguous — never name a store that lacks the record', () => {
+    const { ws, api, web } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      // Both copies agree the owner is the WORKSPACE, but neither api nor web is it.
+      writeRaw(api, 'asgn_elsewhere', '{"id":"asgn_elsewhere","project_id":"prj_ws"}');
+      writeRaw(web, 'asgn_elsewhere', '{"id":"asgn_elsewhere","project_id":"prj_ws"}');
+      const result = locateEntity('assignment', 'asgn_elsewhere', api);
+      assert.equal(result.status, 'ambiguous', 'the owner holds no copy — routing there would name a store without the record');
+    });
+  });
+
+  it('an UNREADABLE record degrades to ambiguous, never throws — routing must not depend on a foreign project\u0027s health', () => {
+    const { ws, api, web } = monorepo();
+    withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, () => {
+      seedAssignment(api, 'asgn_corrupt');
+      writeRaw(web, 'asgn_corrupt', '{ this is not json');
+      let result: ReturnType<typeof locateEntity> | undefined;
+      assert.doesNotThrow(() => { result = locateEntity('assignment', 'asgn_corrupt', ws); });
+      assert.equal(result?.status, 'ambiguous', 'an unparseable sibling makes the set undecided, not a crash');
+    });
+  });
+});
