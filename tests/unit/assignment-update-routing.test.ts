@@ -24,6 +24,8 @@ import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { handleBclawAssignmentUpdate, handleBclawReleaseClaim } from '../../src/commands/mcp-write-claims.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
+import { registerAgentIdentity } from '../../src/core/agent-registry.js';
+import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import type { McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import type { McpToolExecutionPayload } from '../../src/commands/mcp-contract.js';
 
@@ -113,6 +115,26 @@ function monorepo(): { ws: string; api: string; web: string } {
     api: makeStore(path.join(ws, 'apps', 'api'), 'api', 'prj_api'),
     web: makeStore(path.join(ws, 'apps', 'web'), 'web', 'prj_web'),
   };
+}
+
+/**
+ * Note files under a runtime tree, recursively — notes are nested per agent (and per
+ * host for the machine/private visibilities), so a flat readdir would miss them and a
+ * plain `existsSync` on the tree root proves nothing about where the note landed.
+ * Returns paths RELATIVE to `root` so a failure message stays readable.
+ */
+function listNoteFiles(root: string): string[] {
+  if (!fs.existsSync(root)) return [];
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.json')) out.push(path.relative(root, full));
+    }
+  };
+  walk(root);
+  return out;
 }
 
 function seed(cwd: string, id: string): void {
@@ -283,5 +305,106 @@ describe('bclaw_release_claim routing (pln#649 F5)', () => {
       assert.ok(outcome.response.isError);
       assert.match(JSON.stringify(outcome.response.content), /Invalid claim id/);
     });
+  });
+});
+
+/**
+ * pln#649 F5, last surface — a WORKER's AMBIENT mutation is routed by its CLAIM.
+ *
+ * The routed surfaces so far all take an entity id, so the entity could route. This is
+ * the other half of F5: the mutations a dispatched worker makes with NO entity to name
+ * — capturing a trap, writing a note. Those fell through the whole ambient ladder and
+ * landed wherever the shared pointer said, which is the original field defect.
+ *
+ * The rule is NOT "refuse because nothing was named": a worker HAS a discriminant,
+ * `BRAINCLAW_CLAIM_ID`, the one selector deliberately preserved in its env. So the claim
+ * names the project. Pin written from that sentence of dec#153/F5, not from the code.
+ */
+describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => {
+  it('a note written by a worker lands in the CLAIM\u0027s project, not the ambient one', async () => {
+    const { ws, api } = monorepo();
+    const saved = process.env.BRAINCLAW_CLAIM_ID;
+    try {
+      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws, BRAINCLAW_AGENT_NAME: 'worker' }, async () => {
+        saveClaim({
+          id: 'clm_ambient', agent: 'worker', scope: 'src/x.ts', description: 'worker lane',
+          created_at: new Date().toISOString(), status: 'active',
+        }, api);
+        // REGISTERED IN THE CLAIM'S PROJECT ONLY, and never at the workspace root — so
+        // the pin is load-bearing twice over: if routing regresses, identity resolves
+        // against the ambient store where this agent does not exist and the call fails
+        // with `identity_error`. Same design as `fakeCtx` above.
+        //
+        // Registering EXPLICITLY is also what makes this pin environment-independent.
+        // Without it, my machine resolved a principal from an env var that
+        // `withCleanEnv` does not strip, auto-registered it, and went green — while
+        // every CI runner has no identity at all and returned
+        // "No registered agent identity resolved". Six red jobs, twice.
+        registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: api });
+        process.env.BRAINCLAW_CLAIM_ID = 'clm_ambient';
+
+        // Ambient cwd is the workspace ROOT — where a worker with no session lands.
+        //
+        // NO `agent` ARG. Passing one made the call fail with `identity_error` (it must
+        // match the pinned connection principal), and the first version of this pin
+        // asserted a DIRECTORY, which the auto-session created on the rerouted cwd — so
+        // it went green over a call that had errored. Real agents omit the identity.
+        const res = await executeMcpToolCall({
+          name: 'bclaw_write_note',
+          args: { text: 'observed while working the lane', type: 'observation' },
+          cwd: ws,
+        });
+        // `assert.ok(res)` was NOT enough: a failed tool call still returns a truthy
+        // outcome carrying `isError`, so a broken call read as a pass. Assert the call
+        // SUCCEEDED, and carry the payload into the failure message — this pin went red
+        // on CI while green on three local configurations, and the weak assertion is
+        // what made that expensive to diagnose.
+        const text = JSON.stringify(res?.response ?? null);
+        assert.notEqual(res?.response?.isError, true, `the call must succeed — got: ${text}`);
+
+        // Assert the note FILE, not its directory: a directory can be created for
+        // unrelated reasons, so its presence proves little about where the note went.
+        const inApi = listNoteFiles(path.join(api, '.brainclaw', 'coordination', 'runtime'));
+        const inWs = listNoteFiles(path.join(ws, '.brainclaw', 'coordination', 'runtime'));
+        const diag = `api=${JSON.stringify(inApi)} ws=${JSON.stringify(inWs)} response=${text} — `;
+        assert.equal(inWs.length, 0, `${diag}no note may be left in the ambient store`);
+        assert.ok(inApi.length > 0, diag + 'the note must have been written in the claim\u0027s project');
+      });
+    } finally {
+      if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
+      else process.env.BRAINCLAW_CLAIM_ID = saved;
+    }
+  });
+
+  it('a READ is left on the ambient anchor (dec#155: only mutations reroute)', async () => {
+    const { ws, api } = monorepo();
+    const saved = process.env.BRAINCLAW_CLAIM_ID;
+    try {
+      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws, BRAINCLAW_AGENT_NAME: 'worker' }, async () => {
+        saveClaim({
+          id: 'clm_read', agent: 'worker', scope: 'src/x.ts', description: 'worker lane',
+          created_at: new Date().toISOString(), status: 'active',
+        }, api);
+        // A read needs an identity too — and registering it in BOTH stores here is
+        // deliberate: this pin must pass on the AMBIENT store, so an identity failure
+        // could never be mistaken for the reroute it is asserting does not happen.
+        registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: api });
+        registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: ws });
+        process.env.BRAINCLAW_CLAIM_ID = 'clm_read';
+        // bclaw_context is a READ: it must not be rerouted to the claim's project.
+        const res = await executeMcpToolCall({
+          name: 'bclaw_context', args: { kind: 'board_summary' }, cwd: ws,
+        });
+        // Same lesson as the pin above: assert the call SUCCEEDED, and prove the anchor
+        // negatively — the claim's project must not appear in a read served from the
+        // workspace root. `assert.ok(res)` proved neither.
+        const text = JSON.stringify(res?.response ?? null);
+        assert.notEqual(res?.response?.isError, true, `a read must still work — got: ${text}`);
+        assert.ok(!text.includes('prj_api'), `a read must stay on the ambient anchor — got: ${text}`);
+      });
+    } finally {
+      if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
+      else process.env.BRAINCLAW_CLAIM_ID = saved;
+    }
   });
 });
