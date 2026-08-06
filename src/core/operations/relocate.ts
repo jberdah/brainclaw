@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveEntityDir, writeFileAtomic } from '../io.js';
+import { entityRecordPaths, resolveEntityDir, writeFileAtomic } from '../io.js';
 import { getEntitySpec, type EntityName } from '../entity-registry.js';
 import { appendAuditEntry } from '../audit.js';
 import { resolveProjectCwd } from '../cross-project.js';
@@ -96,12 +96,20 @@ export function relocateEntity(input: RelocateEntityInput): RelocateEntityResult
     throw new Error(`Source and target are the same project (${toCwd}). Nothing to move.`);
   }
 
-  // Locate the source file across the entity's candidate subdirs.
+  // Locate the source file across the entity's candidate subdirs AND both layouts.
+  //
+  // `resolveEntityDir(sd, cwd, 'read')` picks the canonical directory as soon as it
+  // holds ANY file, so a record still in the pre-migration flat layout was reported
+  // "not found in source project" while sitting right there (pln#649 — same
+  // directory-vs-file confusion fixed in the locator and the by-id loaders; found
+  // here by a Fable audit).
   let srcFile: string | undefined;
   let foundSubdir: string | undefined;
   for (const sd of subdirs) {
-    const candidate = path.join(resolveEntityDir(sd, fromCwd, 'read'), `${input.id}.json`);
-    if (fs.existsSync(candidate)) { srcFile = candidate; foundSubdir = sd; break; }
+    for (const candidate of entityRecordPaths(sd, input.id, fromCwd)) {
+      if (fs.existsSync(candidate)) { srcFile = candidate; foundSubdir = sd; break; }
+    }
+    if (srcFile) break;
   }
   if (!srcFile || !foundSubdir) {
     throw new Error(`${input.entity} '${input.id}' not found in source project (${fromCwd}).`);
@@ -116,11 +124,25 @@ export function relocateEntity(input: RelocateEntityInput): RelocateEntityResult
   }
   getEntitySpec(input.entity).schema.parse(raw);
 
-  // Collision guard — never overwrite an item already in the target.
+  // Collision guard — never overwrite an item already in the target, and never
+  // CREATE a second copy of the same id inside it.
+  //
+  // Checking only the canonical directory (`'write'`) was worse than a missed
+  // overwrite: if the target held the same id in the LEGACY layout, the guard passed
+  // and the move wrote a canonical copy beside it — manufacturing an intra-store
+  // duplicate id. That is precisely the state the entity locator refuses as
+  // `ambiguous` (pln#649), so a successful `bclaw_move` could leave an entity
+  // permanently unroutable. Found by a Fable audit, which ranked it the most serious
+  // of the remaining by-id sites.
   const dstDir = resolveEntityDir(foundSubdir, toCwd, 'write');
   const dstFile = path.join(dstDir, `${input.id}.json`);
-  if (fs.existsSync(dstFile)) {
-    throw new Error(`${input.entity} '${input.id}' already exists in the target project — refusing to overwrite.`);
+  for (const existing of entityRecordPaths(foundSubdir, input.id, toCwd)) {
+    if (fs.existsSync(existing)) {
+      throw new Error(
+        `${input.entity} '${input.id}' already exists in the target project (${existing}) — refusing to overwrite `
+        + 'or to create a second copy of the same id.',
+      );
+    }
   }
 
   // Reference guards (plans): refuse to move work under a live claim; warn on

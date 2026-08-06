@@ -140,3 +140,58 @@ describe('relocateEntity (pln#595 — bclaw move)', () => {
     assert.ok(fs.existsSync(planFile(b, id)), 'present in target via MCP');
   });
 });
+
+/**
+ * pln#649 — `bclaw move` and the pre-migration flat layout.
+ *
+ * Both cases below come from a Fable audit that ranked this the most serious of the
+ * remaining by-id sites, and both are the same directory-vs-file confusion already
+ * fixed in the entity locator and the by-id loaders: `resolveEntityDir(…, 'read')`
+ * picks the canonical directory as soon as it holds ANY file, which is the wrong
+ * question when you are looking for ONE record.
+ */
+describe('relocateEntity across storage layouts (pln#649)', () => {
+  /** Move a record from the canonical layout to the legacy flat one. */
+  function demoteToLegacy(projectDir: string, id: string): string {
+    const legacyDir = path.join(projectDir, '.brainclaw', 'plans');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const legacy = path.join(legacyDir, `${id}.json`);
+    fs.renameSync(planFile(projectDir, id), legacy);
+    return legacy;
+  }
+
+  it('finds a source record that still sits in the LEGACY layout', () => {
+    const { a, b } = makeWorkspace();
+    const legacyId = mkPlan(a, 'legacy record');
+    mkPlan(a, 'canonical sibling');       // makes the canonical dir non-empty
+    demoteToLegacy(a, legacyId);
+
+    const result = relocateEntity({ entity: 'plan', id: legacyId, toProject: 'app_b', cwd: a, actor: 'tester' });
+    assert.equal(result.id, legacyId);
+    assert.ok(fs.existsSync(planFile(b, legacyId)), 'the record must land in the target');
+    assert.ok(!fs.existsSync(path.join(a, '.brainclaw', 'plans', `${legacyId}.json`)), 'source removed');
+  });
+
+  // The dangerous one: the guard passed because it only looked at the canonical dir,
+  // so the move wrote a canonical copy BESIDE a legacy one — manufacturing the very
+  // duplicate id that the entity locator refuses as `ambiguous`, leaving the entity
+  // permanently unroutable.
+  it('REFUSES to create a second copy when the target holds the id in the LEGACY layout', () => {
+    const { a, b } = makeWorkspace();
+    const id = mkPlan(a, 'source');
+    const decoy = mkPlan(b, 'already there under the old layout');
+    // Give the target a legacy record with the SAME id as the one being moved.
+    const legacyDir = path.join(b, '.brainclaw', 'plans');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.renameSync(planFile(b, decoy), path.join(legacyDir, `${id}.json`));
+
+    assert.throws(
+      () => relocateEntity({ entity: 'plan', id, toProject: 'app_b', cwd: a, actor: 'tester' }),
+      /already exists in the target project/,
+      'a canonical-only guard would have created an intra-store duplicate id',
+    );
+    // And nothing moved: the source is intact, the target gained no canonical copy.
+    assert.ok(fs.existsSync(planFile(a, id)), 'source must be untouched by a refused move');
+    assert.ok(!fs.existsSync(planFile(b, id)), 'no canonical copy may be created');
+  });
+});
