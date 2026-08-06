@@ -7,6 +7,7 @@
  * @module
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { AgentRunSchema, type AgentRun, type AgentRunStatus, type AgentRunTransport, type Assignment, type AssignmentArtifact } from './schema.js';
 import { resolveOwnerProjectId } from './config.js';
 import { entityRecordDirs, resolveEntityDir } from './io.js';
@@ -29,9 +30,9 @@ function ensureAgentRunsDir(cwd?: string): void {
   }
 }
 
-function agentRunStore(cwd?: string): JsonStore<AgentRun> {
+function agentRunStoreForDir(dirPath: string): JsonStore<AgentRun> {
   return new JsonStore<AgentRun>({
-    dirPath: agentRunsDir(cwd, 'read'),
+    dirPath,
     documentType: 'agent_run',
     getId: (run) => run.id,
     sort: (a, b) => {
@@ -41,6 +42,11 @@ function agentRunStore(cwd?: string): JsonStore<AgentRun> {
     },
   });
 }
+
+// NOTE: no single-directory reader remains. The helper that resolved ONE dir via the
+// hasContent heuristic is what let a legacy run stay invisible to the list while the by-id
+// loader found it; removing it stops the next reader from reintroducing that asymmetry.
+
 
 export function saveAgentRun(run: AgentRun, cwd?: string): void {
   mutate({ cwd }, () => {
@@ -57,6 +63,16 @@ export function saveAgentRun(run: AgentRun, cwd?: string): void {
     emitRegistryPostImage('agent_run', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
     registryFaultPoint('after_registry_journal');
     store.save(parsed);
+    // Converge the other layout (mirrors saveClaim / saveAssignment): leaving a legacy copy
+    // holding the stale status is what let a deleted record be resurrected by its own zombie.
+    const writeDir = agentRunsDir(cwd, 'write');
+    for (const dirPath of entityRecordDirs('runs', cwd ?? process.cwd())) {
+      if (dirPath === writeDir) continue;
+      const legacyPath = path.join(dirPath, `${parsed.id}.json`);
+      try {
+        if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+      } catch { /* best effort — the dual-layout list keeps it visible */ }
+    }
   });
 }
 
@@ -92,8 +108,27 @@ export interface ListAgentRunsFilter {
   transport?: AgentRunTransport;
 }
 
+/**
+ * BOTH LAYOUTS, canonical winning on a duplicate id (mirrors listClaims / listAssignments).
+ *
+ * This list is the one `nextAttemptIndex` and `findLatestAgentRunForAssignment` read, so a
+ * run visible by id but missing from the list is what lets an attempt index restart at 1
+ * and a run's FSM freeze. Reachability is LOW — agent runs postdate the partitioned layout,
+ * so brainclaw has never written them flat (measured: legacy=0 in the field) — which is why
+ * this is internal consistency, not a field fix.
+ */
 export function listAgentRuns(cwd?: string, filter?: ListAgentRunsFilter): AgentRun[] {
-  let runs = agentRunStore(cwd).list();
+  const byId = new Map<string, AgentRun>();
+  for (const dirPath of entityRecordDirs('runs', cwd ?? process.cwd())) {
+    for (const run of agentRunStoreForDir(dirPath).list()) {
+      if (!byId.has(run.id)) byId.set(run.id, run);
+    }
+  }
+  let runs = Array.from(byId.values()).sort((a, b) => {
+    const byAssignment = a.assignment_id.localeCompare(b.assignment_id);
+    if (byAssignment !== 0) return byAssignment;
+    return a.created_at.localeCompare(b.created_at);
+  });
   if (filter?.status) runs = runs.filter((run) => run.status === filter.status);
   if (filter?.agent) runs = runs.filter((run) => run.agent === filter.agent);
   if (filter?.assignment_id) runs = runs.filter((run) => run.assignment_id === filter.assignment_id);
