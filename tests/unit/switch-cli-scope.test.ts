@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
-import { runSwitch } from '../../src/commands/switch.js';
+import { listAvailableProjects, runSwitch } from '../../src/commands/switch.js';
 import { loadCurrentSession, loadSessionById, saveCurrentSession } from '../../src/core/identity.js';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../../src/core/active-project.js';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
@@ -139,6 +139,58 @@ describe('switch CLI — session-scoped by default (F3+F5)', () => {
     assert.equal(parsed.active, true);
     assert.equal(parsed.scope, 'session');
     assert.equal(path.resolve(parsed.path), web);
+  });
+
+  /**
+   * pln#649 step 5 — the READER that displays must derive from the resolver that WRITES.
+   *
+   * `showCurrent` used to walk its own session-then-global ladder, so it could name only
+   * two of the resolver's seven rungs. An agent physically inside a child project, with no
+   * session switch and a global pointer aimed elsewhere, was told the GLOBAL project while
+   * every write of its own went to the child. That is the precise shape of the pln#648 bug
+   * — green status, data beside it — and the reason it survived weeks of use: the status
+   * surface kept saying the reassuring thing.
+   */
+  it('status reports the CHILD the agent is inside, not the divergent global pointer (step 5)', () => {
+    const api = addChildProject('apps/api', 'api');
+    const web = addChildProject('apps/web', 'web');
+    // The shared pointer names web; the agent is standing in api and has no session switch.
+    saveActiveProject(ws.dir, { path: web, name: 'web', switched_at: new Date().toISOString() });
+    try {
+      const out = captureLog(() => runSwitch(undefined, { cwd: api, json: true }));
+      const parsed = JSON.parse(out) as { active: boolean; scope: string; path: string };
+      assert.equal(path.resolve(parsed.path), api,
+        'the reported project must be the one a write would reach, not the shared pointer');
+      assert.equal(parsed.scope, 'cwd_child',
+        'and the scope must name the selector that actually won — a rung the old reader could not express');
+    } finally {
+      clearActiveProject(ws.dir);
+    }
+  });
+
+  /**
+   * THE INVARIANT STEP 5 ACTUALLY STATES: every reader echoes the SAME `active_source`.
+   *
+   * Pinned across the two surfaces rather than inside either, because the defect was never
+   * that one of them was wrong on its own — it was that they disagreed, and the writer
+   * followed a third answer. Each surface passing its own test is exactly the state that
+   * shipped the pln#648 bug.
+   */
+  it('--list and show agree on active_source from the same cwd (step 5 invariant)', () => {
+    const api = addChildProject('apps/api', 'api');
+    addChildProject('apps/web', 'web');
+
+    const showOut = captureLog(() => runSwitch(undefined, { cwd: api, json: true }));
+    const shown = JSON.parse(showOut) as { scope: string; path?: string };
+    const listed = listAvailableProjects(api);
+
+    assert.equal(listed.active_source, shown.scope,
+      `the two readers must name the same winning selector — list=${listed.active_source} show=${shown.scope}`);
+    const activeInList = listed.projects.find((p) => p.active);
+    if (shown.path) {
+      assert.equal(path.resolve(activeInList?.path ?? ''), path.resolve(shown.path),
+        'and they must mark the same project active');
+    }
   });
 
   it('--clear is session-only by default — leaves the global pointer intact', () => {

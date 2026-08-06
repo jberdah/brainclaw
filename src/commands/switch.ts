@@ -2,7 +2,7 @@ import path from 'node:path';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../core/active-project.js';
 import { buildOperationalIdentity, loadCurrentSession, loadSessionById, resolveCurrentSessionId, saveCurrentSession } from '../core/identity.js';
 import { memoryExists } from '../core/io.js';
-import { resolveProjectRef } from '../core/store-resolution.js';
+import { resolveEffectiveCwdInfo, resolveProjectRef, type EffectiveCwdSource } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, resolveProjectCwd } from '../core/cross-project.js';
 import { scanNestedBrainclawProjects } from '../core/workspace-projects.js';
 import { loadConfig } from '../core/config.js';
@@ -136,7 +136,13 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
 
 export interface ListProjectsResult {
   workspace_root: string;
-  active_source: 'session' | 'global' | 'none';
+  /**
+   * The selector that actually won, straight from `resolveEffectiveCwdInfo` — the SAME
+   * value the MCP surfaces echo. It used to be a locally recomputed
+   * `'session' | 'global' | 'none'`, which could name only two of the resolver's seven
+   * rungs (pln#649 step 5).
+   */
+  active_source: EffectiveCwdSource;
   projects: Array<{ name?: string; path: string; relative_path: string; active: boolean }>;
 }
 
@@ -153,10 +159,17 @@ export function listAvailableProjectsForSession(cwd?: string, sessionId?: string
     throw new Error('No brainclaw workspace found.');
   }
 
-  const sessionActive = (sessionId ? loadSessionById(sessionId, cwd) : loadCurrentSession(cwd))?.active_project;
-  const globalActive = loadActiveProject(wsRoot);
-  const active = sessionActive ?? globalActive;
-  const activeSource: ListProjectsResult['active_source'] = sessionActive ? 'session' : globalActive ? 'global' : 'none';
+  // ONE RESOLVER, not a second ladder. This recomputed session-then-global locally, so it
+  // could report only two of the seven rungs: an agent physically inside a child project
+  // (cwd_child), or one anchored by BRAINCLAW_CWD / BRAINCLAW_PROJECT, was marked against
+  // the GLOBAL pointer or against nothing at all — while its writes went elsewhere. That
+  // divergence between the reader that DISPLAYS and the resolver that WRITES is what kept
+  // the pln#648 bug invisible for weeks: green status, data beside it.
+  const effective = resolveEffectiveCwdInfo({ baseCwd: cwd, sessionId });
+  const activeSource = effective.active_source;
+  const active = effective.resolved_project
+    ? { path: effective.resolved_project.path, name: effective.resolved_project.name }
+    : undefined;
   const projects: ListProjectsResult['projects'] = [];
   const seen = new Set<string>();
 
@@ -314,13 +327,33 @@ export function runSwitch(projectRef: string | undefined, options: SwitchOptions
   }
 }
 
+/**
+ * pln#649 step 5 — status derives from the SAME call that routes a write.
+ *
+ * This used to walk its own session-then-global ladder, so it could only ever name two of
+ * the resolver's seven rungs. An agent inside a child project read back the workspace's
+ * GLOBAL pointer — a different project from the one its writes reached. Reporting a source
+ * the writer does not use is the exact shape of the defect this plan exists to close, and
+ * it is why that defect stayed invisible: the status surface kept saying the reassuring
+ * thing.
+ *
+ * `active_source` is now the resolver's own vocabulary, matching what the MCP surfaces
+ * already echo. `cwd` — the resolver's "nothing pointed anywhere, use the directory" rung —
+ * keeps the previous no-active-project output, so the operator-facing text is unchanged for
+ * the case it described.
+ */
 function showCurrent(wsRoot: string, cwd: string, json: boolean): void {
-  // F5: prefer the session's own active project so an agent sees its own
-  // session-scoped switch, not just the shared global pointer.
-  const sessionActive = loadCurrentSession(cwd)?.active_project;
-  const globalActive = loadActiveProject(wsRoot);
-  const active = sessionActive ?? globalActive;
-  const source: 'session' | 'global' | 'none' = sessionActive ? 'session' : globalActive ? 'global' : 'none';
+  const effective = resolveEffectiveCwdInfo({ baseCwd: cwd });
+  const source = effective.active_source;
+  // The pointer records carry switched_at / switched_by; the resolver carries authority.
+  // Read the metadata from whichever pointer actually won, and never from the other one.
+  const pointer = source === 'session'
+    ? loadCurrentSession(cwd)?.active_project
+    : source === 'global' ? loadActiveProject(wsRoot) : undefined;
+  const active = pointer
+    ?? (source === 'cwd' || !effective.resolved_project
+      ? undefined
+      : { path: effective.resolved_project.path, name: effective.resolved_project.name, switched_at: undefined });
 
   if (!active) {
     if (json) {
@@ -370,7 +403,9 @@ function listProjects(wsRoot: string, cwd: string, json: boolean): void {
     console.log(`${marker}${name}`);
   }
 
-  if (result.active_source === 'none') {
+  // `cwd` is the resolver's equivalent of the old locally-computed 'none': no pointer won,
+  // so commands operate on the current directory (pln#649 step 5).
+  if (result.active_source === 'cwd') {
     console.log('\nNo active project. Use `brainclaw switch <project>` to set one.');
   }
 }
