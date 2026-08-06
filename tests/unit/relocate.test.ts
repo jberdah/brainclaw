@@ -199,9 +199,11 @@ describe('relocateEntity across storage layouts (pln#649)', () => {
 /**
  * pln#649 / dec#153 — ENTITY vs EXPLICIT PROJECT on `bclaw_transition`.
  *
- * The only canonical-grammar surface that takes both authorities at once (an entity id
- * AND `project=`), and the very call documented in trp#1327 as the coordinator's
- * workaround for a stuck assignment — so operators reach it. A divergence used to
+ * The call documented in trp#1327 as the coordinator's workaround for a stuck
+ * assignment, so operators reach it. It is NOT the only surface that takes both
+ * authorities at once, which is what the first version of this comment claimed:
+ * `bclaw_update` and `bclaw_remove` take the same pair and were unguarded (Fable
+ * audit). They are pinned below, and the check is now one shared function. A divergence used to
  * produce a misleading `not found in <B>`: the record exists, just not where the caller
  * named. dec#153 requires the divergence be REFUSED and NAMED, so the caller learns
  * which of their two statements was wrong instead of doubting the id.
@@ -229,6 +231,54 @@ describe('bclaw_transition — entity vs explicit project (dec#153)', () => {
     const id = mkPlan(a, 'lives in app_a');
     const res = await executeMcpToolCall({ name: 'bclaw_transition', cwd: a, args: {
       entity: 'plan', id, to: 'in_progress', project: 'app_a', agent: 'tester' } });
+    assert.doesNotMatch(JSON.stringify(res), /does not live in project/, 'agreement must not be refused');
+  });
+});
+
+/**
+ * The two surfaces #182 MISSED, because its own comment asserted transition was the only
+ * one that receives both authorities. `bclaw_update` and `bclaw_remove` take the same
+ * pair (an entity id AND `project=`), had no guard, and therefore still produced exactly
+ * the misleading `not found` that dec#153's refusal exists to kill — on surfaces an
+ * operator reaches the same way.
+ *
+ * PINNED PER SURFACE, not once on the shared helper. A green test on the helper is what
+ * shipped two inert features earlier in this project: what has to hold is that the
+ * HANDLER an agent actually calls refuses.
+ */
+describe('bclaw_update / bclaw_remove — entity vs explicit project (dec#153)', () => {
+  it('bclaw_update REFUSES a divergence instead of reporting a misleading not-found', async () => {
+    const { a } = makeWorkspace();
+    const id = mkPlan(a, 'lives in app_a');
+    const res = await executeMcpToolCall({ name: 'bclaw_update', cwd: a, args: {
+      entity: 'plan', id, patch: { text: 'edited from the wrong project' }, project: 'app_b', agent: 'tester' } });
+    const text = JSON.stringify(res);
+    assert.match(text, /does not live in project/, 'the divergence must be named');
+    assert.match(text, /app_b/, 'the project the caller typed is already theirs');
+    assert.doesNotMatch(text, /app_a/, 'where it really lives stays a count, never a name');
+  });
+
+  it('bclaw_update still works when the named project IS the owner (no false refusal)', async () => {
+    const { a } = makeWorkspace();
+    const id = mkPlan(a, 'lives in app_a');
+    const res = await executeMcpToolCall({ name: 'bclaw_update', cwd: a, args: {
+      entity: 'plan', id, patch: { text: 'edited by its owner' }, project: 'app_a', agent: 'tester' } });
+    assert.doesNotMatch(JSON.stringify(res), /does not live in project/, 'agreement must not be refused');
+  });
+
+  it('bclaw_remove REFUSES a divergence — the highest-stakes of the three', async () => {
+    const { a } = makeWorkspace();
+    const id = mkPlan(a, 'lives in app_a');
+    const res = await executeMcpToolCall({ name: 'bclaw_remove', cwd: a, args: {
+      entity: 'plan', id, project: 'app_b', agent: 'tester' } });
+    assert.match(JSON.stringify(res), /does not live in project/, 'a remove in the wrong project must be refused, not attempted');
+  });
+
+  it('bclaw_remove still works when the named project IS the owner (no false refusal)', async () => {
+    const { a } = makeWorkspace();
+    const id = mkPlan(a, 'lives in app_a');
+    const res = await executeMcpToolCall({ name: 'bclaw_remove', cwd: a, args: {
+      entity: 'plan', id, project: 'app_a', agent: 'tester' } });
     assert.doesNotMatch(JSON.stringify(res), /does not live in project/, 'agreement must not be refused');
   });
 });

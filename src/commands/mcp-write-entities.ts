@@ -54,6 +54,57 @@ import {
 /** Entity kinds the locator can find by id — the divergence check only applies there. */
 const LOCATABLE_FOR_DIVERGENCE = new Set(['assignment','claim','agent_run','plan','loop']);
 
+/**
+ * pln#649 / dec#153 T3: the ENTITY-vs-EXPLICIT-PROJECT refusal, shared by every
+ * canonical-grammar surface that receives BOTH authorities at once.
+ *
+ * IT LIVES HERE BECAUSE THERE ARE THREE CONSUMERS, NOT ONE. The first version was
+ * inline in `bclaw_transition` and its comment claimed that was "the ONLY canonical
+ * grammar surface where both authorities are supplied at once" — FALSE, found by a
+ * Fable audit: `bclaw_update` and `bclaw_remove` take the same pair and had no guard,
+ * so the misleading `not found` the guard exists to kill survived on two surfaces
+ * operators reach the same way. Copying the block a third time is how the by-id
+ * duplication earlier in this plan happened; one function, three call sites.
+ *
+ * Without it a divergence produces a misleading `not found in <B>`: the record exists,
+ * just not where the caller named, which leaves them doubting their id. dec#153 says
+ * an explicit divergence must be REFUSED and NAMED so they learn which of their two
+ * statements was wrong.
+ *
+ * DISCLOSURE RULE from the two routed surfaces: the project the caller TYPED is
+ * already theirs, so naming it back is free — but WHERE the entity actually lives is
+ * new information, so that is a COUNT, never a name.
+ *
+ * The remedy sentence is deliberately not "drop `project` to be routed by the entity",
+ * which the first version said and which is not true: dropping `project` falls back to
+ * AMBIENT resolution, not to the entity. An error message that misstates its own fix
+ * is worse than a comment that does.
+ */
+function refuseEntityProjectDivergence(
+  entity: EntityName,
+  id: string,
+  requestedProject: unknown,
+  targetCwd: string,
+  cwd: string,
+): McpToolResponse | undefined {
+  if (requestedProject === undefined || !id || !isLocatableId(id)) return undefined;
+  if (!LOCATABLE_FOR_DIVERGENCE.has(entity)) return undefined;
+  const located = locateEntity(entity as LocatableEntity, id, cwd);
+  const target = path.resolve(targetCwd);
+  // Only fires when the entity was found SOMEWHERE ELSE: a genuine not-found stays a
+  // not-found, and an agreement is never refused.
+  if (located.matches.length === 0) return undefined;
+  if (located.matches.some((m) => path.resolve(m.cwd) === target)) return undefined;
+  return createToolErrorResponse(
+    'validation_error',
+    `${entity} '${id}' does not live in project '${String(requestedProject)}' — it exists in `
+    + `${located.matches.length} other reachable project(s). Refusing: the entity and the project you named `
+    + 'disagree, and guessing which one you meant is how a write lands in the wrong project. '
+    + 'Call from the project that owns it, or name that project.',
+    { entity, id, requested_project: String(requestedProject), located_elsewhere_count: located.matches.length },
+  );
+}
+
 export interface ExecutionWriteTargetShape {
   /** When set, the caller must return this error response instead of writing. */
   block?: McpToolResponse;
@@ -539,6 +590,11 @@ export function handleBclawUpdate(payload: McpToolExecutionPayload, ctx: McpWrit
     const id = String(args.id ?? '');
     const patch = (args.patch ?? {}) as Record<string, unknown>;
     const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+    // dec#153 T3 — this surface takes both authorities too (Fable audit; #182's comment
+    // claimed transition was the only one). Refuse BEFORE updateEntity, whose
+    // `not found` would otherwise be the misleading message the guard exists to kill.
+    const updateDivergence = refuseEntityProjectDivergence(entity, id, args.project, targetCwd, cwd);
+    if (updateDivergence) return { response: updateDivergence };
     const targetScope = scopeMetadataForTarget(args, targetCwd, ctx.scopeInfo);
     const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
     // S2 (pln#623): scan the patched text field on the MCP path (CLI parity).
@@ -576,6 +632,11 @@ export function handleBclawRemove(payload: McpToolExecutionPayload, ctx: McpWrit
     const id = String(args.id ?? '');
     const purge = args.purge === true;
     const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+    // dec#153 T3 — same pair of authorities, and the highest stakes of the three: a
+    // divergence here means the caller is about to remove (or purge) in a project that
+    // does not hold the entity they named.
+    const removeDivergence = refuseEntityProjectDivergence(entity, id, args.project, targetCwd, cwd);
+    if (removeDivergence) return { response: removeDivergence };
     const targetScope = scopeMetadataForTarget(args, targetCwd, ctx.scopeInfo);
     const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
     const result = removeEntity(entity, id, targetCwd, purge);
@@ -653,36 +714,11 @@ export function handleBclawTransition(payload: McpToolExecutionPayload, ctx: Mcp
     const to = String(args.to ?? '');
     const reason = args.reason as string | undefined;
 
-    // ── pln#649 / dec#153: ENTITY vs EXPLICIT PROJECT, the first divergence with a
-    // real consumer. This is the ONLY canonical-grammar surface where both authorities
-    // are supplied at once — an entity id AND `project=` — and it is the very call
-    // documented in trp#1327 as the coordinator's workaround, so operators reach it.
-    //
-    // Today a divergence produces a misleading `not found in <B>`: the record exists,
-    // just not where the caller named. dec#153 says an explicit divergence must be
-    // REFUSED and NAMED, so the caller learns which of their two statements was wrong
-    // instead of doubting the id.
-    //
-    // Disclosure rule from the two routed surfaces: the caller already knows the
-    // project they typed, so naming it back is free — but WHERE the entity really
-    // lives is new information, so that is a count, not a name.
-    if (args.project !== undefined && id && isLocatableId(id) && LOCATABLE_FOR_DIVERGENCE.has(entity)) {
-      const located = locateEntity(entity as LocatableEntity, id, cwd);
-      const target = path.resolve(targetCwd);
-      const inTarget = located.matches.some((m) => path.resolve(m.cwd) === target);
-      if (located.matches.length > 0 && !inTarget) {
-        return {
-          response: createToolErrorResponse(
-            'validation_error',
-            `${entity} '${id}' does not live in project '${String(args.project)}' — it exists in `
-            + `${located.matches.length} other reachable project(s). Refusing: the entity and the project you named `
-            + 'disagree, and guessing which one you meant is how a write lands in the wrong project. '
-            + 'Drop `project` to be routed by the entity, or name the project that owns it.',
-            { entity, id, requested_project: String(args.project), located_elsewhere_count: located.matches.length },
-          ),
-        };
-      }
-    }
+    // pln#649 / dec#153 T3 — shared with bclaw_update and bclaw_remove, which take the
+    // same pair of authorities. `bclaw_transition` is the call trp#1327 documents as the
+    // coordinator's workaround, so operators reach it; it is not the only one.
+    const transitionDivergence = refuseEntityProjectDivergence(entity, id, args.project, targetCwd, cwd);
+    if (transitionDivergence) return { response: transitionDivergence };
 
     const targetScope = scopeMetadataForTarget(args, targetCwd, ctx.scopeInfo);
     const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
