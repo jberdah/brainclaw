@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
+import { clearEnumerationMemo } from '../core/entity-locator.js';
 import { registerAgentIdentity, resolveDefaultAgentName, resolveExistingCurrentAgent } from '../core/agent-registry.js';
 import { MEMORY_DIR, memoryExists, ensureMemoryDir, memoryPath, writeFileAtomic } from '../core/io.js';
 import { emptyState, loadState, saveState } from '../core/state.js';
@@ -418,6 +419,17 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log(`Tip: run 'brainclaw init' again later to refresh the detected agent's integration files on this project.`);
   }
   console.log(`Tip: in an agent session, call the bclaw_work MCP tool (intent: "consult") to load the shared memory; from a terminal, 'brainclaw context --json' does the same.`);
+
+  // A STORE JUST CAME INTO EXISTENCE, so the routing memo's candidate list is stale.
+  //
+  // `clearEnumerationMemo` was documented as being "for tests, and for any caller that has
+  // just created a store" — and that second caller did not exist (Fable audit found the
+  // claim describing intent rather than code). The consequence was small but real: for up
+  // to the memo TTL, a mutation routed right after `brainclaw init` / `bclaw_init_project`
+  // could not see the new project. Wiring it HERE rather than in the MCP handler covers
+  // every path that materialises a store, since both the CLI and the tool go through
+  // runInit.
+  clearEnumerationMemo();
 }
 
 function safeRunMachinePrereqs(agentName: string): string[] {
