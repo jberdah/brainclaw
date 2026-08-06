@@ -53,8 +53,31 @@ export interface ListActionRequiredOptions {
   expireStale?: boolean;
 }
 
+/**
+ * Honours the declared `| undefined` instead of throwing, which it did.
+ *
+ * `JsonStore.load` THROWS on a missing id (json-store.ts), so this function could never
+ * return undefined and every `if (!action)` branch downstream was unreachable —
+ * including the `throw new Error('ActionRequired not found')` in `resolveActionRequired`
+ * just below. `assignments.ts` documents this exact JsonStore contract and wraps it; this
+ * module did not. (Fable audit.)
+ *
+ * WHAT I VERIFIED BEFORE FIXING, because the finding was reported as a security-shaped
+ * bug and is not one: the audit claimed the self-approval guard in mcp-write-claims.ts was
+ * "skipped by the throw". It is not. That guard reads `if (pendingAction && pendingAction
+ * .agent === caller)`, and the throw only happens when the action does NOT exist — in which
+ * case there is nothing to self-approve and `resolveActionRequired` refuses anyway. The
+ * dead code was the truthiness test, never the ownership test. So the real cost was a lying
+ * signature plus a worse error message for a missing id, which is what this fixes.
+ */
 export function loadActionRequired(id: string, cwd?: string): ActionRequired | undefined {
-  return actionStore(cwd).load(id);
+  const store = actionStore(cwd);
+  // `exists` rather than a try/catch: a bare catch would also swallow an UNPARSEABLE
+  // record and report it as "not found", which is a different fact and the kind of
+  // silent downgrade this codebase already got burned by. Absence answers undefined;
+  // a corrupt record still throws, as it should.
+  if (!store.exists(id)) return undefined;
+  return store.load(id);
 }
 
 /** Default TTL for pending actions (1 hour). */

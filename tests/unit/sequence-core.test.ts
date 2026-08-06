@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSequence, getActiveSequence, listSequences, updateSequence } from '../../src/core/sequence.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createSequence, getActiveSequence, listSequences, loadSequence, updateSequence } from '../../src/core/sequence.js';
+import { entityRecordDirs, entityRecordPaths } from '../../src/core/io.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 describe('core/sequence', () => {
@@ -91,5 +94,64 @@ describe('core/sequence', () => {
     assert.equal(loaded.items.length, 1);
     assert.equal(loaded.items[0].planId, 'pln_auth');
     assert.equal(loaded.items[0].stepId, 'stp_1');
+  });
+});
+
+/**
+ * pln#649 — the sequence readers converge both record layouts.
+ *
+ * FIXED AT THE LIST LAYER, deliberately. `loadSequence` resolves by id OR short_label and
+ * `getActiveSequence` needs the whole set, so both are list-mediated: porting a by-id
+ * loader to `entityRecordPaths` (the mechanical instinct) would build a filesystem path
+ * from a short_label and could not work for either caller. That distinction came from a
+ * Fable audit and is the reason this file, not a by-id pin, is where it belongs.
+ *
+ * Exposure today is nil — sequences postdate the partitioned layout — so these pins
+ * MANUFACTURE the legacy state. Consistency with the sibling entities, not a field fix.
+ */
+describe('core/sequence — both record layouts (pln#649)', () => {
+  let ws: TestWorkspace;
+
+  beforeEach(() => {
+    ws = createTestWorkspace({ prefix: 'bclaw-sequence-layout-', projectId: 'prj_sequence_layout', currentAgent: 'codex' });
+  });
+
+  afterEach(() => { ws.cleanup(); });
+
+  /** Move a record into the pre-migration flat layout, leaving the canonical dir populated. */
+  function demote(id: string): void {
+    const [canonical, legacy] = entityRecordDirs('sequences', ws.dir);
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.renameSync(path.join(canonical, `${id}.json`), path.join(legacy, `${id}.json`));
+  }
+
+  it('lists a legacy record, and finds it by id AND by short_label, and as the active one', () => {
+    const keep = createSequence({ name: 'canonical companion', author: 'codex', items: [] }, ws.dir);
+    const moved = createSequence({ name: 'demoted lane set', author: 'codex', items: [] }, ws.dir);
+    updateSequence({ id: moved.id, status: 'active' }, ws.dir);
+    demote(moved.id);
+
+    const ids = listSequences(ws.dir).map((s) => s.id);
+    assert.ok(ids.includes(moved.id), `a legacy sequence must be listed — got ${JSON.stringify(ids)}`);
+    assert.ok(ids.includes(keep.id), 'the canonical one must still be listed');
+    assert.equal(new Set(ids).size, ids.length, 'no duplicates across layouts');
+
+    // The two list-mediated readers, which a by-id fix could not have covered.
+    assert.equal(loadSequence(moved.id, ws.dir).id, moved.id, 'by id');
+    if (moved.shortLabel) {
+      assert.equal(loadSequence(moved.shortLabel, ws.dir).id, moved.id, 'by short_label — the reason this is a LIST fix');
+    }
+    assert.equal(getActiveSequence(ws.dir)?.id, moved.id, 'and the active-sequence lookup');
+  });
+
+  it('saving a demoted sequence converges it instead of leaving a stale twin', () => {
+    const moved = createSequence({ name: 'to converge', author: 'codex', items: [] }, ws.dir);
+    demote(moved.id);
+    updateSequence({ id: moved.id, status: 'active' }, ws.dir);
+
+    const present = entityRecordPaths('sequences', moved.id, ws.dir).filter((p) => fs.existsSync(p));
+    assert.equal(present.length, 1, `exactly one copy must survive — got ${JSON.stringify(present)}`);
+    assert.match(present[0], /coordination/, 'the survivor must be canonical');
+    assert.equal(getActiveSequence(ws.dir)?.id, moved.id, 'and the converged record is the live one');
   });
 });
