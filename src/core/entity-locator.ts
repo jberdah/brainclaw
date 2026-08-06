@@ -216,11 +216,58 @@ export interface CandidateEnumeration {
   incomplete: boolean;
 }
 
+/**
+ * Per-process memo of the CANDIDATE LIST — never of the probes.
+ *
+ * This module's own header said "a cache belongs in FRONT of this function" and
+ * nobody wrote it, which a Fable audit ranked as the second live risk of the whole
+ * routing change: `enumerateCandidates` re-walks the workspace tree on EVERY routed
+ * mutation, and a worker emits repeated PROGRESS calls for the length of a run.
+ * Measured by a reviewer on Windows: p50 3.36 ms vs 0.23 ms for a direct load (~15x
+ * per call) — and a depth-12 experiment of mine spent 130 SECONDS in enumeration
+ * alone, which is the shape of the tail.
+ *
+ * WHAT IS AND IS NOT CACHED, deliberately. Only "which stores exist here" is memoised
+ * — a filesystem-topology answer that changes when someone creates a project. The
+ * PROBES (does this store hold this id?) are never cached: that is the state a
+ * mutation is about to change, and a stale answer there would route a write to the
+ * wrong store, which is the entire class dec#153 exists to kill.
+ *
+ * ASSUMED TRADE-OFF: for up to TTL milliseconds after a store is created, it is not a
+ * candidate. Consequences are bounded and safe in both directions — a `not_found`
+ * carries `enumeration_incomplete`, and an ambiguity that appears late is caught on
+ * the next call. The TTL is deliberately short: long enough to collapse a burst of
+ * calls from one operation, far too short to matter to a human.
+ */
+const ENUMERATION_MEMO_TTL_MS = 2_000;
+const enumerationMemo = new Map<string, { at: number; value: CandidateEnumeration }>();
+
+/** Drop the memo. For tests, and for any caller that has just created a store. */
+export function clearEnumerationMemo(): void {
+  enumerationMemo.clear();
+}
+
 export function enumerateCandidates(
   cwd: string,
-  options: { maxDepth?: number } = {},
+  options: { maxDepth?: number; noMemo?: boolean } = {},
 ): CandidateEnumeration {
   const maxDepth = options.maxDepth ?? DEFAULT_SCAN_DEPTH;
+  // Keyed on the canonical cwd AND the depth, so two callers asking different
+  // questions cannot read each other's answer.
+  const memoKey = `${canonicalKey(path.resolve(cwd))}::${maxDepth}`;
+  if (!options.noMemo) {
+    const hit = enumerationMemo.get(memoKey);
+    if (hit && Date.now() - hit.at < ENUMERATION_MEMO_TTL_MS) {
+      // Copy the array so a caller mutating its result cannot corrupt the memo.
+      return { stores: [...hit.value.stores], incomplete: hit.value.incomplete };
+    }
+  }
+  const computed = enumerateCandidatesUncached(cwd, maxDepth);
+  if (!options.noMemo) enumerationMemo.set(memoKey, { at: Date.now(), value: computed });
+  return { stores: [...computed.stores], incomplete: computed.incomplete };
+}
+
+function enumerateCandidatesUncached(cwd: string, maxDepth: number): CandidateEnumeration {
   const seen = new Set<string>();
   const ordered: string[] = [];
   let incomplete = false;

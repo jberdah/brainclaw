@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { createAssignment } from '../../src/core/assignments.js';
-import { enumerateCandidateStores, locateEntity } from '../../src/core/entity-locator.js';
+import { clearEnumerationMemo, enumerateCandidates, enumerateCandidateStores, locateEntity } from '../../src/core/entity-locator.js';
 
 const ENV_KEYS = ['BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID', 'BRAINCLAW_STORE_BOUNDARY'];
 let cleanups: Array<() => void> = [];
@@ -249,5 +249,103 @@ describe('core/entity-locator (pln#649 step 2)', () => {
       assert.equal(result.status, 'not_found');
       assert.deepEqual(result.probed, []);
     });
+  });
+});
+
+/**
+ * pln#649 — the enumeration memo the locator's own header asked for.
+ *
+ * `enumerateCandidates` re-walked the workspace tree on EVERY routed mutation, and a
+ * worker emits repeated PROGRESS calls for the length of a run (Fable ranked this the
+ * second live risk). Only the CANDIDATE LIST is memoised — a filesystem-topology
+ * answer. The PROBES are never cached: that is the state a mutation is about to
+ * change, and a stale answer there would route a write to the wrong store.
+ */
+describe('core/entity-locator enumeration memo (pln#649)', () => {
+  const SESSION_ENV_KEYS = ['BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID', 'BRAINCLAW_STORE_BOUNDARY'];
+  function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+    const saved: Record<string, string | undefined> = {};
+    for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+    try {
+      for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      return fn();
+    } finally {
+      for (const k of SESSION_ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  }
+
+  function ws(): { root: string; api: string } {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-memo-'));
+    store(root, 'workspace', 'prj_memo_ws', { workspace: true });
+    const api = store(path.join(root, 'apps', 'api'), 'api', 'prj_memo_api');
+    return { root, api };
+  }
+
+  it('MEMOISES the candidate list: a store created after the first call is not yet seen', () => {
+    const { root } = ws();
+    try {
+      withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: root }, () => {
+        clearEnumerationMemo();
+        const first = enumerateCandidateStores(root);
+        // Create a THIRD store after the first enumeration.
+        const late = store(path.join(root, 'apps', 'late'), 'late', 'prj_memo_late');
+
+        assert.deepEqual(enumerateCandidateStores(root), first, 'within the TTL the walk must not be redone');
+        // IN-BAND COUNTER-PROOF. A stash cannot disprove this pin (the test imports an
+        // API that would not exist), so the opt-out does the job: without the memo the
+        // very same call sees the new store. That is what makes the assertion above
+        // discriminating rather than decorative.
+        assert.equal(
+          enumerateCandidates(root, { noMemo: true }).stores.length,
+          first.length + 1,
+          'noMemo must re-walk — otherwise the memo assertion above proves nothing',
+        );
+        // …and the memo is not a permanent lie: clearing it sees the new store.
+        clearEnumerationMemo();
+        const after = enumerateCandidateStores(root);
+        assert.equal(after.length, first.length + 1, 'a cleared memo re-walks and finds the new store');
+        assert.ok(after.some((c) => c === path.resolve(late)));
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('THE PROBES ARE NEVER MEMOISED: a record created after enumeration is found at once', () => {
+    const { root, api } = ws();
+    try {
+      withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: root }, () => {
+        clearEnumerationMemo();
+        assert.equal(locateEntity('assignment', 'asgn_fresh', root).status, 'not_found');
+        // Same store set, brand-new record. Caching the probe would keep saying
+        // not_found and route a mutation nowhere.
+        seedAssignment(api, 'asgn_fresh');
+        const again = locateEntity('assignment', 'asgn_fresh', root);
+        assert.equal(again.status, 'found', 'probe results must never be cached');
+        assert.equal(again.location?.project_id, 'prj_memo_api');
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a caller can opt out, and the memo never leaks across different depths', () => {
+    const { root } = ws();
+    try {
+      withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: root }, () => {
+        clearEnumerationMemo();
+        const memoised = enumerateCandidateStores(root);
+        const fresh = enumerateCandidateStores(root, { maxDepth: 3 });
+        assert.deepEqual(fresh, memoised, 'same topology, different key — recomputed, same answer');
+        // The returned array is a copy: mutating it must not corrupt the memo.
+        memoised.push('/bogus');
+        assert.ok(!enumerateCandidateStores(root).includes('/bogus'));
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
