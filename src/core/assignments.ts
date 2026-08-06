@@ -11,6 +11,7 @@
  * @module
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
 import { resolveOwnerProjectId } from './config.js';
 import { entityRecordDirs, resolveEntityDir } from './io.js';
@@ -36,14 +37,19 @@ function ensureAssignmentsDir(cwd?: string): void {
   }
 }
 
-function assignmentStore(cwd?: string): JsonStore<Assignment> {
+function assignmentStoreForDir(dirPath: string): JsonStore<Assignment> {
   return new JsonStore<Assignment>({
-    dirPath: assignmentsDir(cwd, 'read'),
+    dirPath,
     documentType: 'assignment',
     getId: (a) => a.id,
     sort: (a, b) => a.created_at.localeCompare(b.created_at),
   });
 }
+
+// NOTE: there is deliberately no single-directory reader left in this module. A helper that
+// resolved ONE dir via the `hasContent` heuristic is what made a legacy record invisible to
+// the list while the by-id loader could see it; removing it means the next reader cannot
+// reintroduce the asymmetry by reaching for the convenient function.
 
 // ── CRUD ─────────────────────────────────────────────────────
 
@@ -62,6 +68,20 @@ export function saveAssignment(assignment: Assignment, cwd?: string): void {
     emitRegistryPostImage('assignment', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
     registryFaultPoint('after_registry_journal');
     store.save(parsed);
+    // CONVERGE THE OTHER LAYOUT, exactly as saveClaim does. Without this, a save wrote
+    // canonical and LEFT a legacy copy holding the stale status: `loadAssignment` reads
+    // canonical first so the record looked right, but `deleteAssignment` removed only the
+    // canonical one and the stale copy became the record again — a zombie resurrection.
+    // Best effort on purpose: `listAssignments` reads both dirs, so a missed cleanup stays
+    // visible rather than silently dropping data. (Fable audit; claims.ts already had it.)
+    const writeDir = assignmentsDir(cwd, 'write');
+    for (const dirPath of entityRecordDirs('assignments', cwd ?? process.cwd())) {
+      if (dirPath === writeDir) continue;
+      const legacyPath = path.join(dirPath, `${parsed.id}.json`);
+      try {
+        if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+      } catch { /* best effort — the dual-layout list keeps it visible */ }
+    }
   });
 }
 
@@ -98,8 +118,26 @@ export interface ListAssignmentsFilter {
   sequence_id?: string;
 }
 
+/**
+ * BOTH LAYOUTS, canonical winning on a duplicate id (mirrors listClaims).
+ *
+ * The by-id loader was fixed to read both layouts while this list still read ONE
+ * directory, chosen by the `hasContent` heuristic — so three layers gave three answers
+ * about the same store. The concrete consequence: a legacy run/assignment invisible to
+ * the list while visible by id, which lets `nextAttemptIndex` restart at 1 and collide,
+ * and makes `getActiveAssignmentForAgent` miss a live assignment so the worker's implicit
+ * heartbeat stops proving liveness. Reachability is LOW (assignments postdate the
+ * partitioned layout, so brainclaw has never written them flat — measured: legacy=0 in
+ * the field), which is why this is internal consistency rather than a field fix.
+ */
 export function listAssignments(cwd?: string, filter?: ListAssignmentsFilter): Assignment[] {
-  let items = assignmentStore(cwd).list();
+  const byId = new Map<string, Assignment>();
+  for (const dirPath of entityRecordDirs('assignments', cwd ?? process.cwd())) {
+    for (const a of assignmentStoreForDir(dirPath).list()) {
+      if (!byId.has(a.id)) byId.set(a.id, a);
+    }
+  }
+  let items = Array.from(byId.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
   if (filter?.status) items = items.filter((a) => a.status === filter.status);
   if (filter?.agent) items = items.filter((a) => a.agent === filter.agent);
   if (filter?.claim_id) items = items.filter((a) => a.claim_id === filter.claim_id);
@@ -108,21 +146,29 @@ export function listAssignments(cwd?: string, filter?: ListAssignmentsFilter): A
   return items;
 }
 
+/**
+ * Deletes the record in EVERY layout, not just the canonical one.
+ *
+ * Checking only the write dir meant a record `loadAssignment` could find returned `false`
+ * from delete — and worse, deleting the canonical copy of a dual-layout record promoted
+ * the stale legacy copy back to being the record. Deleting one layout is not deleting.
+ */
 export function deleteAssignment(id: string, cwd?: string): boolean {
   return mutate({ cwd }, () => {
-    const writableStore = new JsonStore<Assignment>({
-      dirPath: assignmentsDir(cwd, 'write'),
-      documentType: 'assignment',
-      getId: (a) => a.id,
-      sort: (a, b) => a.created_at.localeCompare(b.created_at),
-    });
-    if (!writableStore.exists(id)) {
+    const dirs = entityRecordDirs('assignments', cwd ?? process.cwd());
+    const holders = dirs.filter((dirPath) => assignmentStoreForDir(dirPath).exists(id));
+    if (holders.length === 0) {
       return false;
     }
-    const assignment = writableStore.load(id);
+    // One tombstone for the record, from the copy that wins reads.
+    const assignment = assignmentStoreForDir(holders[0]).load(id);
     emitRegistryTombstone('assignment', assignment.id, { agent: assignment.agent, agent_id: assignment.agent_id, session_id: assignment.session_id, cwd });
     registryFaultPoint('after_registry_journal');
-    writableStore.delete(id);
+    for (const dirPath of holders) {
+      try {
+        assignmentStoreForDir(dirPath).delete(id);
+      } catch { /* another layout already gone — the remaining ones still must go */ }
+    }
     return true;
   });
 }
