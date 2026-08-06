@@ -195,3 +195,40 @@ describe('relocateEntity across storage layouts (pln#649)', () => {
     assert.ok(!fs.existsSync(planFile(b, id)), 'no canonical copy may be created');
   });
 });
+
+/**
+ * pln#649 / dec#153 — ENTITY vs EXPLICIT PROJECT on `bclaw_transition`.
+ *
+ * The only canonical-grammar surface that takes both authorities at once (an entity id
+ * AND `project=`), and the very call documented in trp#1327 as the coordinator's
+ * workaround for a stuck assignment — so operators reach it. A divergence used to
+ * produce a misleading `not found in <B>`: the record exists, just not where the caller
+ * named. dec#153 requires the divergence be REFUSED and NAMED, so the caller learns
+ * which of their two statements was wrong instead of doubting the id.
+ *
+ * Pin written from the DECISION text rather than from the implemented behaviour —
+ * the discipline whose absence produced two defects pinned as features earlier.
+ */
+describe('bclaw_transition — entity vs explicit project (dec#153)', () => {
+  it('REFUSES when the named project is not where the entity lives, and names the project back', async () => {
+    const { a } = makeWorkspace();
+    const id = mkPlan(a, 'lives in app_a');
+
+    // Caller names app_b while the plan is in app_a: two authorities, disagreeing.
+    const res = await executeMcpToolCall({ name: 'bclaw_transition', cwd: a, args: {
+      entity: 'plan', id, to: 'in_progress', project: 'app_b', agent: 'tester' } });
+
+    const text = JSON.stringify(res);
+    assert.match(text, /does not live in project/, 'the divergence must be named, not reported as not-found');
+    assert.match(text, /app_b/, 'the project the caller typed is theirs already — naming it back is free');
+    assert.doesNotMatch(text, /app_a/, 'WHERE it really lives is new information: a count, not a name');
+  });
+
+  it('still works when the named project IS the owner (no false refusal)', async () => {
+    const { a } = makeWorkspace();
+    const id = mkPlan(a, 'lives in app_a');
+    const res = await executeMcpToolCall({ name: 'bclaw_transition', cwd: a, args: {
+      entity: 'plan', id, to: 'in_progress', project: 'app_a', agent: 'tester' } });
+    assert.doesNotMatch(JSON.stringify(res), /does not live in project/, 'agreement must not be refused');
+  });
+});
