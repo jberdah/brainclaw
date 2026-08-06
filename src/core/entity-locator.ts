@@ -242,7 +242,13 @@ export interface CandidateEnumeration {
 const ENUMERATION_MEMO_TTL_MS = 2_000;
 const enumerationMemo = new Map<string, { at: number; value: CandidateEnumeration }>();
 
-/** Drop the memo. For tests, and for any caller that has just created a store. */
+/**
+ * Drop the memo. Called by tests, and by `runInit` — because a store that has just come
+ * into existence is exactly what a cached candidate list cannot know about.
+ *
+ * This comment used to name that second caller before it existed (Fable audit: intent
+ * described as code). Now it does.
+ */
 export function clearEnumerationMemo(): void {
   enumerationMemo.clear();
 }

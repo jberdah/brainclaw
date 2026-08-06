@@ -130,10 +130,19 @@ export function relocateEntity(input: RelocateEntityInput): RelocateEntityResult
   // Checking only the canonical directory (`'write'`) was worse than a missed
   // overwrite: if the target held the same id in the LEGACY layout, the guard passed
   // and the move wrote a canonical copy beside it — manufacturing an intra-store
-  // duplicate id. That is precisely the state the entity locator refuses as
-  // `ambiguous` (pln#649), so a successful `bclaw_move` could leave an entity
-  // permanently unroutable. Found by a Fable audit, which ranked it the most serious
-  // of the remaining by-id sites.
+  // duplicate id. Found by a Fable audit.
+  //
+  // THE MECHANISM RECORDED HERE BEFORE WAS WRONG, and is corrected rather than deleted
+  // because a wrong mechanism in a comment misleads the next reader more efficiently than
+  // no comment at all. It claimed the duplicate is "precisely the state the entity locator
+  // refuses as `ambiguous`, so a successful move could leave an entity permanently
+  // unroutable". It is not: `recordExists` is a per-STORE boolean and matches are collected
+  // per store, so a record duplicated across two LAYOUTS INSIDE ONE STORE collapses to a
+  // single `found`. Ambiguity needs two distinct STORES.
+  //
+  // The real harm is quieter and still worth the guard: the two copies drift, the loader
+  // reads whichever layout wins, and a delete that touches only the canonical one promotes
+  // the stale copy back to being the record (the zombie now fixed in assignments.ts).
   const dstDir = resolveEntityDir(foundSubdir, toCwd, 'write');
   const dstFile = path.join(dstDir, `${input.id}.json`);
   for (const existing of entityRecordPaths(foundSubdir, input.id, toCwd)) {
