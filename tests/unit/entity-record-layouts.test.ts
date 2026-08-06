@@ -22,8 +22,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { entityRecordDirs, entityRecordPaths } from '../../src/core/io.js';
-import { createAssignment, loadAssignment } from '../../src/core/assignments.js';
-import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
+import { createAssignment, deleteAssignment, listAssignments, loadAssignment, saveAssignment } from '../../src/core/assignments.js';
+import { createAgentRun, listAgentRuns, loadAgentRun } from '../../src/core/agentruns.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
 
 let dirs: string[] = [];
@@ -109,5 +109,73 @@ describe('core/io entity record layouts (pln#649)', () => {
     demote(cwd, 'runs', 'run_legacy');
     assert.ok(loadAgentRun('run_legacy', cwd), 'legacy agent_run must stay loadable');
     assert.ok(loadAgentRun('run_canonical', cwd));
+  });
+});
+
+/**
+ * pln#649 — the LIST/SAVE/DELETE half of the same asymmetry, from a Fable audit.
+ *
+ * The by-id loaders were fixed to read both layouts while the LISTS still read one
+ * directory chosen by the `hasContent` heuristic, and the saves/deletes only ever touched
+ * the canonical one. So three layers gave three answers about one store.
+ *
+ * SEVERITY, STATED HONESTLY: assignments and agent runs POSTDATE the partitioned layout,
+ * so brainclaw has never written them flat — measured legacy=0 in the field, and these
+ * pins have to MANUFACTURE the state with `demote()`. That is why this is internal
+ * consistency rather than a field fix, and why it is pinned at the surface where the
+ * consequence is observable rather than on the list helpers.
+ */
+describe('core — list/save/delete converge both layouts (pln#649)', () => {
+  it('listAssignments sees a legacy record, not just the canonical directory', () => {
+    const cwd = store();
+    createAssignment({ id: 'asgn_canon', short_label: 'asgn_canon', claim_id: 'clm_l', agent: 'w', dispatcher_agent: 'c', scope: 's', description: 'd' }, cwd);
+    createAssignment({ id: 'asgn_old', short_label: 'asgn_old', claim_id: 'clm_l', agent: 'w', dispatcher_agent: 'c', scope: 's', description: 'd' }, cwd);
+    demote(cwd, 'assignments', 'asgn_old');
+
+    const ids = listAssignments(cwd).map((a) => a.id);
+    assert.ok(ids.includes('asgn_old'), `a legacy record must be listed — got ${JSON.stringify(ids)}`);
+    assert.ok(ids.includes('asgn_canon'), 'the canonical record must still be listed');
+    assert.equal(new Set(ids).size, ids.length, 'a record present in both layouts must appear ONCE');
+  });
+
+  it('saving a demoted record CONVERGES it instead of leaving a stale twin', () => {
+    const cwd = store();
+    const created = createAssignment({ id: 'asgn_conv', short_label: 'asgn_conv', claim_id: 'clm_l', agent: 'w', dispatcher_agent: 'c', scope: 's', description: 'd' }, cwd);
+    demote(cwd, 'assignments', 'asgn_conv');
+
+    // A save must not produce two copies with different contents.
+    saveAssignment({ ...created, description: 'updated after demotion' }, cwd);
+
+    const present = entityRecordPaths('assignments', 'asgn_conv', cwd).filter((p) => fs.existsSync(p));
+    assert.equal(present.length, 1, `exactly one copy must survive a save — got ${JSON.stringify(present)}`);
+    assert.match(present[0], /coordination/, 'the surviving copy must be the canonical one');
+    assert.equal(loadAssignment('asgn_conv', cwd)?.description, 'updated after demotion');
+  });
+
+  it('deleting a legacy-only record really deletes it — one layout is not the record', () => {
+    const cwd = store();
+    createAssignment({ id: 'asgn_del', short_label: 'asgn_del', claim_id: 'clm_l', agent: 'w', dispatcher_agent: 'c', scope: 's', description: 'd' }, cwd);
+    // A second canonical record so the `hasContent` heuristic keeps pointing at canonical.
+    createAssignment({ id: 'asgn_keep', short_label: 'asgn_keep', claim_id: 'clm_l', agent: 'w', dispatcher_agent: 'c', scope: 's', description: 'd' }, cwd);
+    demote(cwd, 'assignments', 'asgn_del');
+
+    assert.ok(loadAssignment('asgn_del', cwd), 'precondition: the by-id loader can see it');
+    assert.equal(deleteAssignment('asgn_del', cwd), true, 'a record the loader can find must be deletable');
+    assert.equal(loadAssignment('asgn_del', cwd), undefined, 'and must be GONE — not resurrected from the other layout');
+    assert.ok(loadAssignment('asgn_keep', cwd), 'the untouched record must survive');
+  });
+
+  it('a demoted run does not make the next attempt index restart at 1', () => {
+    const cwd = store();
+    const first = createAgentRun({ assignment_id: 'asgn_attempt', claim_id: 'clm_l', agent: 'w', transport: 'cli_spawn', scope: 's', description: 'd' }, cwd);
+    assert.equal(first.attempt_index, 1, 'precondition: the first attempt is 1');
+    demote(cwd, 'runs', first.id);
+
+    // Pinned through the real entry point: `nextAttemptIndex` is private, and what matters
+    // is that a retry created the normal way cannot collide with the invisible attempt.
+    const second = createAgentRun({ assignment_id: 'asgn_attempt', claim_id: 'clm_l', agent: 'w', transport: 'cli_spawn', scope: 's', description: 'd' }, cwd);
+    assert.equal(second.attempt_index, 2, 'the demoted attempt must still count — a restart at 1 collides with it');
+    assert.ok(listAgentRuns(cwd, { assignment_id: 'asgn_attempt' }).some((r) => r.id === first.id),
+      'and the demoted run must be listed');
   });
 });
