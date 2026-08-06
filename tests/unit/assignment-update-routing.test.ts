@@ -24,6 +24,7 @@ import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { handleBclawAssignmentUpdate, handleBclawReleaseClaim } from '../../src/commands/mcp-write-claims.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
+import { registerAgentIdentity } from '../../src/core/agent-registry.js';
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import type { McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import type { McpToolExecutionPayload } from '../../src/commands/mcp-contract.js';
@@ -324,11 +325,22 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
     const { ws, api } = monorepo();
     const saved = process.env.BRAINCLAW_CLAIM_ID;
     try {
-      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws, BRAINCLAW_AGENT_NAME: 'worker' }, async () => {
         saveClaim({
           id: 'clm_ambient', agent: 'worker', scope: 'src/x.ts', description: 'worker lane',
           created_at: new Date().toISOString(), status: 'active',
         }, api);
+        // REGISTERED IN THE CLAIM'S PROJECT ONLY, and never at the workspace root — so
+        // the pin is load-bearing twice over: if routing regresses, identity resolves
+        // against the ambient store where this agent does not exist and the call fails
+        // with `identity_error`. Same design as `fakeCtx` above.
+        //
+        // Registering EXPLICITLY is also what makes this pin environment-independent.
+        // Without it, my machine resolved a principal from an env var that
+        // `withCleanEnv` does not strip, auto-registered it, and went green — while
+        // every CI runner has no identity at all and returned
+        // "No registered agent identity resolved". Six red jobs, twice.
+        registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: api });
         process.env.BRAINCLAW_CLAIM_ID = 'clm_ambient';
 
         // Ambient cwd is the workspace ROOT — where a worker with no session lands.
@@ -368,17 +380,27 @@ describe('worker ambient mutations are routed by the claim (pln#649 F5)', () => 
     const { ws, api } = monorepo();
     const saved = process.env.BRAINCLAW_CLAIM_ID;
     try {
-      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws, BRAINCLAW_AGENT_NAME: 'worker' }, async () => {
         saveClaim({
           id: 'clm_read', agent: 'worker', scope: 'src/x.ts', description: 'worker lane',
           created_at: new Date().toISOString(), status: 'active',
         }, api);
+        // A read needs an identity too — and registering it in BOTH stores here is
+        // deliberate: this pin must pass on the AMBIENT store, so an identity failure
+        // could never be mistaken for the reroute it is asserting does not happen.
+        registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: api });
+        registerAgentIdentity({ agentName: 'worker', kind: 'agent', cwd: ws });
         process.env.BRAINCLAW_CLAIM_ID = 'clm_read';
         // bclaw_context is a READ: it must not be rerouted to the claim's project.
         const res = await executeMcpToolCall({
           name: 'bclaw_context', args: { kind: 'board_summary' }, cwd: ws,
         });
-        assert.ok(res, 'a read must still work and stay on the anchor');
+        // Same lesson as the pin above: assert the call SUCCEEDED, and prove the anchor
+        // negatively — the claim's project must not appear in a read served from the
+        // workspace root. `assert.ok(res)` proved neither.
+        const text = JSON.stringify(res?.response ?? null);
+        assert.notEqual(res?.response?.isError, true, `a read must still work — got: ${text}`);
+        assert.ok(!text.includes('prj_api'), `a read must stay on the ambient anchor — got: ${text}`);
       });
     } finally {
       if (saved === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
