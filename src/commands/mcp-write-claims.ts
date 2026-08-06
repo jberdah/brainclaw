@@ -277,7 +277,7 @@ export async function handleBclawClaim(payload: McpToolExecutionPayload, ctx: Mc
 }
 
 export async function handleBclawReleaseClaim(payload: McpToolExecutionPayload, ctx: McpWriteClaimsContext): Promise<McpToolExecutionOutcome> {
-  const { args, cwd, connectionSessionId } = payload;
+  const { args, connectionSessionId } = payload;
   const crossProjectError = ctx.blockCrossProjectExecution('claim', args);
   if (crossProjectError) {
     return { response: crossProjectError };
@@ -286,10 +286,57 @@ export async function handleBclawReleaseClaim(payload: McpToolExecutionPayload, 
   if (!claimId) {
     return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
   }
+
+  // ── pln#649 F5, second surface: the CLAIM routes this call.
+  //
+  // `bclaw_assignment_update` was routed first because that is where the field
+  // defect was reproduced. This is the OTHER HALF of the same defect, documented in
+  // trp#1327: `bclaw_release_claim` has no `project` parameter either, so a worker
+  // whose resolved store is not the claim's got `Claim not found` and the claim
+  // stayed active forever. It only LOOKED fixed because completing an assignment
+  // cascade-releases its claim with the routed cwd — a worker that calls
+  // release_claim directly still fell in the hole.
+  //
+  // Same shape as the reviewed surface, deliberately: validate the id before any
+  // path is built, locate, refuse an ambiguity WITHOUT disclosing which projects
+  // (this runs before the ownership check, so an unauthenticated caller must learn a
+  // count and an action, never names or store paths), then rebind `cwd` ONCE so every
+  // downstream use — ownership check, cascade, plan status — is routed by construction.
+  if (!isLocatableId(claimId)) {
+    return { response: createToolErrorResponse('validation_error', `Invalid claim id '${claimId}'`) };
+  }
+  const located = locateEntity('claim', claimId, payload.cwd);
+  if (located.status === 'ambiguous') {
+    logger.warn(
+      `ambiguous claim routing: ${claimId} found in `
+      + located.matches.map((m) => `${m.project_name ?? '(unnamed)'} @ ${m.cwd}`).join(', '),
+    );
+    return {
+      response: createToolErrorResponse(
+        'validation_error',
+        `Claim ${claimId} exists in ${located.matches.length} projects reachable from here. `
+        + 'Refusing to guess which one you meant — call from the project that owns the work, '
+        + 'or ask an operator to resolve the duplicate (details are in the server log).',
+        { claim_id: claimId, match_count: located.matches.length },
+      ),
+    };
+  }
+  const cwd = located.location?.cwd ?? payload.cwd;
+
   try {
     loadClaim(claimId, cwd); // validate existence before delegating
   } catch {
-    return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
+    const scope = located.enumeration_incomplete
+      ? `${located.probed.length} reachable project(s), and the search hit its depth ceiling so deeper projects were NOT examined`
+      : `all ${located.probed.length} reachable project(s)`;
+    logger.warn(`claim not found: ${claimId} — searched ${located.probed.join(', ')}`);
+    return {
+      response: createToolErrorResponse(
+        'not_found',
+        `Claim not found: ${claimId} (searched ${scope})`,
+        { claim_id: claimId, searched_count: located.probed.length, enumeration_incomplete: located.enumeration_incomplete },
+      ),
+    };
   }
   // pln#562 step 5 + trp#928 — release is ownership-checked like acquisition
   // and adoption. Under the trp#928 tightening the coordinator override is
