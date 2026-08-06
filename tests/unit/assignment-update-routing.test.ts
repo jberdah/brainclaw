@@ -529,8 +529,19 @@ describe('plan-step routing (pln#649 / dec#153)', () => {
   });
 });
 
-describe('worker ambient routing ambiguity telemetry (pln#649 F5)', () => {
-  it('keeps the intentional ambient fallback but emits an operator warning', async () => {
+/**
+ * OPERATOR DECISION, 2026-08-06 — settling a real disagreement between two reviewers on
+ * this exact branch. A codex review upheld the ambient fallback (plus a warning); a Fable
+ * audit held that it contradicts F5's letter for the very caller class F5 protects. The
+ * operator chose the RESTRICTED refusal: refuse on `ambiguous`, keep the ambient answer on
+ * `not_found`.
+ *
+ * This pin previously asserted the fallback. It is inverted here BY DECISION, not because
+ * it was wrong — and the half that survives (the operator-visible warning) is still pinned,
+ * because a refusal the operator cannot diagnose is only half a contract.
+ */
+describe('worker ambient routing ambiguity (pln#649 F5, restricted refusal)', () => {
+  it('REFUSES on a proven duplicate, without naming the projects, and still warns the operator', async () => {
     const { ws, api, web } = monorepo();
     const savedClaim = process.env.BRAINCLAW_CLAIM_ID;
     const originalError = console.error;
@@ -549,14 +560,35 @@ describe('worker ambient routing ambiguity telemetry (pln#649 F5)', () => {
         const outcome = await executeMcpToolCall({
           name: 'bclaw_write_note', args: { text: 'ambiguous fallback is observable' }, cwd: ws,
         });
-        assert.notEqual(outcome.response.isError, true, `ambient fallback must preserve the tool contract — got: ${JSON.stringify(outcome.response)}`);
+        const payload = JSON.stringify(outcome.response);
+        assert.equal(outcome.response.isError, true, `a proven divergence must be refused — got: ${payload}`);
+        assert.match(payload, /exists in 2 reachable projects/, 'the caller learns a COUNT and an action');
+        assert.doesNotMatch(payload, /apps[/\\](api|web)/, 'store paths are operator information: this branch runs before any trust check');
+        assert.doesNotMatch(payload, /"project_name"/, 'project names must not reach an unauthenticated caller');
+        // NOTHING may have been written in ANY store — a refusal that still wrote would be
+        // the worst of both designs. A bare count is the stronger assertion here precisely
+        // BECAUSE the refusal returns before the auto-session block: not even the
+        // `session_start` note that made this file's other assertions ambiguous can exist.
+        for (const [label, root] of [['api', api], ['web', web], ['ws', ws]] as const) {
+          assert.equal(
+            listNoteFiles(path.join(root, '.brainclaw', 'coordination', 'runtime')).length,
+            0,
+            `a refused mutation must leave nothing behind (${label})`,
+          );
+        }
       });
     } finally {
       console.error = originalError;
       if (savedClaim === undefined) delete process.env.BRAINCLAW_CLAIM_ID;
       else process.env.BRAINCLAW_CLAIM_ID = savedClaim;
     }
-    assert.ok(logs.some((line) => line.includes('ambiguous worker-claim routing: clm_ambiguous found in 2 reachable projects')),
-      `the duplicate must be visible to an operator — got: ${JSON.stringify(logs)}`);
+    // The OPERATOR log carries what the caller must not get: the project names and store
+    // paths. That asymmetry is the whole disclosure rule — a count for an unauthenticated
+    // caller, enough detail for whoever has to resolve the duplicate. (Codex's version
+    // logged only a count, which refuses AND leaves the operator nothing to act on.)
+    const warned = logs.find((line) => line.includes('ambiguous worker-claim routing: clm_ambiguous'));
+    assert.ok(warned, `the duplicate must be visible to an operator — got: ${JSON.stringify(logs)}`);
+    assert.match(warned, /api/, 'the operator log must name the projects');
+    assert.match(warned, /web/, 'the operator log must name BOTH projects, not just the first');
   });
 });
