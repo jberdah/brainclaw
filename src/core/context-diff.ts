@@ -1,8 +1,7 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { readAuditLog } from './audit.js';
 import { listCandidates } from './candidates.js';
-import { resolveEntityDir } from './io.js';
+import { entityRecordPaths } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import { buildNotificationSummary, hasEventCursor, readUnseenEvents, seedCursorToEnd, type MemoryEvent } from './event-log.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from './schema.js';
@@ -80,16 +79,33 @@ export function resolveContextDiffSince(options: Pick<BuildContextDiffOptions, '
   return {};
 }
 
+/**
+ * THE LAST BY-ID SITE THAT COULD ACTUALLY FIRE, and the only one with live two-layout
+ * data in the field: this store holds 173 sessions in the legacy layout next to 1019
+ * canonical ones (dec#153-T2's dual write). `resolveEntityDir(..., 'read')` answers a
+ * DIRECTORY question with a `hasContent` heuristic, so one canonical file made every
+ * legacy record invisible — the same malformed abstraction pln#649 removed from the
+ * entity locator and the by-id loaders, still here because nothing routed sessions.
+ *
+ * The consequence was a SILENT WRONG ANSWER, which is why this one was worth fixing
+ * while the sibling sites were not: an invisible snapshot falls through to the audit-log
+ * scan, and if that misses too `resolveContextDiffSince` returns no `since`, so
+ * `buildContextDiff` returns undefined and the caller is told "no changes" over a window
+ * where there were changes. An agent cannot tell that apart from a quiet period.
+ *
+ * Uses the shared primitive rather than a fourth hand-rolled pair of paths (io.ts).
+ */
 function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot | undefined {
-  const snapshotPath = path.join(resolveEntityDir('sessions', cwd ?? process.cwd(), 'read'), `${sessionId}.json`);
-  if (!fs.existsSync(snapshotPath)) {
-    return undefined;
+  for (const snapshotPath of entityRecordPaths('sessions', sessionId, cwd ?? process.cwd())) {
+    if (!fs.existsSync(snapshotPath)) continue;
+    try {
+      return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', snapshotPath).document);
+    } catch {
+      // An unparseable record in one layout must not mask a good one in the other.
+      continue;
+    }
   }
-  try {
-    return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', snapshotPath).document);
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 export function buildContextDiff(options: BuildContextDiffOptions = {}): ContextDiffResult | undefined {
