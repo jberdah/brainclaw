@@ -22,7 +22,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
-import { handleBclawAssignmentUpdate } from '../../src/commands/mcp-write-claims.js';
+import { handleBclawAssignmentUpdate, handleBclawReleaseClaim } from '../../src/commands/mcp-write-claims.js';
+import { loadClaim, saveClaim } from '../../src/core/claims.js';
 import type { McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import type { McpToolExecutionPayload } from '../../src/commands/mcp-contract.js';
 
@@ -68,6 +69,25 @@ function fakeCtx(agentName: string, trustedCwd: string): McpWriteClaimsContext {
       }
       return { identity: { agent_name: agentName, agent_id: 'agt_test' } };
     },
+  } as unknown as McpWriteClaimsContext;
+}
+
+/** Release goes through resolveMutationIdentity + blockCrossProjectExecution, so the fake
+ * context must answer those too — and, like fakeCtx, it REFUSES any store but the owner's
+ * so a routing regression makes these pins fail. */
+function releaseCtx(agentName: string, trustedCwd: string): McpWriteClaimsContext {
+  return {
+    blockCrossProjectExecution: () => undefined,
+    resolveMutationIdentity: (_a: unknown, _f: unknown, cwd?: string) => (
+      path.resolve(cwd ?? '') === path.resolve(trustedCwd)
+        ? { identity: { agent_name: agentName, agent_id: 'agt_test' } }
+        : { error: { kind: 'trust_error', message: 'not registered' } }
+    ),
+    ensureTrust: (_a: unknown, _f: unknown, _l: unknown, cwd?: string) => (
+      path.resolve(cwd ?? '') === path.resolve(trustedCwd)
+        ? { identity: { agent_name: agentName, agent_id: 'agt_test' } }
+        : { error: { kind: 'trust_error', message: 'not registered' } }
+    ),
   } as unknown as McpWriteClaimsContext;
 }
 
@@ -194,6 +214,74 @@ describe('bclaw_assignment_update routing (pln#649 step 3)', () => {
       );
       assert.ok(outcome.response.isError);
       assert.match(JSON.stringify(outcome.response.content), /searched/);
+    });
+  });
+});
+
+/**
+ * pln#649 F5, second surface — `bclaw_release_claim` routed by the CLAIM.
+ *
+ * The other half of the same field defect (trp#1327): release_claim has no `project`
+ * parameter either, so a worker whose resolved store was not the claim's got
+ * `Claim not found` and the claim stayed active forever. It only LOOKED covered
+ * because completing an assignment cascade-releases its claim with the routed cwd —
+ * a worker calling release_claim directly still fell in the hole.
+ */
+describe('bclaw_release_claim routing (pln#649 F5)', () => {
+  function seedClaim(cwd: string, id: string): void {
+    saveClaim({
+      id, agent: 'worker', scope: 'src/x.ts', description: 'routing fixture',
+      created_at: new Date().toISOString(), status: 'active',
+    }, cwd);
+  }
+
+  it('a release from the WRONG ambient store still reaches the owning project', async () => {
+    const { ws, api } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      seedClaim(api, 'clm_routed');
+      assert.equal(loadClaim('clm_routed', api).status, 'active');
+
+      // Ambient cwd is the workspace root — where a worker with no session lands.
+      const outcome = await handleBclawReleaseClaim(
+        { name: 'bclaw_release_claim', args: { id: 'clm_routed', agent: 'worker' }, cwd: ws },
+        releaseCtx('worker', api),
+      );
+
+      assert.ok(!outcome.response.isError, `expected success, got ${JSON.stringify(outcome.response.content)}`);
+      assert.equal(loadClaim('clm_routed', api).status, 'released', 'asserted ON DISK in the owner');
+    });
+  });
+
+  it('AMBIGUOUS: the same claim id in two projects is refused without disclosure', async () => {
+    const { ws, api, web } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      seedClaim(api, 'clm_dup');
+      seedClaim(web, 'clm_dup');
+
+      const outcome = await handleBclawReleaseClaim(
+        { name: 'bclaw_release_claim', args: { id: 'clm_dup', agent: 'worker' }, cwd: ws },
+        releaseCtx('worker', api),
+      );
+
+      assert.ok(outcome.response.isError);
+      const text = JSON.stringify(outcome.response.content);
+      assert.match(text, /2 projects/);
+      assert.doesNotMatch(text, /prj_api|prj_web/, 'no project id may leak pre-auth');
+      assert.doesNotMatch(text, /apps[\\/](api|web)/, 'no store path may leak pre-auth');
+      assert.equal(loadClaim('clm_dup', api).status, 'active', 'neither store may be mutated');
+      assert.equal(loadClaim('clm_dup', web).status, 'active');
+    });
+  });
+
+  it('an id that could escape the store is rejected before any path is built', async () => {
+    const { ws } = monorepo();
+    await withCleanEnv({ BRAINCLAW_STORE_BOUNDARY: ws }, async () => {
+      const outcome = await handleBclawReleaseClaim(
+        { name: 'bclaw_release_claim', args: { id: '../../etc/passwd', agent: 'worker' }, cwd: ws },
+        releaseCtx('worker', ws),
+      );
+      assert.ok(outcome.response.isError);
+      assert.match(JSON.stringify(outcome.response.content), /Invalid claim id/);
     });
   });
 });
