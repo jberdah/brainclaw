@@ -347,6 +347,43 @@ function enumerateCandidatesUncached(cwd: string, maxDepth: number): CandidateEn
  * config — a locator that fails loudly on an unrelated broken sibling would make
  * routing depend on the health of projects the caller has nothing to do with.
  */
+/**
+ * The owner project id shared by EVERY match, or undefined when the records do not
+ * agree on one — which includes all the ways they can fail to answer:
+ *
+ *   - a record with no `project_id` (legacy, created before step 1 persisted it):
+ *     step 1 decided a missing owner must NOT trigger new behaviour, so one absent
+ *     field makes the whole set undecided rather than letting the others vote;
+ *   - records naming DIFFERENT owners — a genuine divergence, the case the hard
+ *     refusal exists for;
+ *   - a record that cannot be read or parsed. NEVER throws: this module refuses to
+ *     make routing depend on the health of a project the caller has nothing to do
+ *     with, and an unreadable record must degrade to `ambiguous`, not to a crash.
+ */
+function sharedRecordOwner(
+  entity: LocatableEntity,
+  id: string,
+  matches: EntityLocation[],
+): string | undefined {
+  let owner: string | undefined;
+  for (const match of matches) {
+    let recordOwner: string | undefined;
+    for (const candidate of recordPaths(entity, id, match.cwd)) {
+      if (!fs.existsSync(candidate)) continue;
+      try {
+        const raw: unknown = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+        const value = (raw as { project_id?: unknown } | null)?.project_id;
+        if (typeof value === 'string' && value.trim()) recordOwner = value;
+      } catch { /* unreadable → undecided, handled below */ }
+      break;
+    }
+    if (!recordOwner) return undefined;
+    if (owner === undefined) owner = recordOwner;
+    else if (owner !== recordOwner) return undefined;
+  }
+  return owner;
+}
+
 export function locateEntity(
   entity: LocatableEntity,
   id: string,
@@ -384,6 +421,47 @@ export function locateEntity(
     return { status: 'found', location: matches[0], matches, probed, enumeration_incomplete: incomplete };
   }
   if (matches.length > 1) {
+    // ── dec#155's robustness guard: ≥2 matches carrying the SAME owner route to the
+    // owner instead of refusing. Written from that sentence, not from this code.
+    //
+    // This does NOT weaken the ambiguity contract, and the distinction is the whole
+    // point of the module header: "never picks a winner it cannot justify". Here the
+    // RECORD names its owner, so the winner is justified BY THE DATA — it is not a
+    // first-wins tie-break. Every path where the data does not justify a winner
+    // stays `ambiguous`, which is what the two entity-routed surfaces refuse on.
+    //
+    // It uses the field step 1 persisted (`project_id` on assignment / agent_run /
+    // claim) and that this function has ignored ever since, and it exists to avoid
+    // REFUSING a healthy mutation when an alias or a mirror surfaces one record
+    // twice — a false refusal is the exact opposite of what the contract is for.
+    //
+    // Paid only on the ambiguous path: one read per match, in a branch that is
+    // already the rare case. The single-store hit still costs what it cost.
+    //
+    // ONE COUNTEREXAMPLE WAS RAISED AND IS EMPTY TODAY — recorded because it will not
+    // stay empty by itself. `bclaw_move` deliberately leaves a recoverable duplicate
+    // if it crashes between writing the target and removing the source, and it copies
+    // the record VERBATIM (relocate.ts) — so the residue would be two copies naming
+    // the SAME owner, which this guard would route instead of surfacing, freezing the
+    // repair signal. It cannot happen now: `plan` is the only entity both relocatable
+    // and locatable, and plan records carry NO `project_id` (checked against real
+    // records on disk, not just the schema), so `sharedRecordOwner` returns undefined
+    // and the residue stays `ambiguous`. THE DAY PLANS GAIN AN OWNER, relocate must
+    // rewrite `project_id` on the moved copy first — then the residue carries
+    // divergent owners and stays loudly ambiguous, which is the better companion fix
+    // anyway. (Fable audit; the counterexample was sound reasoning about a field the
+    // entity does not have.)
+    const owner = sharedRecordOwner(entity, id, matches);
+    if (owner) {
+      const owned = matches.filter((m) => m.project_id === owner);
+      // Exactly one match must BE the owner store. Zero means the owner is not among
+      // the stores holding the record (so routing there would name a store that does
+      // not have it); more than one means two stores claim the same project id, which
+      // is itself a divergence and not something to resolve here.
+      if (owned.length === 1) {
+        return { status: 'found', location: owned[0], matches, probed, enumeration_incomplete: incomplete };
+      }
+    }
     return { status: 'ambiguous', matches, probed, enumeration_incomplete: incomplete };
   }
   return { status: 'not_found', matches, probed, enumeration_incomplete: incomplete };
