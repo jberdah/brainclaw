@@ -13,7 +13,9 @@
  *
  * @module
  */
+import path from 'node:path';
 import { appendAuditEntry } from '../core/audit.js';
+import { isLocatableId, locateEntity, type LocatableEntity } from '../core/entity-locator.js';
 import { nowISO, generateIdWithLabel } from '../core/ids.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { ENTITY_REGISTRY, type EntityName } from '../core/entity-registry.js';
@@ -49,6 +51,9 @@ import {
 } from './mcp-contract.js';
 
 /** Result shape of mcp.ts's resolveExecutionWriteTarget (structural mirror, PR3b). */
+/** Entity kinds the locator can find by id — the divergence check only applies there. */
+const LOCATABLE_FOR_DIVERGENCE = new Set(['assignment','claim','agent_run','plan','loop']);
+
 export interface ExecutionWriteTargetShape {
   /** When set, the caller must return this error response instead of writing. */
   block?: McpToolResponse;
@@ -647,6 +652,38 @@ export function handleBclawTransition(payload: McpToolExecutionPayload, ctx: Mcp
     const id = String(args.id ?? '');
     const to = String(args.to ?? '');
     const reason = args.reason as string | undefined;
+
+    // ── pln#649 / dec#153: ENTITY vs EXPLICIT PROJECT, the first divergence with a
+    // real consumer. This is the ONLY canonical-grammar surface where both authorities
+    // are supplied at once — an entity id AND `project=` — and it is the very call
+    // documented in trp#1327 as the coordinator's workaround, so operators reach it.
+    //
+    // Today a divergence produces a misleading `not found in <B>`: the record exists,
+    // just not where the caller named. dec#153 says an explicit divergence must be
+    // REFUSED and NAMED, so the caller learns which of their two statements was wrong
+    // instead of doubting the id.
+    //
+    // Disclosure rule from the two routed surfaces: the caller already knows the
+    // project they typed, so naming it back is free — but WHERE the entity really
+    // lives is new information, so that is a count, not a name.
+    if (args.project !== undefined && id && isLocatableId(id) && LOCATABLE_FOR_DIVERGENCE.has(entity)) {
+      const located = locateEntity(entity as LocatableEntity, id, cwd);
+      const target = path.resolve(targetCwd);
+      const inTarget = located.matches.some((m) => path.resolve(m.cwd) === target);
+      if (located.matches.length > 0 && !inTarget) {
+        return {
+          response: createToolErrorResponse(
+            'validation_error',
+            `${entity} '${id}' does not live in project '${String(args.project)}' — it exists in `
+            + `${located.matches.length} other reachable project(s). Refusing: the entity and the project you named `
+            + 'disagree, and guessing which one you meant is how a write lands in the wrong project. '
+            + 'Drop `project` to be routed by the entity, or name the project that owns it.',
+            { entity, id, requested_project: String(args.project), located_elsewhere_count: located.matches.length },
+          ),
+        };
+      }
+    }
+
     const targetScope = scopeMetadataForTarget(args, targetCwd, ctx.scopeInfo);
     const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
     // trp#928 — claim transitions consume the ReleaseClaimAuth ownership
