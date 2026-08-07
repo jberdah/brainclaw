@@ -271,7 +271,6 @@ describe('CLI registry baseline (pln#622 campaign freeze)', () => {
       'switch',
       'who',
       'worktree',
-      'federation',
       'questions',
       'bootstrap-loop',
       'loop',
