@@ -15,7 +15,6 @@ import { registerPlanningCommands } from './cli/register-planning.js';
 import { registerCoordinationCommands } from './cli/register-coordination.js';
 import { registerReviewCommands } from './cli/register-review.js';
 import { registerMemoryContextCommands } from './cli/register-memory-context.js';
-import { registerFederationCommands } from './cli/register-federation.js';
 import { registerCodeMapCommands } from './cli/register-code-map.js';
 
 const program = new Command();
@@ -186,7 +185,6 @@ registerPlanningCommands(program);
 registerCoordinationCommands(program);
 registerReviewCommands(program);
 registerMemoryContextCommands(program);
-registerFederationCommands(program);
 registerCodeMapCommands(program);
 
 // ─── Command-order shim (pln#622 PR5) ────────────────────────────────────────
@@ -306,7 +304,6 @@ const ORIGINAL_COMMAND_ORDER: string[] = [
   'switch',
   'who',
   'worktree',
-  'federation',
   // Gated by BRAINCLAW_ENABLE_CODEV: listed here so the order is right in both
   // modes — when not registered they are simply absent from the live array and
   // the sort skips them naturally.
