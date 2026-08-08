@@ -35,6 +35,7 @@ import { validateLoopProjectResolution, type LoopProjectResolved } from '../core
 import { coordinateNextActions, dispatchNextActions } from '../core/next-actions.js';
 import {
   agentValidationFailedWarning,
+  consultAutoExecuteNoOpWarning,
   planAlreadyAssignedWarning,
   pushStructuredWarning,
   scopeAlreadyClaimedWarning,
@@ -963,9 +964,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     // the target inbox(es) and never spawns. autoExecute is a no-op here, so
     // say so explicitly rather than silently ignoring a caller who set it.
     if (req.autoExecute === true) {
-      warnings.push(
-        "autoExecute has no effect on intent='consult': consult delivers the RFC to the target inbox(es) only and never spawns an agent — targets pick it up via their own bclaw_work. For real spawning use bclaw_dispatch(intent='execute') on a sequence, or intent='assign'/'review' (pln#626).",
-      );
+      // pln#626 phase 3 — le refus passe desormais par le canal STRUCTURE. Un texte libre
+      // vaut mieux que le silence, mais un agent ne peut pas brancher dessus ; un code
+      // le peut, et la next_action nomme les deux chemins qui spawnent vraiment.
+      pushStructuredWarning(warnings, warningDetails, consultAutoExecuteNoOpWarning());
     }
     const consultThreadId = req.threadId ?? `thread_${crypto.randomBytes(4).toString('hex')}`;
     const contacted: string[] = [];
