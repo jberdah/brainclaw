@@ -144,6 +144,12 @@ export interface ListProjectsResult {
    */
   active_source: EffectiveCwdSource;
   projects: Array<{ name?: string; path: string; relative_path: string; active: boolean }>;
+  /**
+   * Renseigne quand un record de session designait un AUTRE projet que celui retenu
+   * (pln#648 SUITE d). Une ecriture cross-projet ne doit plus pouvoir se produire sans
+   * trace : le resolveur a tranche, et cette surface le DIT au lieu de le taire.
+   */
+  session_divergence?: NonNullable<ReturnType<typeof resolveEffectiveCwdInfo>['session_divergence']>;
 }
 
 /**
@@ -172,6 +178,7 @@ export function listAvailableProjectsForSession(cwd?: string, sessionId?: string
     : undefined;
   const projects: ListProjectsResult['projects'] = [];
   const seen = new Set<string>();
+  const sessionDivergence = effective.session_divergence;
 
   const addProject = (project: { name?: string; path: string; relative_path: string }): void => {
     const projectPath = path.resolve(project.path);
@@ -211,7 +218,12 @@ export function listAvailableProjectsForSession(cwd?: string, sessionId?: string
     });
   }
 
-  return { workspace_root: wsRoot, active_source: activeSource, projects };
+  return {
+    workspace_root: wsRoot,
+    active_source: activeSource,
+    projects,
+    ...(sessionDivergence ? { session_divergence: sessionDivergence } : {}),
+  };
 }
 
 export function runSwitch(projectRef: string | undefined, options: SwitchOptions = {}): void {
@@ -367,13 +379,28 @@ function showCurrent(wsRoot: string, cwd: string, json: boolean): void {
 
   const rel = path.relative(wsRoot, active.path) || '.';
   const switchedBy = 'switched_by' in active ? active.switched_by : undefined;
+  const divergence = effective.session_divergence;
   if (json) {
-    console.log(JSON.stringify({ active: true, ...active, relative_path: rel, scope: source }));
+    console.log(JSON.stringify({
+      active: true, ...active, relative_path: rel, scope: source,
+      ...(divergence ? { session_divergence: divergence } : {}),
+    }));
   } else {
     const scopeHint = source === 'session' ? ' (session-scoped)' : ' (global — all agents)';
     console.log(`Active project: ${active.name ? `"${active.name}" (${rel})` : rel}${scopeHint}`);
     console.log(`  switched at: ${active.switched_at}`);
     if (switchedBy) console.log(`  switched by: ${switchedBy}`);
+    if (divergence) {
+      // Le defaut d'origine n'etait pas qu'un lecteur se trompait : c'est que deux
+      // lecteurs pouvaient diverger EN SILENCE. Le dire est tout l'objet de ce bloc.
+      const label = divergence.session_project_name
+        ? `"${divergence.session_project_name}"`
+        : divergence.session_project_path;
+      console.log('');
+      console.log(`  ⚠ Divergence : un record de session designe ${label},`);
+      console.log(`    mais la resolution a retenu ce projet via '${divergence.resolved_via}'.`);
+      console.log(`    Les ecritures suivent la resolution, pas la session.`);
+    }
   }
 }
 
@@ -387,6 +414,7 @@ function listProjects(wsRoot: string, cwd: string, json: boolean): void {
       workspace: result.workspace_root,
       active_source: result.active_source,
       projects: result.projects,
+      ...(result.session_divergence ? { session_divergence: result.session_divergence } : {}),
     }, null, 2));
     return;
   }
