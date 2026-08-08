@@ -592,5 +592,41 @@ export function aggregateBrief(
     ...(capped[i]!.local ? { local: true } : {}),
   }));
 
-  return { target, suggested_files_to_read: suggested, related_memory: related, freshness_badge: mergeBadges(perStore.map((p) => ({ ref: p.ref, badge: p.badge, hasIndex: p.r.hasIndex }))) };
+  return {
+    target,
+    suggested_files_to_read: suggested,
+    related_memory: summarizeRelatedMemory(related),
+    freshness_badge: mergeBadges(perStore.map((p) => ({ ref: p.ref, badge: p.badge, hasIndex: p.r.hasIndex }))),
+  };
+}
+
+/**
+ * Resume la memoire liee servie par `code_brief` (pln#598 etape 3).
+ *
+ * POURQUOI. Un trap ou une decision de ce depot depasse regulierement 2 000 caracteres —
+ * plusieurs des textes ecrits pendant la refonte federation v2 en font le double. Un
+ * `code_brief` qui attache trois d'entre eux sert des milliers de caracteres avant meme
+ * que l'agent n'ait ouvert un fichier, pour un contenu qu'il ne lira peut-etre pas.
+ *
+ * LE TEXTE N'EST PAS PERDU, IL EST DIFFERE. Chaque entree raccourcie porte l'appel EXACT
+ * qui rend l'integralite. Un allegement qui supprime l'information au lieu de la deplacer
+ * force l'agent a deviner — et deviner sur un trap est precisement ce que les traps
+ * existent pour eviter.
+ *
+ * `id`, `kind`, `tags` et `related_paths` restent ENTIERS : ce sont eux qui permettent de
+ * decider s'il vaut la peine d'aller lire. Les tronquer ferait economiser des octets sur
+ * la seule partie qui sert a trier.
+ */
+const RELATED_MEMORY_TEXT_LIMIT = 300;
+
+export function summarizeRelatedMemory(items: RelatedMemoryItem[]): RelatedMemoryItem[] {
+  return items.map((item) => {
+    if (typeof item.text !== 'string' || item.text.length <= RELATED_MEMORY_TEXT_LIMIT) return item;
+    return {
+      ...item,
+      text: `${item.text.slice(0, RELATED_MEMORY_TEXT_LIMIT)}…`,
+      text_truncated: true,
+      full_text_via: { tool: 'bclaw_get', args: { entity: item.kind, id: item.id } },
+    };
+  });
 }
