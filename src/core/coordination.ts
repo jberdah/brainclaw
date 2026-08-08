@@ -382,9 +382,7 @@ function buildIncomingSignalsSummary(cwd?: string): IncomingSignalSummary[] | un
   try {
     const fedSignals = pullSignalsFromLinkedProjects(cwd);
     for (const sig of fedSignals) {
-      const payloadPreview = typeof sig.payload === 'string'
-        ? sig.payload.slice(0, 120)
-        : JSON.stringify(sig.payload).slice(0, 120);
+      const payloadPreview = JSON.stringify(sig.payload).slice(0, 120);
       incomingSignals.push({
         id: sig.id,
         entity_type: sig.type,
