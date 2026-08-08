@@ -434,7 +434,6 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
               slot_id: req.slot_id,
               role: req.role,
               input: req.input,
-              dispatch: req.dispatch,
               assignment_id: req.assignment_id,
               claim_id: req.claim_id,
               actor,
