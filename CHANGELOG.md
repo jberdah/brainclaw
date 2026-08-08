@@ -5,6 +5,62 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] — 2026-08-08
+
+The federation v2 release: the cloud path is rebuilt from scratch as an end-to-end encrypted projection, and joining a project becomes an attested key ceremony instead of a PEM you paste. Eight PRs closing pln#651 end to end (8/8 steps), with a companion rewrite of the Cloud backend (pln#103, 7/7).
+
+**READ THE `Removed` SECTION BEFORE UPGRADING.** This is a BREAKING change to federation, deliberately (dec#156): the v1 wire format is ABANDONED, not deprecated, and there is no migration path. The decision was taken while the installed base was one test between two agents and no other cloud user — breaking cost almost nothing then, and avoided six structural debts, including a `content_hash` computed over plaintext that was already wired into the 409 conflict codes.
+
+**If you sync with a cloud backend, upgrade the CLI BEFORE deploying the v2 backend.** A 1.21.0 client keeps pushing v1 claim upserts and would take a `410 FEDERATION_V1_REMOVED`; this release stops it from pushing v1 at all, and gives it the pairing ceremony to re-enroll.
+
+### Removed
+
+- **The v1 cloud egress path is gone** (dec#156; #201). `federation-cloud.ts`, `federation-outbox.ts`, `federation-signing.ts` and `register-federation.ts` are deleted, along with the `cloud_sync` config field and the `BRAINCLAW_CLOUD_*` activation. `grep BRAINCLAW_CLOUD_API_KEY src/` returns nothing.
+
+  **The live defect this closes:** `resolveCloudConfig` treated the MERE PRESENCE of `BRAINCLAW_CLOUD_API_KEY` as consent. Measured on the author's machine: at every session start, up to 100 signals were pulled from the cloud and written into the local store through `saveCandidate`/`saveRuntimeNote` **without any verification**, while the project config mentioned no cloud at all.
+
+  **What deliberately survives:** `materializeFederationSignal` is not orphaned — it still serves signals from LOCALLY linked projects. The demolition removes the CLOUD path and preserves local cross-project federation. Verified by grep, not assumed.
+
+  The 112 envelopes queued in the local outbox were discarded (dec#156-d). Measured before acting: 50 carried an absolute `worktree_path` and 48 the hostname. They had never been sent (`attempts: 0`) — but the schema was ready to receive them, and that is the path being closed.
+
+### Added
+
+- **`brainclaw cloud connect / await / disconnect`** — joining a project is a KEY CEREMONY (#203). The human copies ONE invite code and compares TWO fingerprints with what the approver sees. No API key, no PEM, no agent_id, no environment variable (dec#8). Fingerprints are printed IN FULL: a 16-character comparison collides far more easily than it looks.
+
+  Pairing and key distribution are ONE piece of work, not two. The device's X25519 encryption key is ATTESTED by its Ed25519 identity — without that, the Cloud, which orchestrates the pairing, can insert its own key into the envelope list: end-to-end encryption whose key exchange is arbitrated by the very party it claims to neutralize.
+
+  `await` is a SEPARATE command because approval depends on a person, whose delay is not bounded; polling does not mutate local state. `disconnect` flips local state to revoked EVEN IF the cloud is unreachable — otherwise a lost device stays authorized for want of a network — and it STATES what it does not erase: data already pulled and decrypted, and what other devices already hold.
+
+- **`brainclaw cloud status`** — the linked project, role, current key epoch, the epochs actually READABLE on this device, and the three sync states. Counts are read from the outbox ON DISK, not from a cached counter: a status that echoed a number the code itself incremented would reassure precisely when you are checking because you doubt.
+
+- **End-to-end encryption of the projection** (#204). HPKE base mode per RFC 9180 — DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305 — implemented in-tree (Node exposes no HPKE, and the project keeps zero runtime dependencies beyond commander/yaml/zod) and verified field by field against the official Appendix A.1 vector.
+
+  The projector carries THREE nets, because four reviewers found three distinct ways one would fail: Zod `.strip()`s BY DEFAULT so a new field passes validation silently; a test covers the OUTPUT, not the CONSTRUCTION; and `{...entity, ciphertext}` compiles and dumps everything. Typing alone bounds nothing — TypeScript's structural typing is a LOWER bound on what an object contains, and `JSON.stringify` serializes every key present at RUNTIME.
+
+- **Inbound verification** (#207). Origin signature carried IN the envelope and verified by EVERY READER, anti-replay by per-object high-water mark, metadata integrity, and deduplication by `idempotency_key`. Encrypting READS while leaving WRITES forgeable by the operator you claim to neutralize was the structural defect this closes.
+
+- **Cloud commands materialized locally** (#207). Each dashboard action becomes an audited, idempotent operation with a `base_rev` that lands in the local journal with a VISIBLE state — pending / synced / conflict. A stale `base_rev` produces a conflict WITH a resolution proposal; there is deliberately no automatic resolution, because an "auto" mode ends up being the default.
+
+### Changed
+
+- **Nothing syncs by default, ever again.** A workspace reports `unpaired` until an explicit pairing ceremony writes a connection state. Unlike v1, no environment variable can enable egress by its mere presence.
+
+- **`content_hash` and `idempotency_key` are derived from the CIPHERTEXT** (RFC §3.2). In v1, `content_hash` covered the plaintext body, which the Cloud stored and compared — a confirmation oracle over low-entropy content. `idempotency_key` is additionally keyed by the signer identity, so two agents pushing the same content do not produce the same key.
+
+- **Timestamps leaving the host are truncated to the UTC DAY.** A precise time betrays a person's working rhythm; the day only reveals cadence, which the RFC accepts explicitly.
+
+- **Ids are re-rolled as opaque UUIDs, with the local↔cloud mapping kept LOCAL.** Hashing the local id would be deterministic, so the same object exported to two cloud projects would produce the same identifier and let an observer correlate them.
+
+### Security
+
+- **Local paths, worktrees, host and session ids, commands, PIDs and secrets cannot leave the host** — and the check runs on the PLAINTEXT, before sealing. "Encrypted" is not "allowed to leave": the day the key leaks, the data leaked too. Local paths are also detected by the SHAPE of the value, whatever the field is named — a list of names does not catch a path tucked into an innocuous field.
+
+- **The security ceiling is stated where the key is read.** `~/.brainclaw/keys/` is readable by any process running as the same UID, and mode 0600 is largely ignored on Windows. Cloud-side end-to-end encryption DOES NOT EXCEED local disk security. TPM, secure enclave and HSM are an explicit later version.
+
+- **Revocation is forward-only, and a test asserts BOTH halves.** After rotation the revoked device no longer reads the future — but it STILL READS the past it held, because that key is on its disk. Claiming otherwise would be a promise cryptography does not keep.
+
+- **The blind board renders structure without any key, and says what that structure still reveals.** Labels are not blurred but ABSENT — the server never had them. The dependency graph, object count and daily cadence remain legible: assumed and written in the interface, not hidden.
+
 ## [1.21.0] — 2026-08-06
 
 The entity-authoritative routing release: a project's identity now comes from the ENTITY being mutated, not from ambient resolution, and a proven divergence REFUSES the write instead of guessing. Eighteen PRs implementing dec#153/dec#155 and closing pln#649 end to end (7/7 steps). It starts from a field report — a dispatched worker's `project:` was not propagated, an assignment stayed `offered` forever, and protocol artifacts landed at the repo root — and ends by removing the class those reports belonged to.
