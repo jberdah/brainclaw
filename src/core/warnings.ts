@@ -96,6 +96,45 @@ export function pushStructuredWarning(
 // channel: `scope_already_claimed` used to be a dead-end string; now it names
 // the two calls that resolve it.
 
+/**
+ * `autoExecute: true` sur `intent='consult'` — un no-op, dit sur le canal STRUCTURE
+ * (pln#626 phase 3).
+ *
+ * POURQUOI PAS UNE ERREUR DURE. Le plan laissait le choix entre refuser et implementer un
+ * vrai « consult run ». Refuser casserait des appelants existants pour un drapeau qui n'a
+ * jamais rien fait, et l'implementer est une decision produit — le plan lui-meme penche
+ * pour le spawn sur les cibles spawn-only, ce qui depasse une correction de surface.
+ *
+ * POURQUOI PAS SEULEMENT UN TEXTE. Phase 1 avait deja pousse un avertissement en texte
+ * libre, ce qui vaut mieux que le silence mais reste illisible pour une machine : un agent
+ * ne peut pas brancher dessus. Le code structure rend le refus DETECTABLE, et la
+ * next_action nomme les deux chemins qui spawnent reellement.
+ *
+ * C'est la moitie de la phase 3 qui ne demande aucun arbitrage : rendre le no-op
+ * observable. L'autre moitie — refuser ou spawner — reste au produit.
+ */
+export function consultAutoExecuteNoOpWarning(): StructuredWarningInput {
+  return {
+    code: 'auto_execute_ignored_on_consult',
+    message:
+      "autoExecute has no effect on intent='consult': consult delivers the RFC to the target "
+      + 'inbox(es) only and never spawns an agent — targets pick it up via their own bclaw_work.',
+    data: { intent: 'consult', auto_execute_honored: false },
+    next_actions: [
+      {
+        tool: 'bclaw_dispatch',
+        args: { intent: 'execute' },
+        when: 'to actually spawn workers on a sequence lane',
+      },
+      {
+        tool: 'bclaw_coordinate',
+        args: { intent: 'assign' },
+        when: 'to hand one scope to one agent and have it started',
+      },
+    ],
+  };
+}
+
 export function agentValidationFailedWarning(input: {
   agent: string;
   code?: string;
