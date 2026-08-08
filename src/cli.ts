@@ -16,6 +16,7 @@ import { registerCoordinationCommands } from './cli/register-coordination.js';
 import { registerReviewCommands } from './cli/register-review.js';
 import { registerMemoryContextCommands } from './cli/register-memory-context.js';
 import { registerCodeMapCommands } from './cli/register-code-map.js';
+import { registerCloudCommands } from './cli/register-cloud.js';
 
 const program = new Command();
 
@@ -186,6 +187,7 @@ registerCoordinationCommands(program);
 registerReviewCommands(program);
 registerMemoryContextCommands(program);
 registerCodeMapCommands(program);
+registerCloudCommands(program);
 
 // ─── Command-order shim (pln#622 PR5) ────────────────────────────────────────
 // Commander renders `--help` in registration order. The per-family register

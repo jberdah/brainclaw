@@ -25,6 +25,11 @@ const PREFIXES: Record<string, string> = {
   // prefix-based routing (dispatch_status). Canonical prefix is 'rtn'.
   runtime_note: 'rtn',
   runtime_notes: 'rtn',
+  // pln#651 étape 3 — identité d'APPAREIL de la fédération v2, distincte de l'identité
+  // d'agent. Entrée EXPLICITE et non laissée au fallback slice(0,3) : c'est ce fallback
+  // qui a produit la collision de can_b8d53d18 ('runtime_note' → 'run', déjà pris par
+  // agent_run). Il rend 'dev' ici par hasard, pas par contrat.
+  federation_devices: 'dev',
 };
 
 const ID_COUNTER_FILE = '.id-counter.json';
