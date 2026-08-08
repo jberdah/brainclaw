@@ -484,6 +484,16 @@ export interface RelatedMemoryItem {
   text: string;
   tags: string[];
   related_paths: string[];
+  /**
+   * Renseigne quand `code_brief` a RACCOURCI le texte (pln#598 etape 3).
+   *
+   * Declare ici plutot que laisse implicite : un champ present a l'execution mais absent
+   * du type est invisible a tout consommateur qui lit la definition — et c'est exactement
+   * la classe de promesse silencieuse que ce meme plan cherche a supprimer ailleurs.
+   */
+  text_truncated?: boolean;
+  /** Appel EXACT rendant le texte integral. Absent quand rien n'a ete tronque. */
+  full_text_via?: { tool: string; args: Record<string, unknown> };
 }
 
 /**
