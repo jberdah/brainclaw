@@ -559,40 +559,13 @@ const MCP_WRITE_TOOLS = [
     name: 'bclaw_claim',
     description: 'Claim a work scope (advisory lock). By default creates an isolated git worktree for the claim (multi-agent safety). Pass advisory:true (or worktree:false) for an advisory-only lock with NO worktree — use this when the work already lives uncommitted in the main tree and a fresh worktree would be counterproductive (trp#431). Requires contributor trust level or above.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        scope: { type: 'string', description: 'Scope being claimed.' },
-        description: { type: 'string', description: 'Description of the work.' },
-        agent: { type: 'string', description: 'Agent or person name.' },
-        agentId: { type: 'string', description: 'Registered agent id.' },
-        planId: { type: 'string', description: 'Optional linked plan item ID.' },
-        project: { type: 'string', description: 'Project name or path. Use this when working on a project different from the MCP server workspace (e.g. CLI agents in a different directory).' },
-        store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
-        worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
-        worktree: { type: 'boolean', description: 'Whether to create an isolated git worktree (default true). Pass false for an advisory-only lock with no worktree (trp#431) — for in-place work in the main tree.' },
-        advisory: { type: 'boolean', description: 'Alias for worktree:false — advisory-only lock with no worktree (trp#431).' },
-        handoffMode: { type: 'string', enum: ['self-commit', 'integrator'], description: 'Handoff mode: "self-commit" (worker commits+merges) or "integrator" (another agent reviews+merges). Default: self-commit.' },
-      },
-      required: ['scope', 'description'],
-    },
+    inputSchema: { ...generatedSchemas.ClaimRequest },
   },
   {
     name: 'bclaw_release_claim',
     description: 'Release a work claim. Callers own their own claims; a trusted+ coordinator releasing another agent\'s claim MUST pass coordinator_override:true (audited).',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Claim ID to release.' },
-        planStatus: { type: 'string', description: 'Optional: update linked plan status.' },
-        coordinator_override: {
-          type: 'boolean',
-          description: 'Opt-in override for a trusted+ caller releasing a claim they do NOT own (cross-agent teardown, ghost-claim cleanup). Rejected for contributor-level callers; audited when used. trp#928.',
-        },
-      },
-      required: ['id'],
-    },
+    inputSchema: { ...generatedSchemas.ReleaseClaimRequest },
   },
   {
     name: 'bclaw_session_start',
