@@ -12,30 +12,11 @@
  */
 import { generatedSchemas } from './mcp-schemas.generated.js';
 
-const SEQUENCE_ITEM_INPUT_SCHEMA = {
-  type: 'object',
-  description: 'Sequence lane item. planId is required; stepId optionally narrows dispatch/readiness to a specific plan step.',
-  properties: {
-    planId: { type: 'string', minLength: 1, description: 'Plan item ID referenced by this sequence item.' },
-    stepId: { type: 'string', minLength: 1, description: 'Optional plan step ID inside planId for step-level dispatch/readiness.' },
-    rank: { type: 'number', minimum: 1, description: 'Positive integer ordering key. Ranks must be unique within a sequence.' },
-    hard_after: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Sequence item planId values that must complete before this item becomes ready.',
-    },
-    soft_after: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Advisory predecessor planId values; they inform ordering but do not block readiness.',
-    },
-    lane: { type: 'string', description: 'Optional lane label used for parallel dispatch grouping and filtering.' },
-    scope_hint: { type: 'string', description: 'Optional file/path scope hint for claim and brief generation.' },
-    rationale: { type: 'string', description: 'Optional explanation for this item or dependency placement.' },
-  },
-  required: ['planId', 'rank'],
-  additionalProperties: false,
-} as const;
+// SEQUENCE_ITEM_INPUT_SCHEMA a ete RETIRE (pln#599 batch 2). Ce sous-schema JSON manuel
+// etait reutilise par create_sequence et update_sequence ; il est desormais derive d'une
+// source zod UNIQUE (src/core/sequence-request-schema.ts) et materialise dans
+// mcp-schemas.generated.ts. C'est exactement la classe de defaut de trp#180 — un
+// sous-schema duplique, corrige d'un cote seulement — qui disparait avec lui.
 
 const { $defs: loopPhaseDefs, ...loopPhaseItemSchema } = generatedSchemas.LoopPhase as typeof generatedSchemas.LoopPhase & {
   $defs?: Record<string, unknown>;
@@ -655,39 +636,18 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_create_sequence',
     description: 'Create a coordination sequence shared by agents.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' , schemaSource: 'zod-derived'},
     inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Sequence name.' },
-        description: { type: 'string', description: 'Optional sequence description.' },
-        status: { type: 'string', description: 'Status: draft, active, archived.' },
-        owner: { type: 'string', description: 'Optional sequence owner.' },
-        items: { type: 'array', description: 'Sequence items in rank order.', items: SEQUENCE_ITEM_INPUT_SCHEMA },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
-        agent: { type: 'string', description: 'Agent name.' },
-        agentId: { type: 'string', description: 'Registered agent id.' },
-      },
+      ...generatedSchemas.CreateSequenceRequest,
       required: ['name'],
     },
   },
   {
     name: 'bclaw_update_sequence',
     description: 'Update a coordination sequence status, metadata, or items.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' , schemaSource: 'zod-derived'},
     inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Sequence ID or short label.' },
-        name: { type: 'string', description: 'Optional new sequence name.' },
-        description: { type: 'string', description: 'Optional new description.' },
-        status: { type: 'string', description: 'Status: draft, active, archived.' },
-        owner: { type: 'string', description: 'Optional sequence owner.' },
-        items: { type: 'array', description: 'Optional replacement items array.', items: SEQUENCE_ITEM_INPUT_SCHEMA },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Optional replacement tags.' },
-        agent: { type: 'string', description: 'Agent name.' },
-        agentId: { type: 'string', description: 'Registered agent id.' },
-      },
+      ...generatedSchemas.UpdateSequenceRequest,
       required: ['id'],
     },
   },
