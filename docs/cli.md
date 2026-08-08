@@ -1749,46 +1749,9 @@ brainclaw push --remote origin --message "chore: push memory state" --json
 
 ## Federation
 
-The `federation` command group manages cloud signal exchange with `app.brainclaw.dev`. Federation requires `BRAINCLAW_CLOUD_API_KEY` to be set. It is a planned premium tier for cross-machine and cross-organization coordination.
+The v1 `brainclaw federation` command group and the whole cloud egress path (`app.brainclaw.dev` push/pull, `cloud_sync` config, `BRAINCLAW_CLOUD_*` env vars) were removed in wave 1 of dec#156 / pln#651. There is no migration: the v1 format is abandoned, not deprecated. The v2 federation surface will be introduced by pln#651 wave 3 alongside the pairing CLI (`brainclaw cloud connect`).
 
-### `brainclaw federation push <message>`
-
-Push a test signal to the cloud. The signal is sent from the current project and agent to a target project or broadcast address.
-
-| Option | Description |
-|---|---|
-| `--type <type>` | Signal type (default: `runtime_note`). Accepted values: `signal`, `handoff`, `candidate`, `runtime_note`, `board_snapshot` |
-| `--to-project <project>` | Target project name (default: `broadcast`) |
-| `--to-agent <agent>` | Target agent name |
-
-```bash
-brainclaw federation push "Auth rollout complete" --to-project lodestar
-brainclaw federation push "Blocked on payments" --type runtime_note --to-agent copilot
-```
-
-### `brainclaw federation pull`
-
-Pull signals from the cloud inbox for the current agent.
-
-| Option | Description |
-|---|---|
-| `--agent <name>` | Agent name to pull for (default: auto-detected) |
-| `--since <date>` | Only pull signals after this ISO date |
-| `--limit <n>` | Maximum number of signals to pull (default: 20) |
-
-```bash
-brainclaw federation pull
-brainclaw federation pull --since 2026-04-01
-brainclaw federation pull --agent copilot --limit 50
-```
-
-### `brainclaw federation status`
-
-Check cloud federation configuration: shows the configured cloud URL, whether the API key is set, and pings the cloud health endpoint if configured.
-
-```bash
-brainclaw federation status
-```
+Local cross-project federation (see below) is unaffected.
 
 ---
 

@@ -128,14 +128,11 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   saved.BRAINCLAW_PROJECT = process.env.BRAINCLAW_PROJECT;
   saved.BRAINCLAW_CLAIM_ID = process.env.BRAINCLAW_CLAIM_ID;
   saved.BRAINCLAW_SESSION_ID = process.env.BRAINCLAW_SESSION_ID;
-  // Cloud/federation opt-in env vars: resolveCloudConfig() treats a present
-  // BRAINCLAW_CLOUD_API_KEY as explicit enablement (federation-cloud.ts), so on
-  // a cloud-configured dev machine every in-process test would see federation
-  // ENABLED regardless of workspace config — flipping "disabled"-path assertions
-  // and silently enqueuing outbox records into the test store. Subprocess e2e
-  // is already safe via sanitizedProcessEnv()'s blanket BRAINCLAW_* strip; this
-  // is the in-process equivalent (root-caused 2026-07-24 on the pln#627 branch).
-  const cloudEnvKeys = ['BRAINCLAW_CLOUD_URL', 'BRAINCLAW_CLOUD_API_KEY', 'BRAINCLAW_PROJECT_ID', 'BRAINCLAW_CLOUD_REQUIRE_SIGNED'];
+  // dec#156 (pln#651 wave 1 demolition) removed the cloud egress path entirely,
+  // and with it the BRAINCLAW_CLOUD_* opt-in. These variables no longer control
+  // any behavior in-process; the isolation still strips them so a leftover value
+  // in a dev shell can never be mistaken for a re-enablement by wave-2 code.
+  const cloudEnvKeys = ['BRAINCLAW_CLOUD_URL', 'BRAINCLAW_CLOUD_API_KEY', 'BRAINCLAW_PROJECT_ID', 'BRAINCLAW_CLOUD_REQUIRE_SIGNED', 'BRAINCLAW_CLOUD_AGENT_ID'];
   for (const key of cloudEnvKeys) saved[key] = process.env[key];
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;

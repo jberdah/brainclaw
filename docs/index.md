@@ -31,6 +31,7 @@ Use this page as the entry point into the packaged Markdown documentation.
 - [concepts/loop-engine.md](concepts/loop-engine.md)
 - [concepts/ideation-loop.md](concepts/ideation-loop.md) — memory-confrontation ideation loop (v1.5.0+)
 - [concepts/mcp-governance.md](concepts/mcp-governance.md)
+- [concepts/federation-v2-rfc.md](concepts/federation-v2-rfc.md) — contrat joint core + Cloud pour la fédération chiffrée v2
 
 ## Reference
 

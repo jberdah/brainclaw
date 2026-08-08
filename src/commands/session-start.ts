@@ -25,7 +25,6 @@ import type { WarningDetail } from '../core/facade-schema.js';
 import { loadHygienePolicy } from '../core/hygiene-policy.js';
 import { maybeCreateCheckpoint } from '../core/events/checkpoint.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
-import { pullSignalsFromCloud, isCloudSyncEnabled } from '../core/federation-cloud.js';
 import { materializeFederationSignal } from '../core/federation-materialize.js';
 
 function sessionsDir(cwd?: string): string {
@@ -406,27 +405,6 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
         console.log(`✔ Materialized ${materialized} federation signal(s) from linked projects`);
       }
     } catch { /* Non-fatal — federation pull failure should not block session start */ }
-  }
-
-  // Materialize incoming federation signals from cloud (Phase 1 — opt-in via cloud_sync.enabled)
-  if (maintenanceMode === 'full' && isCloudSyncEnabled(options.cwd)) {
-    try {
-      const cloudSignals = await pullSignalsFromCloud(actor.agent, { limit: 100 }, options.cwd);
-      let cloudMaterialized = 0;
-      for (const signal of cloudSignals) {
-        try {
-          if (materializeFederationSignal(signal, options.cwd)) {
-            cloudMaterialized++;
-          }
-          // No markSignalProcessed for cloud signals — cloud-side tracks delivery via the
-          // inbox endpoint's own state (per-agent read cursor). If the cloud returns the
-          // same signal twice, the idempotency_key field allows future dedup at materialize time.
-        } catch { /* skip this signal — do not block session start */ }
-      }
-      if (cloudMaterialized > 0) {
-        console.log(`✔ Materialized ${cloudMaterialized} federation signal(s) from cloud`);
-      }
-    } catch { /* Non-fatal — cloud pull failure should not block session start */ }
   }
 
   return {
