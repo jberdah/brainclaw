@@ -2195,11 +2195,17 @@ export async function handleBclawLoop(args: Record<string, unknown>, ctx: McpWri
       ),
     };
   }
-  // pln#562 step 4 — dispatching a turn hands work to another agent; gate
-  // it at the same trust bar as the other dispatch surfaces.
-  // pln#632 — `bind` also SPAWNS real workers (it dispatches the loop's linked
-  // sequence), so it is gated at the same 'trusted' bar as turn-dispatch / coordinate.
-  if ((args?.intent === 'turn' && args?.dispatch === true) || args?.intent === 'bind') {
+  // pln#632 — `bind` SPAWNE de vrais workers (il dispatche la séquence liée de la
+  // boucle), donc il est protégé au barreau 'trusted' comme les autres surfaces de
+  // dispatch.
+  //
+  // LA BRANCHE `turn && dispatch === true` A ÉTÉ RETIRÉE (pln#626 phase 4). Le drapeau
+  // `TurnInput.dispatch` était déclaré, transporté jusqu'à `turn()` — et JAMAIS LU. Une
+  // porte de confiance sur un no-op est pire qu'absente : elle fait croire qu'un chemin
+  // sensible est gardé, et un lecteur qui la voit conclut à tort que `dispatch: true` a
+  // un effet. Le drapeau lui-même est supprimé dans le même commit ; garder la porte
+  // aurait laissé la fausse impression intacte.
+  if (args?.intent === 'bind') {
     const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
     if (resolved.error) {
       return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
