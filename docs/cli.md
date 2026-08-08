@@ -2207,4 +2207,28 @@ Show brainclaw context volume stats — tokens injected per agent and per MCP to
 |---|---|
 | `--json` | Output as JSON |
 
+### `brainclaw cloud status`
+
+Show the federation v2 connection state for this workspace: linked cloud project, role,
+current key epoch, the epochs actually readable on this device, and the three sync states.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+Sync state is **visible by design** (dec#154): a cloud-originated operation materializes in
+the local journal as `pending`, `synced` or `conflict`, and a conflict is presented for
+resolution rather than resolved by a silent last-write-wins. The counts are read from the
+outbox on disk, not from a cached counter — a status that echoed a number the code had
+itself incremented would reassure precisely when you are checking because you doubt.
+
+`readable_epochs` likewise comes from the keyring on disk. It can be shorter than the
+epochs the state declares: a partial backup restore leaves that exact disagreement, and
+the honest answer is what can actually be decrypted here.
+
+`connect` and `disconnect` are not implemented yet — they are key ceremonies (attested
+X25519 enrollment, proof of possession, human approval), delivered with the pairing work.
+Until then a workspace reports `unpaired`, and **nothing syncs**: unlike federation v1,
+no environment variable can enable egress by its mere presence.
+
 This keeps end-user installs aware of published npm releases without requiring a local tarball channel. To keep beta testers on a different channel, set `brainclaw_update_source` to `type: npm` with a different `dist_tag`, such as `prelaunch`.

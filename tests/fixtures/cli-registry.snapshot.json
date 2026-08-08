@@ -1038,6 +1038,29 @@
   },
   {
     "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw cloud"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud status"
+  },
+  {
+    "aliases": [],
     "arguments": [
       {
         "name": "subcommand",
