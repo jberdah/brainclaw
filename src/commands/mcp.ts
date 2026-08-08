@@ -1325,6 +1325,51 @@ function resolveWorkspaceAnchor(cwd: string): string {
 
 // Read handlers moved to mcp-read-handlers.ts
 import { handleMcpReadToolCall } from './mcp-read-handlers.js';
+
+/**
+ * Projection COMPACTE de `open_work` (pln#598 etape 2).
+ *
+ * POURQUOI TRONQUER LA DESCRIPTION, et pourquoi ICI seulement. Une description
+ * d'assignation porte le BRIEF COMPLET du worker : mesure sur ce depot, des briefs de
+ * dispatch a plus de 1 500 caracteres, plusieurs a la fois dans open_work. Servis en
+ * entier dans une reponse dite « compacte », ils en font l'essentiel du poids — pour un
+ * texte que l'appelant a ecrit lui-meme et peut relire a la demande.
+ *
+ * La troncature vit dans la BRANCHE COMPACTE et non dans context.ts : les autres
+ * consommateurs de `open_work` — session-end, le board, les surfaces de diagnostic —
+ * ont besoin du texte entier, et le tronquer a la source leur retirerait sans le dire.
+ *
+ * LE TEXTE N'EST PAS PERDU, il est DIFFERE : chaque entree tronquee porte de quoi le
+ * recuperer. Un allegement qui supprime l'information au lieu de la deplacer n'allege
+ * rien — il deplace le probleme sur l'appelant, qui devine au lieu de lire.
+ */
+const OPEN_WORK_DESCRIPTION_LIMIT = 200;
+
+function compactOpenWork(openWork: unknown): unknown {
+  if (!openWork || typeof openWork !== 'object') return openWork ?? null;
+  const source = openWork as { active_assignments?: Array<Record<string, unknown>> };
+  if (!Array.isArray(source.active_assignments)) return openWork;
+
+  return {
+    ...source,
+    active_assignments: source.active_assignments.map((assignment) => {
+      const description = assignment['description'];
+      if (typeof description !== 'string' || description.length <= OPEN_WORK_DESCRIPTION_LIMIT) {
+        return assignment;
+      }
+      return {
+        ...assignment,
+        description: `${description.slice(0, OPEN_WORK_DESCRIPTION_LIMIT)}…`,
+        description_truncated: true,
+        // La suite EXACTE, pas une invitation vague : l'agent doit pouvoir la rejouer
+        // telle quelle. C'est la regle de src/core/next-actions.ts — une action qui ne
+        // decoule pas de ce qui s'est passe est du bruit ; celle-ci decoule de la
+        // troncature qu'on vient d'appliquer.
+        full_text_via: { tool: 'bclaw_get', args: { entity: 'assignment', id: assignment['id'] } },
+      };
+    }),
+  };
+}
 export { handleMcpReadToolCall };
 
 
@@ -1790,7 +1835,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           workflow_hints: hintsPool.slice(0, 3),
           ...(hintsAggregate ? { workflow_hints_aggregate: hintsAggregate } : {}),
           claim_conflicts: contextResult.claim_conflicts ?? [],
-          open_work: contextResult.open_work ?? null,
+          open_work: compactOpenWork(contextResult.open_work),
           _compact: true,
           _full_context_hint: 'Use bclaw_context(kind="memory") for the full payload.',
         };
