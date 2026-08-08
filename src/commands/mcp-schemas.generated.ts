@@ -2,7 +2,7 @@
 // Source zod schemas: src/core/loops/types.ts, src/core/loops/facade-schema.ts,
 // src/core/capture-schema.ts, src/core/sequence-request-schema.ts,
 // src/core/claim-request-schema.ts, src/core/session-request-schema.ts,
-// src/core/step-request-schema.ts
+// src/core/step-request-schema.ts, src/core/assignment-request-schema.ts
 // Regenerate: npm run build:mcp-schemas
 //
 // This file materializes the zod-derived JSON Schema view consumed by the
@@ -911,5 +911,205 @@ export const generatedSchemas = {
       "planId",
       "stepId"
     ]
+  },
+  "AssignmentUpdateRequest": {
+    "type": "object",
+    "properties": {
+      "assignment_id": {
+        "type": "string",
+        "description": "Assignment ID from the dispatch brief (asgn_xxx)."
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "accepted",
+          "started",
+          "progress",
+          "completed",
+          "failed",
+          "blocked"
+        ],
+        "description": "Lifecycle status to report."
+      },
+      "message": {
+        "type": "string",
+        "description": "Human-readable status message or progress note."
+      },
+      "artifacts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Artifact type: commit, branch, file, pr, test_result."
+            },
+            "ref": {
+              "type": "string",
+              "description": "Reference: SHA, branch name, file path, PR URL."
+            },
+            "description": {
+              "type": "string",
+              "description": "Optional description."
+            }
+          },
+          "required": [
+            "type",
+            "ref"
+          ]
+        },
+        "description": "Artifacts produced. Most useful for completed status."
+      },
+      "error_message": {
+        "type": "string",
+        "description": "Error details (for failed status)."
+      },
+      "blocker": {
+        "type": "string",
+        "description": "Blocker description (for blocked status)."
+      },
+      "action_required": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "approval",
+              "user_input",
+              "clarification",
+              "plan_approval"
+            ],
+            "description": "Kind of action needed."
+          },
+          "title": {
+            "type": "string",
+            "description": "Short title shown to supervisors/UI."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Question or approval prompt to answer."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional answer choices."
+          },
+          "response_schema": {
+            "type": "object",
+            "description": "Optional structured response schema hint."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional tags."
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "prompt"
+        ],
+        "description": "Optional ActionRequired payload when status=blocked. Lets the worker request approval, user input, or clarification before resuming."
+      },
+      "agent": {
+        "type": "string",
+        "description": "Agent name."
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Registered agent id."
+      }
+    },
+    "required": [
+      "assignment_id",
+      "status"
+    ]
+  },
+  "AssignmentActionRequest": {
+    "type": "object",
+    "properties": {
+      "action_id": {
+        "type": "string",
+        "description": "ActionRequired ID (act_xxx)."
+      },
+      "outcome": {
+        "type": "string",
+        "enum": [
+          "resolved",
+          "rejected",
+          "cancelled"
+        ],
+        "description": "How the supervisor resolves the pending action."
+      },
+      "text": {
+        "type": "string",
+        "description": "Human-readable response or rationale."
+      },
+      "payload": {
+        "type": "object",
+        "description": "Optional structured response payload."
+      },
+      "agent": {
+        "type": "string",
+        "description": "Supervisor/agent responding to the action."
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Registered agent id."
+      }
+    },
+    "required": [
+      "action_id",
+      "outcome"
+    ]
+  },
+  "AssignmentEventsRequest": {
+    "type": "object",
+    "properties": {
+      "assignmentId": {
+        "type": "string",
+        "description": "Filter by linked assignment ID."
+      },
+      "runId": {
+        "type": "string",
+        "description": "Filter by linked run ID."
+      },
+      "claimId": {
+        "type": "string",
+        "description": "Filter by linked claim ID."
+      },
+      "sessionId": {
+        "type": "string",
+        "description": "Filter by runtime session ID."
+      },
+      "agent": {
+        "type": "string",
+        "description": "Filter by agent name."
+      },
+      "eventType": {
+        "type": "string",
+        "description": "Filter by runtime event type."
+      },
+      "id": {
+        "type": "string",
+        "description": "Get a single runtime event by ID."
+      },
+      "limit": {
+        "type": "number",
+        "description": "Maximum number of events to return (default: 20)."
+      },
+      "offset": {
+        "type": "number",
+        "description": "Number of events to skip (for pagination)."
+      },
+      "compact": {
+        "type": "boolean",
+        "description": "Return only key fields to reduce output size."
+      }
+    }
   }
 } as const;
