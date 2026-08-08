@@ -6,7 +6,7 @@ import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
-import { memoryDir, entityRecordDirs, entityRecordPaths, ENTITY_DIR_MAP } from './io.js';
+import { memoryDir, entityRecordDirs, entityRecordPaths } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 
@@ -231,14 +231,6 @@ export function saveCurrentSession(session: CurrentSessionState, cwd?: string): 
   const filepath = sessionFilePath(session.session_id, cwd);
   saveVersionedJsonFile('current_session', filepath, CurrentSessionStateSchema.parse(session));
 
-  // SAVE-CONVERGE : une copie du meme record dans l'ancienne disposition est SUPPRIMEE.
-  // La laisser signifierait deux verites pour un seul id, dont la plus ancienne peut
-  // encore etre lue par un chemin qu'on aurait oublie de migrer — le motif deja retenu
-  // pour les assignments et les sequences en 1.21.0.
-  for (const stale of entityRecordPaths('sessions', session.session_id, cwd ?? process.cwd())) {
-    if (path.resolve(stale) === path.resolve(filepath)) continue;
-    try { fs.unlinkSync(stale); } catch { /* absent : rien a converger */ }
-  }
 }
 
 /**
@@ -304,7 +296,22 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
 // --- Internal helpers ---
 
 /**
- * Repertoire d'ECRITURE des records de session : le CANONIQUE, toujours.
+ * Repertoire d'ECRITURE des records de session : la disposition LEGACY, volontairement.
+ *
+ * ATTENTION AVANT DE « CORRIGER » CECI. Ecrire au canonique parait evident et casse le
+ * produit : `session-start.ts` y ecrit deja un SESSION_SNAPSHOT sous le MEME nom de
+ * fichier `<id>.json`, avec un schema DIFFERENT (`session_snapshot` contre
+ * `current_session`). Les deux ecrivains se marchent alors dessus et le dernier corrompt
+ * la lecture de l'autre — reproduit en CI le 2026-08-08, trois tests E2E MCP rouges
+ * (reuse de session implicite, session_end + auto-dispatch, annulation en vol).
+ *
+ * La separation des deux types de records par leur REPERTOIRE etait accidentelle mais
+ * PORTEUSE. L'unifier suppose d'abord de leur donner des noms distincts — ce qui depasse
+ * le perimetre de pln#648 SUITE (a) et merite sa propre decision.
+ *
+ * CE QUI EST QUAND MEME GAGNE ICI : la LECTURE couvre desormais les deux dispositions,
+ * donc un record ecrit avant la migration n'est plus invisible a son propre chargeur.
+ * C'etait la moitie du defaut, et elle est sans risque.
  *
  * POURQUOI CE CHANGEMENT (pln#648 SUITE a). Ce module ecrivait dans la disposition
  * LEGACY (`.brainclaw/sessions/`) tandis que le reste du produit avait migre vers
@@ -318,7 +325,8 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
  * verite a chaque switch, celui-ci la dedoublait.
  */
 function sessionsWriteDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), ENTITY_DIR_MAP['sessions'] ?? SESSIONS_DIR);
+  // ÉCRITURE EN DISPOSITION LEGACY, ET C'EST DÉLIBÉRÉ — voir l'avertissement ci-dessus.
+  return path.join(memoryDir(cwd), SESSIONS_DIR);
 }
 
 /**

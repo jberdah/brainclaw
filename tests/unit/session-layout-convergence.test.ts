@@ -75,23 +75,37 @@ afterEach(() => {
   isolation = undefined;
 });
 
-describe('sessions — l’écriture vise la disposition CANONIQUE', () => {
-  it('écrit dans coordination/sessions et non dans sessions/', () => {
+describe('sessions — l’écriture reste en disposition LEGACY, délibérément', () => {
+  it('écrit dans sessions/ et NON dans coordination/sessions', () => {
+    // CE TEST FIGE UN CHOIX CONTRE-INTUITIF, et son inversion a cassé le produit.
+    //
+    // Écrire au canonique paraît évident. Mais `session-start.ts` y écrit déjà un
+    // SESSION_SNAPSHOT sous le MÊME nom `<id>.json`, avec un schéma DIFFÉRENT. Les faire
+    // coïncider fait que le dernier écrivain corrompt la lecture de l'autre — reproduit
+    // en CI le 2026-08-08, trois tests E2E MCP rouges (reuse de session implicite,
+    // session_end + auto-dispatch, annulation en vol).
+    //
+    // La séparation des deux types de records par leur RÉPERTOIRE était accidentelle mais
+    // PORTEUSE. L'unifier suppose d'abord de leur donner des noms distincts, ce qui
+    // dépasse le périmètre de pln#648 SUITE (a).
     saveCurrentSession(record('sess_a'), root);
-    assert.ok(fs.existsSync(canonicalPath('sess_a')), 'record absent de la disposition canonique');
-    assert.ok(!fs.existsSync(legacyPath('sess_a')), 'record écrit dans la disposition legacy');
+    assert.ok(fs.existsSync(legacyPath('sess_a')), 'record absent de la disposition legacy');
+    assert.ok(
+      !fs.existsSync(canonicalPath('sess_a')),
+      'record écrit au canonique — il entrerait en collision avec le session_snapshot',
+    );
   });
 
-  it('CONVERGE : une copie legacy du même id est supprimée à la sauvegarde', () => {
-    // La laisser signifierait deux vérités pour un seul id, dont la plus ancienne peut
-    // encore être lue par un chemin qu'on aurait oublié de migrer.
+  it('n’efface PAS la copie de l’autre disposition à la sauvegarde', () => {
+    // Le save-converge a été retiré avec l'écriture canonique : supprimer un fichier de
+    // l'autre disposition détruirait un session_snapshot légitime portant le même id.
     writeLegacy('sess_b');
-    assert.ok(fs.existsSync(legacyPath('sess_b')));
+    fs.mkdirSync(path.join(root, '.brainclaw', CANONICAL), { recursive: true });
+    fs.writeFileSync(canonicalPath('sess_b'), JSON.stringify({ schema_version: 1, ...record('sess_b') }), 'utf-8');
 
     saveCurrentSession(record('sess_b'), root);
 
-    assert.ok(fs.existsSync(canonicalPath('sess_b')));
-    assert.ok(!fs.existsSync(legacyPath('sess_b')), 'la copie legacy survit à la convergence');
+    assert.ok(fs.existsSync(canonicalPath('sess_b')), 'un fichier de l’autre disposition a été supprimé');
   });
 });
 
@@ -127,8 +141,6 @@ describe('sessions — effacement et GC couvrent les deux dispositions', () => {
     // N'en nettoyer qu'une laisserait une session « fermée » encore chargeable.
     writeLegacy('sess_c');
     saveCurrentSession(record('sess_c'), root);
-    // La convergence a déjà retiré la legacy ; on la recrée pour tester l'effacement seul.
-    writeLegacy('sess_c');
 
     clearCurrentSession(root, 'sess_c');
 
@@ -147,7 +159,8 @@ describe('sessions — effacement et GC couvrent les deux dispositions', () => {
 
   it('le GC épargne un record VIVANT des deux côtés', () => {
     writeLegacy('sess_alive');
-    saveCurrentSession(record('sess_alive2'), root);
+    fs.mkdirSync(path.join(root, '.brainclaw', CANONICAL), { recursive: true });
+    fs.writeFileSync(canonicalPath('sess_alive2'), JSON.stringify({ schema_version: 1, ...record('sess_alive2') }), 'utf-8');
     gcStaleSessions(root, '4h');
     assert.ok(fs.existsSync(legacyPath('sess_alive')));
     assert.ok(fs.existsSync(canonicalPath('sess_alive2')));

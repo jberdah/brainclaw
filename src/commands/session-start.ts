@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { memoryExists, memoryDir, ENTITY_DIR_MAP } from '../core/io.js';
+import { memoryExists, resolveEntityDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, resolveCurrentModel, resolveOrAutoRegisterAgentIdentity } from '../core/agent-registry.js';
@@ -41,7 +41,11 @@ import { materializeFederationSignal } from '../core/federation-materialize.js';
  * deux dispositions (entityRecordPaths) — c'est la primitive que pln#649 a etablie.
  */
 function sessionsDir(cwd?: string): string {
-  return path.join(memoryDir(cwd ?? process.cwd()), ENTITY_DIR_MAP['sessions'] ?? 'sessions');
+  // NE PAS pointer ceci sur la meme disposition qu'identity.ts. Les deux ecrivent
+  // `<id>.json` avec des SCHEMAS DIFFERENTS — session_snapshot ici, current_session
+  // la-bas — et les faire coincider fait que le dernier ecrivain corrompt la lecture de
+  // l'autre. Reproduit en CI le 2026-08-08 : trois tests E2E MCP rouges.
+  return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
 }
 
 function sessionSnapshotPath(sessionId: string, cwd?: string): string {
