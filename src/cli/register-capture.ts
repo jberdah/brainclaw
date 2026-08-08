@@ -1,4 +1,5 @@
 import type { Command } from 'commander';
+import { runMemoryConfirm } from '../commands/memory-confirm.js';
 import { runDecision } from '../commands/decision.js';
 import { runConstraint } from '../commands/constraint.js';
 import { runTrap } from '../commands/trap.js';
@@ -218,5 +219,20 @@ export function registerCaptureCommands(program: Command): void {
     .option('--json', 'Output as JSON')
     .action((options) => {
       runRuntimeStatus(options);
+    });
+
+  // --- confirm (pln#620) ---
+  // La surface qui manquait a `recordMemoryEvent` : le coeur existait, teste, branche sur
+  // un schema porte par les traps/decisions/contraintes — et n'etait appele DEPUIS NULLE
+  // PART. 0 item sur 471 portait la moindre confirmation au moment ou cette commande a ete
+  // ajoutee. C'est la classe de defaut de trp#1292 : un coeur vert, une fonctionnalite inerte.
+  program
+    .command('confirm <entity> <id> <kind>')
+    .description("Attester l'applicabilite d'un item de memoire : trap|decision|constraint, kind = confirm|infirm|saved_me|misled_me")
+    .option('--evidence <ref>', 'Preuve : fichier:ligne, sha de commit, sortie de commande (OBLIGATOIRE pour confirm)')
+    .option('--note <text>', 'Le « pourquoi » en une ligne')
+    .option('--json', 'Sortie JSON')
+    .action((entity: string, id: string, kind: string, options: { evidence?: string; note?: string; json?: boolean }) => {
+      runMemoryConfirm({ entity, id, kind, evidence: options.evidence, note: options.note, json: options.json });
     });
 }
