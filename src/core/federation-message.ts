@@ -14,17 +14,17 @@ export const FederationMessageSchema = z.object({
     agent_name: z.string(),
     agent_id: z.string().optional(),
     host_id: z.string().optional(),
-  }),
+  }).strict(),
   to: z.object({
     project_name: z.string(),
     project_path: z.string(),
     agent_name: z.string().optional(),
-  }),
-  type: z.enum(['signal', 'handoff', 'candidate', 'runtime_note', 'board_snapshot']),
-  payload: z.unknown(),
+  }).strict(),
+  type: z.enum(['handoff', 'candidate', 'runtime_note']),
+  payload: z.record(z.string(), z.unknown()),
   created_at: z.string(),
   causal_parent: z.string().optional(),
-});
+}).strict();
 
 export type FederationMessage = z.infer<typeof FederationMessageSchema>;
 

@@ -16,7 +16,6 @@ import { loadState, persistState } from './state.js';
 import { createRuntimeEvent } from './events.js';
 import { latestActivityMs, readHeartbeat } from './runtime-signals.js';
 import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
-import { maybeEnqueueClaimTransition, isFederationEnqueueActive } from './federation-outbox.js';
 
 /** Parse duration string like '4h', '30m' to ms. */
 function parseTtl(value: string): number {
@@ -79,7 +78,7 @@ function loadClaimFromAnyDir(id: string, cwd?: string): Claim {
 function saveClaimUnlocked(
   claim: Claim,
   cwd?: string,
-  options?: { refreshCompanions?: boolean; federation?: { suppressEnqueue?: boolean } },
+  options?: { refreshCompanions?: boolean },
 ): void {
   ensureClaimsDir(cwd);
   const store = writeClaimStore(cwd);
@@ -87,21 +86,9 @@ function saveClaimUnlocked(
   // pln#568 (I2): journal the post-image BEFORE the projection write, so a
   // crash can only leave the journal ahead of the projection, never behind.
   const created = !store.exists(parsed.id);
-  // Federation (pln#101): capture the PREVIOUS status BEFORE the write so we can
-  // diff it after (create or active↔terminal transition ⇒ enqueue for cloud
-  // sync). Only pay the prev-load when federation is actually active; this whole
-  // block runs under the store mutation mutex, which serializes rev reservation.
-  const fedActive = isFederationEnqueueActive(cwd, options?.federation?.suppressEnqueue);
-  let fedPrevStatus: Claim['status'] | undefined;
-  if (fedActive) {
-    try { fedPrevStatus = loadClaimFromAnyDir(parsed.id, cwd).status; } catch { fedPrevStatus = undefined; }
-  }
   emitRegistryPostImage('claim', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
   registryFaultPoint('after_registry_journal');
   store.save(parsed);
-  if (fedActive) {
-    maybeEnqueueClaimTransition(parsed, fedPrevStatus, fedPrevStatus === undefined, cwd, options?.federation?.suppressEnqueue);
-  }
   const writeDir = claimsDir(cwd, 'write');
   for (const dirPath of claimDirs(cwd)) {
     if (dirPath === writeDir) continue;
