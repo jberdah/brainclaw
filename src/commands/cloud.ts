@@ -1,19 +1,32 @@
 /**
- * `brainclaw cloud status` — surface observable de l'état de connexion (pln#651 étape 3).
+ * `brainclaw cloud connect / status / disconnect` — fédération v2 (pln#651 étapes 3 et 4).
  *
- * `connect` et `disconnect` appartiennent à l'étape 4 : ce sont des CÉRÉMONIES DE CLÉS,
- * pas de simples écritures d'état. Les livrer ici, avant l'attestation, produirait un
- * enrôlement « simple » qu'il faudrait refaire — et imposerait de réenrôler tout le monde
- * (RFC §5.2). `status` est la seule des trois qui ne mute rien, donc la seule qui puisse
- * exister avant.
+ * `connect` n'est pas une écriture de configuration : c'est une CÉRÉMONIE DE CLÉS. Elle
+ * réclame une invitation, prouve la possession de l'identité Ed25519, atteste la clé de
+ * chiffrement X25519 de l'appareil, puis attend une approbation humaine qui compare des
+ * empreintes. Ce qui la rend indissociable de la distribution des clés est écrit dans
+ * src/core/federation-pairing.ts.
  *
- * POURQUOI CETTE COMMANDE EST LE CRITÈRE DE SORTIE ET NON UN CONFORT : dec#154 exige que
- * l'état de sync soit VISIBLE. Un état pending/synced/conflict que seul le code consulte
- * transformerait le relais cloud en autorité silencieuse.
+ * L'HUMAIN NE COPIE QU'UN CODE D'INVITATION, et compare deux empreintes. Aucune clé
+ * d'API, aucun PEM, aucun agent_id, aucune variable d'environnement (dec#8).
+ *
+ * dec#154 exige que l'état de sync soit VISIBLE : un état pending/synced/conflict que seul
+ * le code consulte transformerait le relais cloud en autorité silencieuse. C'est ce que
+ * `status` rend.
  */
 
-import { summarizeConnection } from '../core/federation-state.js';
+import { summarizeConnection, loadConnectionState, saveConnectionState } from '../core/federation-state.js';
+import { forgetProjectEpochs } from '../core/federation-keyring.js';
+import {
+  beginPairing,
+  checkPairingApproval,
+  completePairing,
+  requestRevocation,
+  PairingError,
+  type PairingTransport,
+} from '../core/federation-pairing.js';
 import { resolveEffectiveCwd } from '../core/store-resolution.js';
+import { nowISO } from '../core/ids.js';
 
 export interface CloudStatusOptions {
   json?: boolean;
@@ -57,4 +70,193 @@ export function runCloudStatus(options: CloudStatusOptions = {}): void {
     // présenté, avec une proposition, et attend une décision.
     console.log(`  ${summary.sync.conflict} opération(s) en conflit attendent une résolution explicite.`);
   }
+}
+
+// ── Transport HTTP ────────────────────────────────────────────────────────────
+
+/**
+ * Transport réel. Injecté partout ailleurs pour que la cérémonie soit exerçable sans
+ * réseau — les tests font tourner un cloud simulé qui VÉRIFIE réellement les signatures,
+ * ce qu'un serveur acceptant tout ne prouverait pas.
+ */
+export function httpTransport(baseUrl: string): PairingTransport {
+  const url = (p: string): string => `${baseUrl.replace(/\/+$/, '')}${p}`;
+  const call = async (
+    method: 'POST' | 'GET',
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: Record<string, unknown> }> => {
+    const res = await fetch(url(path), {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    // Une réponse non-JSON (page d'erreur de proxy, 502 HTML) ne doit pas lever une
+    // exception de parsing qui masquerait le vrai statut HTTP — c'est lui qui porte
+    // l'information utile.
+    let parsed: Record<string, unknown> = {};
+    try { parsed = (await res.json()) as Record<string, unknown>; } catch { /* corps non-JSON */ }
+    return { status: res.status, body: parsed };
+  };
+  return {
+    post: (path, body) => call('POST', path, body),
+    get: (path) => call('GET', path),
+  };
+}
+
+// ── connect ───────────────────────────────────────────────────────────────────
+
+export interface CloudConnectOptions {
+  inviteCode: string;
+  url: string;
+  agentId: string;
+  cwd?: string;
+  json?: boolean;
+  /** Injecté par les tests ; en usage réel le transport HTTP est construit ici. */
+  transport?: PairingTransport;
+}
+
+export async function runCloudConnect(options: CloudConnectOptions): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const transport = options.transport ?? httpTransport(options.url);
+
+  let handle;
+  try {
+    handle = await beginPairing({
+      inviteCode: options.inviteCode,
+      agentId: options.agentId,
+      transport,
+      cwd,
+    });
+  } catch (err) {
+    if (err instanceof PairingError) {
+      console.error(`Appairage interrompu à l'étape « ${err.stage} » : ${err.message}`);
+      // Fail-closed : un appairage refusé ne laisse aucune trace locale, donc relancer la
+      // commande est sûr et ne laisse pas d'orphelin à nettoyer.
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      enrollment_id: handle.enrollment_id,
+      cloud_project_id: handle.cloud_project_id,
+      device_id: handle.device.device_id,
+      fingerprints: handle.fingerprints,
+      awaiting: 'human_approval',
+    }, null, 2));
+    return;
+  }
+
+  console.log('Preuve de possession acceptée. Attestation de clé enregistrée.');
+  console.log('');
+  console.log('  Projet cloud : ' + handle.cloud_project_id);
+  console.log('  Enrôlement   : ' + handle.enrollment_id);
+  console.log('');
+  // CES DEUX EMPREINTES SONT LE CŒUR DE LA CÉRÉMONIE. La personne qui approuve voit les
+  // mêmes à l'écran ; leur comparaison hors bande est ce qui ferme l'attaque de l'homme
+  // du milieu sur l'appairage. Affichées EN ENTIER, pas tronquées : une comparaison sur
+  // 16 caractères se collisionne bien plus facilement qu'elle n'en a l'air.
+  console.log("  Empreinte d'identité     (Ed25519) : " + handle.fingerprints.identity);
+  console.log('  Empreinte de chiffrement (X25519)  : ' + handle.fingerprints.encryption);
+  console.log('');
+  console.log('  → Faites vérifier CES DEUX EMPREINTES par la personne qui approuve.');
+  console.log("    Si elles diffèrent de ce qu'elle voit, REFUSEZ : quelqu'un s'est interposé.");
+  console.log('');
+  console.log("  En attente d'approbation humaine. Constatez-la avec : brainclaw cloud await");
+}
+
+// ── attente d'approbation ─────────────────────────────────────────────────────
+
+export interface CloudAwaitOptions {
+  url: string;
+  cwd?: string;
+  transport?: PairingTransport;
+}
+
+/**
+ * Constate l'approbation et bascule l'état local en actif.
+ *
+ * SÉPARÉ DE `connect` : l'approbation dépend d'un humain, dont le délai n'est pas borné.
+ * Une commande qui bloquerait indéfiniment sur un tiers serait un mauvais citoyen dans un
+ * script, et un appairage interrompu par un Ctrl-C doit rester reprenable.
+ */
+export async function runCloudAwait(options: CloudAwaitOptions): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const state = loadConnectionState(cwd);
+  if (!state?.enrollment.enrollment_id) {
+    console.error("Aucun appairage en cours sur ce workspace. Lancez d'abord : brainclaw cloud connect");
+    process.exitCode = 1;
+    return;
+  }
+
+  const transport = options.transport ?? httpTransport(options.url);
+  const result = await checkPairingApproval({ enrollmentId: state.enrollment.enrollment_id, transport, cwd });
+
+  if (!result.approved) {
+    console.log(`Toujours en attente (état distant : ${result.state}).`);
+    return;
+  }
+
+  const next = completePairing({ role: result.role, cwd });
+  console.log(`Appairage approuvé. Rôle : ${next.enrollment.role ?? '—'}.`);
+  console.log('');
+  // Le premier pull est en LECTURE SEULE et non destructif (RFC §5.2 phase 4) : rien
+  // n'est matérialisé dans la mémoire locale tant que la vérification d'origine n'existe
+  // pas. Le dire évite qu'on croie la synchronisation déjà active.
+  console.log("  Aucune donnée n'est encore matérialisée : la vérification à la réception");
+  console.log("  (signature d'origine, anti-rejeu) est livrée à l'étape suivante.");
+}
+
+// ── disconnect ────────────────────────────────────────────────────────────────
+
+export interface CloudDisconnectOptions {
+  url: string;
+  cwd?: string;
+  transport?: PairingTransport;
+  forgetKeys?: boolean;
+}
+
+export async function runCloudDisconnect(options: CloudDisconnectOptions): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const state = loadConnectionState(cwd);
+  if (!state) {
+    console.log("Ce workspace n'est pas appairé — rien à déconnecter.");
+    return;
+  }
+
+  let revocationNote = "aucune révocation distante demandée (pas d'enrôlement connu)";
+  if (state.enrollment.enrollment_id) {
+    const transport = options.transport ?? httpTransport(options.url);
+    const res = await requestRevocation({ enrollmentId: state.enrollment.enrollment_id, transport });
+    revocationNote = res.revoked
+      ? 'autorisation distante révoquée'
+      : `révocation distante NON confirmée (${res.detail ?? 'raison inconnue'})`;
+  }
+
+  // L'état local passe en 'revoked' MÊME SI le cloud est injoignable : sinon un appareil
+  // perdu resterait autorisé faute de réseau, exactement l'inverse de ce qu'une
+  // révocation doit garantir.
+  saveConnectionState(
+    { ...state, enrollment: { ...state.enrollment, stage: 'revoked', updated_at: nowISO() } },
+    cwd,
+  );
+
+  let keysNote = "trousseau conservé (utilisez --forget-keys pour l'effacer)";
+  if (options.forgetKeys) {
+    const removed = forgetProjectEpochs(state.cloud_project_id);
+    keysNote = `${removed} clé(s) d'epoch effacée(s) — le passé scellé de ce projet devient illisible ici`;
+  }
+
+  console.log('Déconnecté.');
+  console.log(`  ${revocationNote}`);
+  console.log(`  ${keysNote}`);
+  console.log('');
+  // Énoncé plutôt que tu : prétendre l'inverse serait une promesse que la cryptographie
+  // ne tient pas (RFC §5.2).
+  console.log("  Ce qui N'EST PAS effacé : les données déjà tirées et déchiffrées localement,");
+  console.log("  et ce que d'autres appareils détiennent déjà. Un disconnect retire une");
+  console.log('  autorisation ; il ne réécrit pas le passé.');
 }
