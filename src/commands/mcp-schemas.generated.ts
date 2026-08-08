@@ -348,8 +348,7 @@ export const generatedSchemas = {
     },
     "required": [
       "text"
-    ],
-    "additionalProperties": false
+    ]
   },
   "QuickCaptureRequest": {
     "type": "object",
@@ -383,8 +382,7 @@ export const generatedSchemas = {
     },
     "required": [
       "text"
-    ],
-    "additionalProperties": false
+    ]
   },
   "CreateSequenceRequest": {
     "type": "object",
@@ -453,7 +451,8 @@ export const generatedSchemas = {
             }
           },
           "required": [
-            "planId"
+            "planId",
+            "rank"
           ],
           "additionalProperties": false,
           "description": "Sequence lane item. planId is required; stepId optionally narrows dispatch/readiness to a specific plan step."
@@ -478,8 +477,7 @@ export const generatedSchemas = {
     },
     "required": [
       "name"
-    ],
-    "additionalProperties": false
+    ]
   },
   "UpdateSequenceRequest": {
     "type": "object",
@@ -552,7 +550,8 @@ export const generatedSchemas = {
             }
           },
           "required": [
-            "planId"
+            "planId",
+            "rank"
           ],
           "additionalProperties": false,
           "description": "Sequence lane item. planId is required; stepId optionally narrows dispatch/readiness to a specific plan step."
@@ -577,7 +576,6 @@ export const generatedSchemas = {
     },
     "required": [
       "id"
-    ],
-    "additionalProperties": false
+    ]
   }
 } as const;

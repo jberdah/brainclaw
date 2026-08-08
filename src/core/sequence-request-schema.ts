@@ -36,11 +36,14 @@ export const SequenceItemInputSchema = z
       .min(1)
       .describe('Optional plan step ID inside planId for step-level dispatch/readiness.')
       .optional(),
+    // REQUIS, comme dans le schema d'origine. Le rendre optionnel etait un
+    // ASSOUPLISSEMENT du contrat — un appel sans rank aurait ete accepte par le schema
+    // publie puis rejete plus loin. La garde de gouvernance l'a detecte via le
+    // fingerprint.
     rank: z
       .number()
       .min(1)
-      .describe('Positive integer ordering key. Ranks must be unique within a sequence.')
-      .optional(),
+      .describe('Positive integer ordering key. Ranks must be unique within a sequence.'),
     hard_after: z
       .array(z.string())
       .describe('Sequence item planId values that must complete before this item becomes ready.')
