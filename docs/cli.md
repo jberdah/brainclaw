@@ -2226,9 +2226,53 @@ itself incremented would reassure precisely when you are checking because you do
 epochs the state declares: a partial backup restore leaves that exact disagreement, and
 the honest answer is what can actually be decrypted here.
 
-`connect` and `disconnect` are not implemented yet — they are key ceremonies (attested
-X25519 enrollment, proof of possession, human approval), delivered with the pairing work.
-Until then a workspace reports `unpaired`, and **nothing syncs**: unlike federation v1,
-no environment variable can enable egress by its mere presence.
+### `brainclaw cloud connect <invite-code> --url <url> --agent <id>`
+
+Join a cloud project. This is a **key ceremony**, not a config write: it claims the invite,
+proves possession of this agent's Ed25519 identity, and attests the device's X25519
+encryption key with that same identity.
+
+| Option | Description |
+|---|---|
+| `--url <url>` | Cloud deployment address (required) |
+| `--agent <id>` | Opaque agent identifier to enroll, 4–64 chars (required) |
+| `--json` | Output as JSON |
+
+The human copies **only the invite code**, then compares **two fingerprints** with what the
+approver sees on their screen. No API key, no PEM, no agent_id, no environment variable
+(dec#8). Both fingerprints are printed in full, never truncated — a 16-character comparison
+collides far more easily than it looks.
+
+The attestation is what stops a **phantom member**. Without it, the Cloud — which
+orchestrates the pairing — could insert its own key into the envelope list: end-to-end
+encryption whose key exchange is arbitrated by the very party it claims to neutralize.
+
+A refused pairing writes **nothing** locally, so re-running is safe and leaves no orphan.
+
+### `brainclaw cloud await --url <url>`
+
+Observe the human approval and activate the local pairing.
+
+Deliberately a **separate command**: approval depends on a person, whose delay is not
+bounded. A command that blocked indefinitely on a third party would be a poor citizen in a
+script, and an interrupted pairing must stay resumable. Polling does **not** mutate local
+state — reading a status must never change the workspace.
+
+### `brainclaw cloud disconnect --url <url>`
+
+Remove the local authorization and request remote revocation.
+
+| Option | Description |
+|---|---|
+| `--url <url>` | Cloud deployment address (required) |
+| `--forget-keys` | Also erase this project's epoch keys — its sealed past becomes unreadable here |
+
+Local state flips to revoked **even if the cloud is unreachable**: otherwise a lost device
+would stay authorized for want of a network, the opposite of what revocation must
+guarantee.
+
+What disconnect does **not** do, stated rather than left implied: it does not erase data
+already pulled and decrypted locally, nor what other devices already hold. It withdraws an
+authorization; it does not rewrite the past (RFC §5.2).
 
 This keeps end-user installs aware of published npm releases without requiring a local tarball channel. To keep beta testers on a different channel, set `brainclaw_update_source` to `type: npm` with a different `dist_tag`, such as `prelaunch`.

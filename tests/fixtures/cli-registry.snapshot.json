@@ -1047,6 +1047,93 @@
     "arguments": [],
     "options": [
       {
+        "flags": "--url <url>",
+        "long": "--url",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud await"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "invite-code",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <id>",
+        "long": "--agent",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--url <url>",
+        "long": "--url",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud connect"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--forget-keys",
+        "long": "--forget-keys",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--url <url>",
+        "long": "--url",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud disconnect"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
         "flags": "--json",
         "long": "--json",
         "mandatory": false,
