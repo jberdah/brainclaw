@@ -6,7 +6,7 @@ import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
-import { memoryDir } from './io.js';
+import { memoryDir, entityRecordDirs, entityRecordPaths, ENTITY_DIR_MAP } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 
@@ -111,7 +111,7 @@ export function resolveEventSessionId(event: { session_id?: string; metadata?: R
  * Checks sessions/ directory first, falls back to legacy .current-session.
  */
 export function loadCurrentSession(cwd?: string): CurrentSessionState | undefined {
-  const dir = sessionsDir(cwd);
+  const dirs = sessionsReadDirs(cwd);
   const currentUser = resolveCurrentUser();
   const currentAgent = resolveCurrentAgentName();
   const explicitSessionId = resolveExplicitSessionId();
@@ -126,13 +126,18 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
   // 1. Look in sessions/ directory for the session owned by this process.
   // Multiple parallel agents can have the same agent name/user in one repo;
   // a live different PID is a different agent instance, not our session.
-  if (fs.existsSync(dir) && currentAgent) {
-    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  if (currentAgent) {
+    // Les DEUX dispositions, canonique d'abord : un record ecrit avant la migration
+    // etait invisible a son propre chargeur, et c'est ce qui rendait un `active_project`
+    // introuvable alors qu'il existait sur disque.
+    const files = dirs
+      .filter((d) => fs.existsSync(d))
+      .flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => path.join(d, f)));
     const legacyPidlessCandidates: CurrentSessionState[] = [];
 
-    for (const file of files) {
+    for (const filepath of files) {
       try {
-        const session = loadSessionFile(path.join(dir, file));
+        const session = loadSessionFile(filepath);
         // Strict match: agent name must match, user must match (when both are known)
         if (session.agent !== currentAgent) continue;
         const userMatch = !session.user || !currentUser || session.user === currentUser;
@@ -176,8 +181,8 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
  * Load a specific session by ID.
  */
 export function loadSessionById(sessionId: string, cwd?: string): CurrentSessionState | undefined {
-  const filepath = sessionFilePath(sessionId, cwd);
-  if (!fs.existsSync(filepath)) return undefined;
+  const filepath = findSessionFile(sessionId, cwd);
+  if (!filepath) return undefined;
   try {
     const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
     return {
@@ -193,35 +198,47 @@ export function loadSessionById(sessionId: string, cwd?: string): CurrentSession
  * Load ALL sessions (active + stale) from the sessions/ directory.
  */
 export function loadAllSessions(cwd?: string): CurrentSessionState[] {
-  const dir = sessionsDir(cwd);
-  if (!fs.existsSync(dir)) return [];
-
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-  const sessions: CurrentSessionState[] = [];
-  for (const file of files) {
-    try {
-      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
-      sessions.push({
-        ...CurrentSessionStateSchema.parse(migration.document),
-        schema_version: migration.metadata.currentVersion,
-      });
-    } catch {
-      // skip invalid
+  // DEDUPLIQUE PAR ID, canonique d'abord : un store a mi-migration peut porter le meme
+  // record des deux cotes, et le compter deux fois ferait apparaitre des agents fantomes
+  // dans `brainclaw who`.
+  const byId = new Map<string, CurrentSessionState>();
+  for (const dir of sessionsReadDirs(cwd)) {
+    if (!fs.existsSync(dir)) continue;
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.json'))) {
+      try {
+        const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
+        const parsed = {
+          ...CurrentSessionStateSchema.parse(migration.document),
+          schema_version: migration.metadata.currentVersion,
+        };
+        if (!byId.has(parsed.session_id)) byId.set(parsed.session_id, parsed);
+      } catch {
+        // skip invalid
+      }
     }
   }
-  return sessions.sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at));
+  return [...byId.values()].sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at));
 }
 
 /**
  * Save a session to the sessions/ directory.
  */
 export function saveCurrentSession(session: CurrentSessionState, cwd?: string): void {
-  const dir = sessionsDir(cwd);
+  const dir = sessionsWriteDir(cwd);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
   const filepath = sessionFilePath(session.session_id, cwd);
   saveVersionedJsonFile('current_session', filepath, CurrentSessionStateSchema.parse(session));
+
+  // SAVE-CONVERGE : une copie du meme record dans l'ancienne disposition est SUPPRIMEE.
+  // La laisser signifierait deux verites pour un seul id, dont la plus ancienne peut
+  // encore etre lue par un chemin qu'on aurait oublie de migrer — le motif deja retenu
+  // pour les assignments et les sequences en 1.21.0.
+  for (const stale of entityRecordPaths('sessions', session.session_id, cwd ?? process.cwd())) {
+    if (path.resolve(stale) === path.resolve(filepath)) continue;
+    try { fs.unlinkSync(stale); } catch { /* absent : rien a converger */ }
+  }
 }
 
 /**
@@ -230,8 +247,11 @@ export function saveCurrentSession(session: CurrentSessionState, cwd?: string): 
 export function clearCurrentSession(cwd?: string, sessionId?: string): void {
   if (sessionId) {
     // Remove specific session file
-    const filepath = sessionFilePath(sessionId, cwd);
-    try { fs.unlinkSync(filepath); } catch { /* ignore */ }
+    // Effacer dans les DEUX dispositions : n'en nettoyer qu'une laisserait une session
+    // « fermee » encore chargeable depuis l'autre.
+    for (const filepath of entityRecordPaths('sessions', sessionId, cwd ?? process.cwd())) {
+      try { fs.unlinkSync(filepath); } catch { /* ignore */ }
+    }
     return;
   }
 
@@ -252,28 +272,30 @@ export function clearCurrentSession(cwd?: string, sessionId?: string): void {
  * Returns the number of sessions removed.
  */
 export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
-  const dir = sessionsDir(cwd);
-  if (!fs.existsSync(dir)) return 0;
-
   const ttlMs = parseDurationToMs(ttlOverride ?? loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
   const now = Date.now();
   let removed = 0;
 
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-  for (const file of files) {
+  // Le GC doit balayer les DEUX dispositions, sinon les records legacy s'accumulent
+  // indefiniment : personne ne les lit plus, et personne ne les efface non plus.
+  const files = sessionsReadDirs(cwd)
+    .filter((d) => fs.existsSync(d))
+    .flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => path.join(d, f)));
+
+  for (const filepath of files) {
     try {
-      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
+      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
       const session = {
         ...CurrentSessionStateSchema.parse(migration.document),
         schema_version: migration.metadata.currentVersion,
       };
       if (now - Date.parse(session.last_seen_at) > ttlMs) {
-        fs.unlinkSync(path.join(dir, file));
+        fs.unlinkSync(filepath);
         removed++;
       }
     } catch {
       // Remove unparseable files too
-      try { fs.unlinkSync(path.join(dir, file)); removed++; } catch { /* ignore */ }
+      try { fs.unlinkSync(filepath); removed++; } catch { /* ignore */ }
     }
   }
   return removed;
@@ -281,12 +303,47 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
 
 // --- Internal helpers ---
 
-function sessionsDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), SESSIONS_DIR);
+/**
+ * Repertoire d'ECRITURE des records de session : le CANONIQUE, toujours.
+ *
+ * POURQUOI CE CHANGEMENT (pln#648 SUITE a). Ce module ecrivait dans la disposition
+ * LEGACY (`.brainclaw/sessions/`) tandis que le reste du produit avait migre vers
+ * `coordination/sessions/`. Mesure sur le store de l'auteur au moment du correctif :
+ * 182 records d'un cote, 1030 de l'autre. `session-start.ts` definissait en plus SA
+ * PROPRE version via `resolveEntityDir(..., 'read')`, une heuristique qui repond a la
+ * question « ou vivent generalement ces records » — donc DEUX ecrivains pour un meme
+ * record, et un `active_project` qui pouvait atterrir dans l'une ou l'autre.
+ *
+ * C'est le second vecteur de divergence de pln#648 : le premier faisait deplacer la
+ * verite a chaque switch, celui-ci la dedoublait.
+ */
+function sessionsWriteDir(cwd?: string): string {
+  return path.join(memoryDir(cwd), ENTITY_DIR_MAP['sessions'] ?? SESSIONS_DIR);
 }
 
+/**
+ * Repertoires de LECTURE — les deux dispositions, canonique d'abord.
+ *
+ * Un store a mi-migration porte des records des deux cotes ; ne lire qu'un seul rendait
+ * l'autre INVISIBLE a son propre chargeur. C'est exactement le defaut que pln#649 a
+ * ferme pour les assignments, agent_runs, claims et sequences — la meme primitive est
+ * reutilisee ici plutot qu'une troisieme heuristique locale.
+ */
+function sessionsReadDirs(cwd?: string): string[] {
+  return entityRecordDirs('sessions', cwd ?? process.cwd());
+}
+
+/** Chemin d'ECRITURE d'un record. */
 function sessionFilePath(sessionId: string, cwd?: string): string {
-  return path.join(sessionsDir(cwd), `${sessionId}.json`);
+  return path.join(sessionsWriteDir(cwd), `${sessionId}.json`);
+}
+
+/** Premier chemin EXISTANT pour un id, toutes dispositions confondues. */
+function findSessionFile(sessionId: string, cwd?: string): string | undefined {
+  for (const candidate of entityRecordPaths('sessions', sessionId, cwd ?? process.cwd())) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 function resolveCurrentUser(): string | undefined {

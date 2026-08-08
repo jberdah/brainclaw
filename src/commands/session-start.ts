@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { memoryExists, resolveEntityDir } from '../core/io.js';
+import { memoryExists, memoryDir, ENTITY_DIR_MAP } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, resolveCurrentModel, resolveOrAutoRegisterAgentIdentity } from '../core/agent-registry.js';
@@ -27,8 +27,21 @@ import { maybeCreateCheckpoint } from '../core/events/checkpoint.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
 import { materializeFederationSignal } from '../core/federation-materialize.js';
 
+/**
+ * Repertoire d'ECRITURE des snapshots de session : le CANONIQUE, comme identity.ts.
+ *
+ * POURQUOI CE N'EST PLUS `resolveEntityDir(..., 'read')` (pln#648 SUITE a). Cette
+ * fonction repond a « ou vivent GENERALEMENT ces records » par une heuristique de
+ * contenu — une question de REPERTOIRE, posee ici pour une question de FICHIER. Le
+ * resultat basculait d'une disposition a l'autre selon ce qui avait du contenu, alors
+ * qu'`identity.ts` ecrivait, lui, ailleurs. Mesure sur le store de l'auteur : 182 records
+ * d'un cote, 1030 de l'autre.
+ *
+ * Les deux ecrivains visent desormais le meme repertoire. La LECTURE, elle, couvre les
+ * deux dispositions (entityRecordPaths) — c'est la primitive que pln#649 a etablie.
+ */
 function sessionsDir(cwd?: string): string {
-  return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
+  return path.join(memoryDir(cwd ?? process.cwd()), ENTITY_DIR_MAP['sessions'] ?? 'sessions');
 }
 
 function sessionSnapshotPath(sessionId: string, cwd?: string): string {
