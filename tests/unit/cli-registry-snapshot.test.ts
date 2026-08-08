@@ -276,6 +276,11 @@ describe('CLI registry baseline (pln#622 campaign freeze)', () => {
       'loop',
       'reply',
       'run',
+      // Après le manifeste figé : les commandes introduites APRÈS le split ne sont pas
+      // dans ORIGINAL_COMMAND_ORDER et le tri stable les place donc à la suite, dans
+      // leur ordre d'enregistrement. Ce qui est gelé ici est le PRÉFIXE hérité du
+      // monolithe, pas l'interdiction d'ajouter une commande.
+      'cloud', // pln#651 étape 3 — fédération v2 (`cloud status`)
     ];
     const { topLevelOrder } = dumpRegistry();
     assert.deepEqual(
