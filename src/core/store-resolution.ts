@@ -152,6 +152,26 @@ export interface ResolvedEffectiveCwd {
     path: string;
     name?: string;
   };
+  /**
+   * Renseigne quand un record de session TROUVABLE porte un `active_project` que le
+   * resolveur n'a PAS retenu (pln#648 SUITE d).
+   *
+   * POURQUOI CE CHAMP EXISTE. Le defaut d'origine n'etait pas qu'un lecteur se trompait :
+   * c'est que DEUX lecteurs pouvaient rendre des verdicts differents sur le MEME record
+   * sans que personne ne le voie. `switch` affichait « api » pendant que l'ecriture
+   * partait dans « web ». La convergence des lecteurs (1.21.0) supprime le cas reproduit ;
+   * ce champ supprime le SILENCE — une divergence residuelle laisse desormais une trace.
+   *
+   * Il est OBSERVATIONNEL et ne change aucune resolution : le resolveur a deja tranche,
+   * et re-trancher ici reintroduirait exactement l'ambiguite qu'on ferme.
+   */
+  session_divergence?: {
+    /** Ce que le record de session designait. */
+    session_project_path: string;
+    session_project_name?: string;
+    /** Le selecteur qui a effectivement gagne. */
+    resolved_via: EffectiveCwdSource;
+  };
 }
 
 /**
@@ -177,8 +197,21 @@ export function resolveEffectiveCwd(
  * Resolve the effective cwd and explain which selector won. Use this for MCP
  * facades that must echo their project scope to avoid silent cross-project reads.
  */
-export function resolveEffectiveCwdInfo(
-  options: ResolveEffectiveCwdOptions = {},
+/**
+ * Observation collectee PENDANT la resolution, sans lecture disque supplementaire.
+ *
+ * La sonde de session lit deja le record ; on retient simplement ce qu'elle a vu, y
+ * compris quand elle l'a REJETE (identite faible, chemin invalide). C'est precisement ce
+ * cas rejete-puis-supplante qui produit la divergence dangereuse — « la session dit api,
+ * le pointeur global a impose web ».
+ */
+interface ResolutionObservation {
+  sessionProject?: { path: string; name?: string };
+}
+
+function resolveEffectiveCwdInner(
+  options: ResolveEffectiveCwdOptions,
+  observed: ResolutionObservation,
 ): ResolvedEffectiveCwd {
   const baseCwd = path.resolve(options.baseCwd ?? process.cwd());
 
@@ -268,9 +301,16 @@ export function resolveEffectiveCwdInfo(
     // A named id is an exact-file lookup, so the record IS the one asked for; the
     // pid check covers the unnamed case. Anything else is a weak adoption.
     if (opts?.requireStrongIdentity && !explicitSessionId && session.pid !== process.pid) {
+      // Observe avant de rejeter : une session d'un AUTRE processus qui designe un autre
+      // projet est exactement le cas ou une ecriture peut partir ailleurs en silence.
+      const weak = session.active_project;
+      if (weak && !observed.sessionProject) observed.sessionProject = { path: weak.path, name: weak.name };
       return undefined;
     }
     const sp = session.active_project;
+    // Retenu AVANT le controle d'adoption : un record trouvable qui designe un projet
+    // compte comme observation meme quand il n'est pas retenu.
+    if (sp && !observed.sessionProject) observed.sessionProject = { path: sp.path, name: sp.name };
     if (sp && fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
       return { cwd: sp.path, active_source: 'session', resolved_project: { path: sp.path, name: sp.name } };
     }
@@ -367,6 +407,33 @@ export function resolveEffectiveCwdInfo(
 
   // 7. Default
   return { cwd: anchorCwd, active_source: 'cwd', resolved_project: projectInfo(anchorCwd) };
+}
+
+/**
+ * Point d'entree unique de la resolution (pln#648 SUITE d).
+ *
+ * Enrichit le verdict d'un signal de divergence quand un record de session trouvable
+ * designait un AUTRE projet que celui retenu. Le calcul est purement local : la sonde a
+ * deja lu le record, aucune lecture disque n'est ajoutee.
+ */
+export function resolveEffectiveCwdInfo(
+  options: ResolveEffectiveCwdOptions = {},
+): ResolvedEffectiveCwd {
+  const observed: ResolutionObservation = {};
+  const result = resolveEffectiveCwdInner(options, observed);
+
+  const seen = observed.sessionProject;
+  if (!seen || result.active_source === 'session') return result;
+  if (path.resolve(seen.path) === path.resolve(result.cwd)) return result;
+
+  return {
+    ...result,
+    session_divergence: {
+      session_project_path: seen.path,
+      session_project_name: seen.name,
+      resolved_via: result.active_source,
+    },
+  };
 }
 
 function projectInfo(cwd: string): { path: string; name?: string } {
