@@ -556,7 +556,6 @@ export interface TurnInput {
   slot_id?: string;
   role?: string;
   input?: string;
-  dispatch?: boolean;
   assignment_id?: string;
   /**
    * pln#562 step 4 — claim that binds this turn to a dispatched INSTANCE.
