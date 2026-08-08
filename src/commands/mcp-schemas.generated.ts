@@ -348,8 +348,7 @@ export const generatedSchemas = {
     },
     "required": [
       "text"
-    ],
-    "additionalProperties": false
+    ]
   },
   "QuickCaptureRequest": {
     "type": "object",
@@ -383,7 +382,6 @@ export const generatedSchemas = {
     },
     "required": [
       "text"
-    ],
-    "additionalProperties": false
+    ]
   }
 } as const;
