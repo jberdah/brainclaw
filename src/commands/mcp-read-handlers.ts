@@ -812,7 +812,11 @@ function dispatchReadTool(
         ...(bounded.next_offset !== undefined ? { next_offset: bounded.next_offset } : {}),
         ...(bounded.omitted_for_size ? { omitted_for_size: bounded.omitted_for_size } : {}),
         ...(bounded.hint ? { hint: bounded.hint } : {}),
-        next_actions: nextActions,
+        // OMETTRE la cle plutot que rendre un tableau vide (pln#598 etape 4). La regle de
+        // src/core/next-actions.ts est explicite : « les appelants omettent entierement la
+        // cle quand le tableau est vide ». Un next_actions vide est le pire des deux
+        // mondes — le champ existe, ne dit rien, et apprend quand meme a l ignorer.
+        ...(nextActions.length ? { next_actions: nextActions } : {}),
       },
     };
   }
