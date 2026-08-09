@@ -188,6 +188,21 @@ function toWireBody(entry: OutboxEntry): Record<string, unknown> {
     origin_sig_payload_hash: '',
     origin_signer_fingerprint: env.origin_sig.key_id,
     meta,
+    // ── L'ENVELOPPE SIGNÉE, VERBATIM (dec#162) ──────────────────────────────────
+    //
+    // La signature de TRANSPORT ci-dessus prouve « cette opération s'applique à cette
+    // révision » ; elle ne prouve RIEN sur l'auteur du contenu. La signature d'AUTEUR
+    // (origin_sig sur meta‖sealed‖key_epoch, cf. buildEnvelope) est la seule qui le fasse —
+    // et `toWireBody` l'écrasait jusqu'ici en réutilisant le champ `origin_sig` pour le
+    // transport. Un lecteur (pull) ne pouvait donc pas vérifier qui a écrit l'enveloppe.
+    //
+    // On transporte l'enveloppe complète SANS LA TOUCHER. Le cloud la stocke telle quelle et
+    // la rend au pull ; le vérificateur y retrouve `origin_sig.value` d'auteur et
+    // recanonicalise meta/sealed lui-même (federation-inbound). Aucune donnée NOUVELLE ne
+    // fuit : `meta` partait déjà en clair au relais (ligne ci-dessus) — on ne fait que
+    // PERSISTER ce qui transitait déjà. Le champ n'entre pas dans la signature de transport :
+    // son intégrité est portée par la signature d'auteur qu'il contient.
+    envelope_json: JSON.stringify(entry.sealed),
   };
 }
 

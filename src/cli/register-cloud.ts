@@ -4,6 +4,7 @@ import {
   runCloudConnect,
   runCloudAwait,
   runCloudDisconnect,
+  runCloudPull,
   runCloudPush,
 } from '../commands/cloud.js';
 
@@ -50,6 +51,19 @@ export function registerCloudCommands(program: Command): void {
       }
     });
 
+  cloud
+    .command('pull')
+    .description('Tire le delta cloud, vérifie chaque enveloppe, puis matérialise les objets acceptés')
+    .option('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
+    .option('--limit <n>', 'Borne le delta reçu', (v: string) => Number.parseInt(v, 10))
+    .option('--json', 'Sortie JSON')
+    .action(async (options: { url?: string; limit?: number; json?: boolean }) => {
+      try {
+        await runCloudPull(options);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    });
   cloud
     .command('connect <url|code>')
     .description("Rejoint un projet cloud depuis l'URL d'activation ou un code ; attend ensuite l'approbation humaine")

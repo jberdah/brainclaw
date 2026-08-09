@@ -86,6 +86,46 @@ export function opaqueIdFor(
   return fresh;
 }
 
+/** Résout l'identifiant local correspondant à un opaque reçu du cloud. */
+export function localIdForOpaque(
+  cloudProjectId: string,
+  opaqueId: string,
+  cwd: string = process.cwd(),
+): string | undefined {
+  const prefix = `${cloudProjectId}/`;
+  for (const [key, value] of Object.entries(loadMap(cwd).entries)) {
+    if (key.startsWith(prefix) && value === opaqueId) return key.slice(prefix.length);
+  }
+  return undefined;
+}
+
+/**
+ * Enregistre le sens inverse du mapping après la création canonique de l'objet local.
+ * Refuse une incohérence au lieu de rattacher un opaque au mauvais objet.
+ */
+export function rememberOpaqueId(
+  cloudProjectId: string,
+  localId: string,
+  opaqueId: string,
+  cwd: string = process.cwd(),
+): void {
+  const map = loadMap(cwd);
+  const key = `${cloudProjectId}/${localId}`;
+  const current = map.entries[key];
+  if (current && current !== opaqueId) {
+    throw new Error(`Correspondance opaque incohérente pour ${localId}.`);
+  }
+  const prefix = `${cloudProjectId}/`;
+  const inverse = Object.entries(map.entries).find(([entryKey, value]) =>
+    entryKey.startsWith(prefix) && value === opaqueId && entryKey !== key,
+  );
+  if (inverse) throw new Error(`Opaque ${opaqueId} déjà rattaché à ${inverse[0].slice(prefix.length)}.`);
+  if (current === opaqueId) return;
+  map.entries[key] = opaqueId;
+  const file = mapPath(cwd);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeFileAtomic(file, `${JSON.stringify(map, null, 2)}\n`);
+}
 /** Nombre de correspondances connues — utile au diagnostic, jamais projeté. */
 export function opaqueMapSize(cloudProjectId: string, cwd: string = process.cwd()): number {
   const prefix = `${cloudProjectId}/`;
