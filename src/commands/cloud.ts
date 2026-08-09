@@ -542,9 +542,129 @@ export async function runCloudPull(options: CloudPullOptions = {}): Promise<void
     console.log(`  REJETÉES         : ${pulled.rejected.length}`);
     for (const item of pulled.rejected) console.log(`    ${item.idempotency_key ?? 'sans clé'} — ${item.reason}`);
   }
+  // Les remises de clés sont affichées SÉPARÉMENT des enveloppes : recevoir une clé et
+  // matérialiser un objet sont deux événements distincts, et les confondre laisserait
+  // croire qu'un pull « vide » n'a rien fait alors qu'il vient d'ouvrir tout un epoch.
+  if (pulled.epoch_keys_received?.length) {
+    console.log(`  clés d'epoch     : ${pulled.epoch_keys_received.join(', ')} — reçues et rangées`);
+  }
+  if (pulled.epoch_keys_rejected?.length) {
+    console.log(`  REMISES REFUSÉES : ${pulled.epoch_keys_rejected.length}`);
+    for (const item of pulled.epoch_keys_rejected) {
+      console.log(`    epoch ${item.epoch ?? '?'} — ${item.reason}: ${item.detail}`);
+    }
+  }
   console.log(`  curseur feed     : ${pulled.feed_cursor ?? 'inchangé'}`);
   console.log('');
   console.log(`  ⚠ ${pulled.roster_limitation}`);
+}
+
+export interface CloudGrantOptions {
+  cwd?: string;
+  url?: string;
+  /** Identifiant de l'appareil destinataire (sa clé X25519 attestée est la vraie cible). */
+  to: string;
+  /** Horizon : 'all' = tout l'historique détenu, 'current' = l'epoch courant seulement. */
+  horizon?: 'all' | 'current';
+  epochs?: number[];
+  json?: boolean;
+}
+
+/**
+ * `brainclaw cloud grant` — remet des clés d'epoch à un appareil approuvé (pln#658).
+ *
+ * ── L'HORIZON EST UN CHOIX EXPLICITE (dec#163 §1) ─────────────────────────────
+ * `--horizon all` pour un autre appareil DE LA MÊME PERSONNE (tout l'historique détenu) ;
+ * `--horizon current` pour un MEMBRE INVITÉ (à-partir-de-maintenant). Le défaut est
+ * `current` : le moins surprenant, et l'extension reste un acte délibéré et tracé.
+ *
+ * ── CE QUE CETTE COMMANDE NE PROMET PAS ───────────────────────────────────────
+ * Elle ne rend pas un epoch qu'on ne détient pas. Un epoch non détenu est SIGNALÉ comme
+ * ignoré, jamais silencieusement omis — sinon l'opérateur croirait le destinataire équipé.
+ */
+export async function runCloudGrant(options: CloudGrantOptions): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const state = loadConnectionState(cwd);
+  if (!state) throw new Error("Aucun appairage local : rien à remettre.");
+  const url = resolveCloudUrl(options.url, state);
+
+  const { grantEpochsToDevice } = await import('../core/federation-grant-transport.js');
+  const { heldEpochs } = await import('../core/federation-keyring.js');
+  const { resolveCurrentAgentIdentity } = await import('../core/agent-registry.js');
+
+  const held = heldEpochs(state.cloud_project_id);
+  if (held.length === 0) {
+    throw new Error(
+      "Cet appareil ne détient AUCUNE clé d'epoch : il ne peut rien remettre. " +
+      'Seul un détenteur actif est custodian (dec#163 §2).',
+    );
+  }
+  const epochs = options.epochs?.length
+    ? options.epochs
+    : options.horizon === 'all' ? held : [held[held.length - 1]!];
+
+  // La cible doit être RÉSOLUE contre le cloud (clé X25519 attestée), pas devinée. Sans
+  // attestation, une remise partirait vers une clé que personne ne contrôle.
+  const target = await resolveGrantTarget(url, state.cloud_project_id, options.to);
+
+  const identity = resolveCurrentAgentIdentity();
+  if (!identity) {
+    throw new Error(
+      "Aucune identité d'agent résolue sur cet appareil : un custodian SIGNE sa remise, " +
+      'sans quoi le destinataire la refusera (non_custodian).',
+    );
+  }
+  const outcome = await grantEpochsToDevice({
+    cwd, url, target, epochs,
+    custodianAgentId: identity.agent_id,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify({ ...outcome, horizon: options.horizon ?? 'current' }, null, 2));
+    return;
+  }
+  console.log(`Remise de clés vers ${options.to}`);
+  console.log(`  remis            : ${outcome.granted.length ? outcome.granted.join(', ') : 'aucun'}`);
+  if (outcome.skipped.length) {
+    console.log(`  IGNORÉS          : ${outcome.skipped.length}`);
+    for (const s of outcome.skipped) console.log(`    epoch ${s.epoch} — ${s.reason}`);
+  }
+  console.log('');
+  console.log("  ⚠ Le destinataire doit lancer `brainclaw cloud pull` pour ranger ces clés.");
+}
+
+/** Résout la cible depuis le roster attesté du cloud — jamais depuis une saisie humaine. */
+async function resolveGrantTarget(url: string, cloudProjectId: string, deviceId: string): Promise<{
+  deviceId: string; x25519PublicKeyPem: string; x25519Fingerprint: string;
+  active: boolean; attested: boolean; canRead: boolean; authorizedEpochs: readonly number[];
+}> {
+  const res = await fetch(
+    `${url.replace(/\/+$/, '')}/api/v1/projects/${encodeURIComponent(cloudProjectId)}/enrollments`,
+    { headers: { accept: 'application/json' } },
+  );
+  if (!res.ok) throw new Error(`Impossible de lire les appairages (HTTP ${res.status}).`);
+  const body = (await res.json()) as { enrollments?: Array<Record<string, unknown>> };
+  const row = (body.enrollments ?? []).find(
+    (e) => e['claimed_by_agent_id'] === deviceId || e['approved_agent_id'] === deviceId,
+  );
+  if (!row) throw new Error(`Aucun appairage trouvé pour '${deviceId}' dans ce projet.`);
+  if (row['state'] !== 'active') {
+    throw new Error(`L'appairage de '${deviceId}' n'est pas actif (${String(row['state'])}) — remise refusée.`);
+  }
+  const pem = typeof row['encryption_public_key_pem'] === 'string' ? row['encryption_public_key_pem'] : null;
+  const fp = typeof row['encryption_key_fingerprint'] === 'string' ? row['encryption_key_fingerprint'] : null;
+  if (!pem || !fp) {
+    throw new Error(
+      `'${deviceId}' n'a pas de clé de chiffrement attestée : rien ne peut lui être remis ` +
+      "tant que son appairage n'a pas été approuvé avec comparaison d'empreintes.",
+    );
+  }
+  return {
+    deviceId, x25519PublicKeyPem: pem, x25519Fingerprint: fp,
+    active: true, attested: true, canRead: true,
+    // L'horizon est appliqué par l'appelant : la liste passée EST l'autorisation.
+    authorizedEpochs: [],
+  };
 }
 /**
  * `brainclaw cloud push` — projette les plans et la mémoire projet vers le cloud.
