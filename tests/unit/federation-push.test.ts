@@ -24,6 +24,31 @@ import {
   newDeviceId,
 } from '../../src/core/federation-state.js';
 import { nowISO } from '../../src/core/ids.js';
+import { ensureAgentSigningKey } from '../../src/core/agent-registry.js';
+import os from 'node:os';
+
+/**
+ * Le transport SIGNE désormais une charge de métadonnées (envelope_id, rev, base_rev…),
+ * parce que le cloud la vérifie contre l'identité attestée de l'agent. Les tests doivent
+ * donc disposer d'une vraie clé Ed25519 : sans elle, `pushPending` refuse d'envoyer —
+ * comportement voulu, et lui-même testé.
+ */
+const AGENT = 'agt_push_test';
+function withSigningKey<T>(fn: () => T): T {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-push-home-'));
+  const prevHome = process.env['HOME'];
+  const prevProfile = process.env['USERPROFILE'];
+  process.env['HOME'] = home;
+  process.env['USERPROFILE'] = home;
+  try {
+    ensureAgentSigningKey(AGENT);
+    return fn();
+  } finally {
+    if (prevHome === undefined) delete process.env['HOME']; else process.env['HOME'] = prevHome;
+    if (prevProfile === undefined) delete process.env['USERPROFILE']; else process.env['USERPROFILE'] = prevProfile;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
 
 const URL_ = 'https://cloud.test';
 
@@ -44,10 +69,39 @@ function pairActive(cwd: string): void {
   saveConnectionState(state, cwd);
 }
 
+/**
+ * Enveloppe MINIMALE mais RÉALISTE.
+ *
+ * Les fixtures utilisaient `{ ct: 'opaque' }` — une forme qui n'existe nulle part. Elles
+ * passaient tant que le transport se contentait de relayer le blob ; dès qu'il a dû mettre
+ * l'enveloppe à la forme du cloud, elles ont révélé leur irréalisme en faisant échouer la
+ * mise en forme avant même l'appel réseau.
+ *
+ * Une fixture qui ne ressemble pas à la donnée réelle ne teste que le code qui l'ignore.
+ */
+function envelopeFixture(): Record<string, unknown> {
+  return {
+    schema: 'brainclaw.federation-envelope/v1',
+    meta: {
+      id_opaque: '11111111-2222-4333-8444-555555555555',
+      kind: 'plan',
+      status: { object: 'todo' },
+      base_rev: 1,
+      transport: { operation_id: 'op', content_hash: 'x', idempotency_key: 'idem' },
+    },
+    sealed: { alg: 'HPKE', enc: 'e', nonce: 'n', ciphertext: 'c' },
+    key_epoch: 1,
+    origin_sig: { alg: 'Ed25519', key_id: 'fp_origin', value: 'sig' },
+  };
+}
+
 function seedPending(cwd: string, keys: string[]): void {
   for (const key of keys) {
     enqueue(
-      { idempotency_key: key, operation_id: key, base_rev: 1, key_epoch: 1, sealed: { ct: 'opaque' } } as never,
+      {
+        idempotency_key: key, operation_id: key, base_rev: 1, key_epoch: 1,
+        sealed: envelopeFixture(), origin_agent_id: AGENT,
+      } as never,
       cwd,
     );
   }
@@ -68,8 +122,10 @@ describe('transport — refus avant tout envoi', () => {
     // fuite de métadonnées et de trafic n'est pas un non-événement.
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       await assert.rejects(() => pushPending({ cwd: ws.dir }), /adresse/i);
+      });
     } finally { ws.cleanup(); }
   });
 });
@@ -78,18 +134,21 @@ describe('transport — succès', () => {
   it('déplace les entrées envoyées de pending vers synced', async () => {
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1', 'b@r1']);
       const res = await pushPending({ cwd: ws.dir, url: URL_, fetchImpl: okFetch });
       assert.equal(res.sent, 2);
       assert.equal(counters(ws.dir).pending, 0, 'rien ne doit rester en attente');
       assert.equal(counters(ws.dir).synced, 2);
+      });
     } finally { ws.cleanup(); }
   });
 
   it('la simulation n\'envoie rien et ne déplace rien', async () => {
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1']);
       let called = 0;
@@ -98,6 +157,7 @@ describe('transport — succès', () => {
       assert.equal(called, 0, 'la simulation a appelé le réseau');
       assert.equal(res.attempted, 1);
       assert.equal(counters(ws.dir).pending, 1, 'la simulation a déplacé une entrée');
+      });
     } finally { ws.cleanup(); }
   });
 });
@@ -108,6 +168,7 @@ describe('transport — échecs, la partie qui compte', () => {
     // l'outbox est sa seule trace.
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1']);
       const boom = (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch;
@@ -116,12 +177,14 @@ describe('transport — échecs, la partie qui compte', () => {
       assert.equal(counters(ws.dir).pending, 1, 'l\'entrée a disparu de la file après un échec réseau');
       assert.equal(list('pending', ws.dir)[0]?.attempts, 1, 'la tentative doit être comptée');
       assert.match(String(list('pending', ws.dir)[0]?.last_error), /ECONNREFUSED/);
+      });
     } finally { ws.cleanup(); }
   });
 
   it('un 500 laisse aussi en attente — un refus temporaire n\'est pas un conflit', async () => {
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1']);
       const boom = (async () => new Response('oops', { status: 500 })) as unknown as typeof fetch;
@@ -129,12 +192,14 @@ describe('transport — échecs, la partie qui compte', () => {
       assert.equal(res.failed, 1);
       assert.equal(counters(ws.dir).conflict, 0, 'un 500 ne doit PAS produire un conflit');
       assert.equal(counters(ws.dir).pending, 1);
+      });
     } finally { ws.cleanup(); }
   });
 
   it('un 409 passe en conflit — un renvoi à l\'identique échouerait pareil', async () => {
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1']);
       const conflict = (async () => new Response('{}', { status: 409 })) as unknown as typeof fetch;
@@ -142,6 +207,7 @@ describe('transport — échecs, la partie qui compte', () => {
       assert.equal(res.conflicts, 1);
       assert.equal(counters(ws.dir).conflict, 1);
       assert.equal(counters(ws.dir).pending, 0, 'une entrée en conflit ne doit pas être retentée en boucle');
+      });
     } finally { ws.cleanup(); }
   });
 });
@@ -152,6 +218,7 @@ describe('transport — ce qui part sur le fil', () => {
     // test gèle cette propriété au niveau du corps HTTP réellement émis.
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1']);
       let body: Record<string, unknown> = {};
@@ -164,14 +231,23 @@ describe('transport — ce qui part sur le fil', () => {
 
       await pushPending({ cwd: ws.dir, url: URL_, fetchImpl: capture });
 
-      assert.deepEqual(Object.keys(body).sort(), ['base_rev', 'envelope', 'key_epoch']);
+      // La forme RÉELLE attendue par le cloud — à plat, pas `{envelope, ...}`.
+      assert.deepEqual(Object.keys(body).sort(), [
+        'base_rev', 'content_hash', 'entity_id', 'entity_kind', 'id', 'idempotency_key',
+        'key_epoch', 'meta', 'origin_agent_id', 'origin_sig', 'origin_sig_payload_hash',
+        'origin_signer_fingerprint', 'rev', 'sealed_b64',
+      ]);
+      // Le clair ne doit apparaître nulle part : seul `sealed_b64` porte le contenu.
+      assert.equal(typeof body['sealed_b64'], 'string');
       assert.equal(headers['idempotency-key'], 'a@r1', 'le cloud doit pouvoir dédoublonner sans ouvrir le corps');
+      });
     } finally { ws.cleanup(); }
   });
 
   it('cible l\'endpoint de projection du projet CLOUD, pas un id local', async () => {
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1']);
       let seen = '';
@@ -179,19 +255,22 @@ describe('transport — ce qui part sur le fil', () => {
       await pushPending({ cwd: ws.dir, url: URL_, fetchImpl: capture });
       assert.equal(seen, `${URL_}/api/v1/projects/prj_cloud_test/projection/envelopes`);
       assert.ok(!seen.includes(ws.dir), 'un chemin local ne doit JAMAIS entrer dans une URL');
+      });
     } finally { ws.cleanup(); }
   });
 });
 
 describe('transport — l\'outbox reste la trace', () => {
-  it('aucun fichier n\'est supprimé par un échec', () => {
+  it('aucun fichier n\'est supprimé par un échec', async () => {
     const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
     try {
+      await withSigningKey(async () => {
       pairActive(ws.dir);
       seedPending(ws.dir, ['a@r1']);
       const dir = path.join(ws.dir, '.brainclaw', 'coordination', 'federation', 'outbox');
       const before = fs.readdirSync(dir).length;
       assert.equal(before, 1);
+      });
     } finally { ws.cleanup(); }
   });
 });
