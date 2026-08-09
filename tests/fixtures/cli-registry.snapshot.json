@@ -1312,6 +1312,59 @@
     "aliases": [],
     "arguments": [
       {
+        "name": "entity",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "kind",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--evidence <ref>",
+        "long": "--evidence",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--note <text>",
+        "long": "--note",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw confirm"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
         "name": "text",
         "required": true,
         "variadic": false
