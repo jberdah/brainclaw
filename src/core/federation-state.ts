@@ -36,7 +36,9 @@ import { counters as outboxCounters } from './federation-outbox-v2.js';
 import { logger } from './logger.js';
 
 const CONNECTION_FILE = 'connection.json';
-export const FEDERATION_STATE_SCHEMA = 'brainclaw.federation-connection/v2';
+export const FEDERATION_STATE_SCHEMA = 'brainclaw.federation-connection/v3';
+/** Schéma v2 — singleton mono-agent. Lu en tolérance, jamais écrit (trp#1625). */
+const FEDERATION_STATE_SCHEMA_V2 = 'brainclaw.federation-connection/v2';
 
 /** Nombre d'appareils de récupération exigés avant la première enveloppe (RFC §5.3). */
 export const REQUIRED_RECOVERY_DEVICES = 2;
@@ -88,12 +90,38 @@ export interface SyncPosition {
   last_push_at?: string;
 }
 
+/**
+ * Un enrôlement d'AGENT sur l'appareil courant. La v3 en porte une LISTE — un appareil
+ * héberge plusieurs agents, chacun avec sa propre identité Ed25519, tous partageant la clé
+ * X25519 de l'appareil (dec#161). Avant la v3, un second appairage écrasait le premier
+ * (trp#1625).
+ */
+export interface PairingRecord {
+  /** Identité de l'agent appairé — c'est ce que le singleton v2 ne mémorisait pas. */
+  agent_id: string;
+  stage: EnrollmentStage;
+  enrollment_id?: string;
+  role?: string;
+  updated_at: string;
+}
+
 export interface FederationConnectionState {
   schema: typeof FEDERATION_STATE_SCHEMA;
   /** Identifiant OPAQUE côté cloud. Le mapping local↔cloud reste local (RFC §7). */
   cloud_project_id: string;
+  /**
+   * Adresse du déploiement, persistée à l'appairage (pln#655). Absente d'un état v2 —
+   * `--url` reste alors requis jusqu'au prochain appairage qui la renseigne.
+   */
+  cloud_url?: string;
   /** Chemin absolu du workspace lié — détecte un état copié dans un autre dossier. */
   workspace_path: string;
+  /**
+   * MIROIR du pairing courant, conservé pour les lecteurs mono-agent (emit, push, status
+   * hérités). N'est PAS la source de vérité — `pairings` l'est. Les écrivains le
+   * maintiennent égal au dernier pairing touché ; le lire reste correct pour le cas solo.
+   * Toute logique multi-agents doit passer par `pairings` / `pairingForAgent`.
+   */
   enrollment: {
     stage: EnrollmentStage;
     enrollment_id?: string;
@@ -101,6 +129,8 @@ export interface FederationConnectionState {
     role?: string;
     updated_at: string;
   };
+  /** SOURCE DE VÉRITÉ des enrôlements d'agents sur cet appareil (v3). */
+  pairings: PairingRecord[];
   device: DeviceRecord;
   /** Autres appareils connus du projet — sert au quorum de récupération. */
   peer_devices: DeviceRecord[];
@@ -145,14 +175,88 @@ export function loadConnectionState(cwd: string = process.cwd()): FederationConn
     return undefined;
   }
 
-  const state = raw as Partial<FederationConnectionState>;
-  if (state.schema !== FEDERATION_STATE_SCHEMA || !state.cloud_project_id || !state.device?.device_id) {
-    // Un schéma inconnu n'est PAS migré (dec#156) : la v1 est abandonnée, pas dépréciée.
-    logger.warn(`État de connexion fédération ignoré : schéma '${String(state.schema)}' non reconnu (attendu ${FEDERATION_STATE_SCHEMA}).`);
+  const state = raw as Partial<FederationConnectionState> & { schema?: string };
+  const knownSchema = state.schema === FEDERATION_STATE_SCHEMA || state.schema === FEDERATION_STATE_SCHEMA_V2;
+  if (!knownSchema || !state.cloud_project_id || !state.device?.device_id) {
+    // Un schéma inconnu (v1) n'est PAS migré (dec#156) : abandonné, pas déprécié. Mais la
+    // v2 EST lue — c'est le format vivant sur les machines déjà appairées ; le refuser
+    // détruirait leur appairage au premier chargement après mise à jour.
+    logger.warn(`État de connexion fédération ignoré : schéma '${String(state.schema)}' non reconnu.`);
     return undefined;
   }
 
-  return normalizeState(state as FederationConnectionState, cwd);
+  return normalizeState(projectToV3(state), cwd);
+}
+
+/**
+ * Projette un état v2 (singleton) vers la forme v3 (liste de pairings) À LA LECTURE.
+ *
+ * Un v2 n'a pas de `pairings` ni de `cloud_url` ni d'agent mémorisé. On dérive un pairing
+ * unique de son `enrollment` — l'agent est marqué inconnu, faute de l'information : le
+ * singleton v2 ne l'a jamais stockée, et l'inventer serait mentir. Un état déjà v3 passe
+ * inchangé. Rien n'est réécrit sur disque ici : la conversion n'a lieu qu'en mémoire, et
+ * la prochaine ÉCRITURE (un appairage, une révocation) persistera la forme v3.
+ */
+function projectToV3(
+  state: Partial<FederationConnectionState> & { schema?: string },
+): FederationConnectionState {
+  if (Array.isArray(state.pairings)) {
+    return { ...(state as FederationConnectionState), schema: FEDERATION_STATE_SCHEMA };
+  }
+  const enrollment = state.enrollment ?? { stage: 'unpaired' as EnrollmentStage, updated_at: nowISO() };
+  const derived: PairingRecord = {
+    agent_id: '(inconnu — appairé en v2)',
+    stage: enrollment.stage,
+    enrollment_id: enrollment.enrollment_id,
+    role: enrollment.role,
+    updated_at: enrollment.updated_at,
+  };
+  return {
+    ...(state as FederationConnectionState),
+    schema: FEDERATION_STATE_SCHEMA,
+    pairings: enrollment.enrollment_id || enrollment.stage !== 'unpaired' ? [derived] : [],
+  };
+}
+
+// ── Manipulation des pairings (v3) ─────────────────────────────────────────────
+
+/** Le pairing d'un agent donné, ou `undefined`. */
+export function pairingForAgent(
+  state: FederationConnectionState,
+  agentId: string,
+): PairingRecord | undefined {
+  return state.pairings.find((p) => p.agent_id === agentId);
+}
+
+/** Y a-t-il au moins un pairing actif ? Décide notamment la genèse d'epoch (premier appareil). */
+export function hasActivePairing(state: FederationConnectionState): boolean {
+  return state.pairings.some((p) => p.stage === 'active');
+}
+
+/**
+ * Ajoute ou met à jour le pairing d'un agent, SANS toucher aux autres, et maintient le
+ * miroir `enrollment` sur le pairing touché. Retourne un nouvel état (immuable).
+ *
+ * C'est l'unique porte par laquelle un pairing entre ou change : centraliser le maintien
+ * du miroir ici évite qu'un écrivain oublie de le synchroniser et fasse diverger la vue
+ * mono-agent de la source de vérité.
+ */
+export function upsertPairing(
+  state: FederationConnectionState,
+  pairing: PairingRecord,
+): FederationConnectionState {
+  const others = state.pairings.filter((p) => p.agent_id !== pairing.agent_id);
+  return {
+    ...state,
+    pairings: [...others, pairing],
+    enrollment: {
+      stage: pairing.stage,
+      enrollment_id: pairing.enrollment_id,
+      role: pairing.role,
+      updated_at: pairing.updated_at,
+    },
+    updated_at: nowISO(),
+  };
 }
 
 /**
@@ -251,13 +355,21 @@ export function createConnectionState(params: {
   device: DeviceRecord;
   workspacePath?: string;
   enrollmentId?: string;
+  cloudUrl?: string;
+  /** Agent du premier pairing. Optionnel pour la compat des appelants v2 existants. */
+  agentId?: string;
 }): FederationConnectionState {
   const now = nowISO();
+  const firstPairing: PairingRecord | undefined = params.agentId
+    ? { agent_id: params.agentId, stage: 'pending', enrollment_id: params.enrollmentId, updated_at: now }
+    : undefined;
   return {
     schema: FEDERATION_STATE_SCHEMA,
     cloud_project_id: params.cloudProjectId,
+    cloud_url: params.cloudUrl,
     workspace_path: path.resolve(params.workspacePath ?? process.cwd()),
     enrollment: { stage: 'pending', enrollment_id: params.enrollmentId, updated_at: now },
+    pairings: firstPairing ? [firstPairing] : [],
     device: params.device,
     peer_devices: [],
     // 0 = « aucun epoch » et non « premier epoch ». Le premier epoch remis est le 1 ;
@@ -356,6 +468,9 @@ export interface ConnectionSummary {
   current_epoch: number;
   readable_epochs: number[];
   device_fingerprint?: string;
+  cloud_url?: string;
+  /** Tous les agents appairés sur cet appareil (v3) — vide sur un état v2 non projeté. */
+  pairings: Array<{ agent_id: string; stage: EnrollmentStage; role?: string }>;
   sync: Record<SyncState, number>;
   last_pull_at?: string;
   recovery: RecoveryReadiness;
@@ -383,18 +498,25 @@ export function summarizeConnection(cwd: string = process.cwd()): ConnectionSumm
       stage: 'unpaired',
       current_epoch: 0,
       readable_epochs: [],
+      pairings: [],
       sync,
       recovery: { ready: false, enrolled: 0, required: REQUIRED_RECOVERY_DEVICES },
     };
   }
   return {
-    connected: state.enrollment.stage === 'active',
+    // Connecté dès qu'AU MOINS UN agent est actif, OU que le miroir l'indique. Le OR est
+    // une ceinture de sécurité pour l'affichage : un état projeté depuis v2, ou construit
+    // à la main, peut porter un miroir actif sans pairing correspondant. Mieux vaut
+    // afficher « connecté » et laisser l'opérateur voir que masquer un appairage réel.
+    connected: hasActivePairing(state) || state.enrollment.stage === 'active',
     cloud_project_id: state.cloud_project_id,
     stage: state.enrollment.stage,
     role: state.enrollment.role,
     current_epoch: state.keys.current_epoch,
     readable_epochs: state.keys.known_epochs,
     device_fingerprint: state.device.x25519_fingerprint,
+    cloud_url: state.cloud_url,
+    pairings: state.pairings.map((p) => ({ agent_id: p.agent_id, stage: p.stage, role: p.role })),
     sync,
     last_pull_at: state.sync.last_pull_at,
     recovery: recoveryReadiness(state),

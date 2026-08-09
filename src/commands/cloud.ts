@@ -53,9 +53,18 @@ export function runCloudStatus(options: CloudStatusOptions = {}): void {
 
   console.log(`Cloud : ${summary.stage}${summary.connected ? '' : ' (pas encore actif)'}`);
   console.log(`  Projet   : ${summary.cloud_project_id ?? '—'}`);
-  console.log(`  Rôle     : ${summary.role ?? '—'}`);
   console.log(`  Appareil : ${summary.device_fingerprint?.slice(0, 16) ?? '—'}…`);
   console.log(`  Epoch    : ${summary.current_epoch} (lisibles : ${summary.readable_epochs.join(', ') || 'aucun'})`);
+  // Les agents appairés, un par ligne : c'est ce qu'un singleton v2 ne pouvait pas montrer.
+  if (summary.pairings.length > 0) {
+    console.log(`  Agents   :`);
+    for (const p of summary.pairings) {
+      const active = p.stage === 'active' ? '' : ` (${p.stage})`;
+      console.log(`    • ${p.agent_id}${p.role ? ` [${p.role}]` : ''}${active}`);
+    }
+  } else {
+    console.log(`  Rôle     : ${summary.role ?? '—'}`);
+  }
   console.log(`  Sync     : ${summary.sync.pending} en attente · ${summary.sync.synced} synchronisé(s) · ${summary.sync.conflict} conflit(s)`);
   if (summary.last_pull_at) console.log(`  Dernier pull : ${summary.last_pull_at}`);
 
