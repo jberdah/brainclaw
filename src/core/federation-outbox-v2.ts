@@ -110,7 +110,16 @@ export function transition(
       const entry = JSON.parse(fs.readFileSync(src, 'utf-8')) as OutboxEntry;
       const next = mutate({ ...entry, updated_at: nowISO() });
       writeFileAtomic(dest, `${JSON.stringify(next, null, 2)}\n`);
-      fs.rmSync(src, { force: true });
+      // MISE À JOUR SUR PLACE — `from === to` est un cas LÉGITIME et non un no-op : c'est
+      // ainsi qu'un échec d'envoi incrémente `attempts` et enregistre `last_error` sans
+      // quitter la file d'attente.
+      //
+      // Sans cette garde, `src` et `dest` sont le MÊME chemin : on écrit le fichier puis on
+      // le SUPPRIME aussitôt. L'entrée disparaît exactement au moment où l'on voulait
+      // seulement noter que son envoi a échoué — donc l'opération jamais émise perd sa
+      // seule trace, et précisément lors de l'incident où elle compte.
+      // Trouvé par le test « un 500 laisse aussi en attente » (2026-08-09).
+      if (path.resolve(src) !== path.resolve(dest)) fs.rmSync(src, { force: true });
       return true;
     } catch (err) {
       logger.warn(`Entrée d'outbox illisible (${idempotencyKey}) : ${err instanceof Error ? err.message : String(err)}`);

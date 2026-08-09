@@ -27,7 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createTestWorkspace } from '../helpers/workspace.js';
-import { enqueue, list, counters } from '../../src/core/federation-outbox-v2.js';
+import { enqueue, list, counters, transition } from '../../src/core/federation-outbox-v2.js';
 
 /** Débris v1 AUTHENTIQUE, recopié d'une entrée réelle du magasin de l'auteur. */
 const V1_DEBRIS = {
@@ -105,6 +105,36 @@ describe('outbox v2 — débris v1 dans le même répertoire', () => {
       // Le compteur affiché doit refléter la v2 SEULE : montrer 4 ferait croire à quatre
       // opérations en attente d'émission alors que trois ne partiront jamais.
       assert.equal(counters(ws.dir).pending, 1, 'les débris v1 sont comptés comme du travail en attente');
+    } finally {
+      ws.cleanup();
+    }
+  });
+});
+
+describe('outbox v2 — mise à jour sur place', () => {
+  it("transition(pending → pending) NE SUPPRIME PAS l'entrée", () => {
+    // Bug trouvé le 2026-08-09 par le test de transport « un 500 laisse aussi en attente ».
+    // `from === to` est le cas légitime où un échec d'envoi note `attempts`/`last_error`
+    // sans quitter la file. Sans garde, src et dest sont le MÊME chemin : on écrit puis on
+    // supprime, et l'opération jamais émise perd sa seule trace — au moment précis de
+    // l'incident où elle compte.
+    const ws = createTestWorkspace({ prefix: 'bclaw-outbox-inplace-' });
+    try {
+      enqueue(
+        { idempotency_key: 'x@r1', operation_id: 'op', key_epoch: 1, sealed: { ct: 'x' } } as never,
+        ws.dir,
+      );
+      const moved = transition('x@r1', 'pending', 'pending', ws.dir, (e) => ({
+        ...e,
+        attempts: e.attempts + 1,
+        last_error: 'HTTP 500',
+      }));
+
+      assert.equal(moved, true);
+      assert.equal(counters(ws.dir).pending, 1, "l'entrée a disparu de la file");
+      const entry = list('pending', ws.dir)[0];
+      assert.equal(entry?.attempts, 1, 'la tentative doit être comptée');
+      assert.equal(entry?.last_error, 'HTTP 500', "l'erreur doit être conservée");
     } finally {
       ws.cleanup();
     }
