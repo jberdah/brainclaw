@@ -154,6 +154,16 @@ export async function runCloudConnect(options: CloudConnectOptions): Promise<voi
   console.log('');
   console.log('  Projet cloud : ' + handle.cloud_project_id);
   console.log('  Enrôlement   : ' + handle.enrollment_id);
+  // LE WORKSPACE APPAIRÉ EST AFFICHÉ, et ce n'est pas décoratif.
+  //
+  // `cloud connect` appaire le RÉPERTOIRE COURANT, en silence. Le 2026-08-09, un appairage
+  // destiné au dépôt core a lié le dépôt cloud parce que le terminal s'y trouvait encore
+  // après un `wrangler login` : côté serveur tout était correct et attesté, côté machine
+  // l'état vivait dans le mauvais projet — et rien, nulle part, ne le disait.
+  //
+  // C'est le seul moment où un humain regarde l'écran pendant cette cérémonie. La ligne
+  // est donc placée AVEC les empreintes qu'il doit comparer, pas dans un journal.
+  console.log('  Workspace    : ' + cwd);
   console.log('');
   // CES DEUX EMPREINTES SONT LE CŒUR DE LA CÉRÉMONIE. La personne qui approuve voit les
   // mêmes à l'écran ; leur comparaison hors bande est ce qui ferme l'attaque de l'homme
@@ -259,4 +269,55 @@ export async function runCloudDisconnect(options: CloudDisconnectOptions): Promi
   console.log("  Ce qui N'EST PAS effacé : les données déjà tirées et déchiffrées localement,");
   console.log("  et ce que d'autres appareils détiennent déjà. Un disconnect retire une");
   console.log('  autorisation ; il ne réécrit pas le passé.');
+}
+
+// ── Projection : émettre puis pousser ────────────────────────────────────────
+
+export interface CloudPushOptions {
+  cwd?: string;
+  url?: string;
+  dryRun?: boolean;
+  limit?: number;
+  json?: boolean;
+}
+
+/**
+ * `brainclaw cloud push` — projette les plans et la mémoire projet vers le cloud.
+ *
+ * DEUX TEMPS EXPLICITES, et jamais confondus dans l'affichage : ce qui a été SCELLÉ ET MIS
+ * EN FILE, puis ce qui a été ENVOYÉ. Un objet peut être scellé sans partir (réseau coupé)
+ * et l'opérateur doit le voir : afficher un seul nombre laisserait croire qu'une projection
+ * mise en file est arrivée.
+ *
+ * Les refus des trois filets sont AFFICHÉS, un par un. Un objet refusé n'est pas un objet
+ * en retard : c'est un objet qui ne partira jamais tant que la cause n'est pas corrigée.
+ */
+export async function runCloudPush(options: CloudPushOptions = {}): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const { emitProjections } = await import('../core/federation-emit.js');
+  const { pushPending } = await import('../core/federation-push.js');
+
+  const emitted = emitProjections({ cwd, dryRun: options.dryRun });
+  const pushed = await pushPending({ cwd, url: options.url, dryRun: options.dryRun, limit: options.limit });
+
+  if (options.json) {
+    console.log(JSON.stringify({ emitted, pushed, dry_run: Boolean(options.dryRun) }, null, 2));
+    return;
+  }
+
+  const mode = options.dryRun ? ' (simulation — rien n\'a été écrit ni envoyé)' : '';
+  console.log(`Projection${mode}`);
+  console.log(`  collectés        : ${emitted.collected}`);
+  console.log(`  mis en file      : ${emitted.enqueued}`);
+  console.log(`  déjà en file     : ${emitted.skipped_duplicate}`);
+  if (emitted.refused > 0) {
+    console.log(`  REFUSÉS          : ${emitted.refused}`);
+    for (const r of emitted.refusals) console.log(`    ${r.kind} ${r.id} — ${r.reason}`);
+  }
+  console.log(`  envoyés          : ${pushed.sent} / ${pushed.attempted}`);
+  if (pushed.conflicts > 0) console.log(`  CONFLITS         : ${pushed.conflicts} (révision périmée — un renvoi échouerait pareil)`);
+  if (pushed.failed > 0) {
+    console.log(`  échecs           : ${pushed.failed} — restent en attente, la tentative est comptée`);
+    for (const e of pushed.errors) console.log(`    ${e.idempotency_key} — ${e.status ?? 'réseau'} ${e.reason}`);
+  }
 }

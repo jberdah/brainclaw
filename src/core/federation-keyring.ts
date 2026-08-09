@@ -289,3 +289,50 @@ export function epochPublicKey(
     .toString();
   return { public_key_pem: pem, fingerprint: fingerprintKeyPem(pem) };
 }
+
+/**
+ * Fait naître la PREMIÈRE clé d'epoch d'un projet, si et seulement si personne n'en détient.
+ *
+ * ── POURQUOI CETTE FONCTION MANQUAIT, ET CE QUE SON ABSENCE PRODUISAIT ────────
+ * Mesuré le 2026-08-09 : `storeEpochPrivateKey` n'avait AUCUN appelant de production — seuls
+ * les tests en fabriquaient. Un projet fraîchement appairé restait donc à `current_epoch: 0`
+ * avec `known_epochs: []`, et toute tentative de sceller échouait sur « clé d'epoch
+ * introuvable ». La fédération ne pouvait rien émettre, non par refus mais par absence de
+ * clé — un état qu'aucun message n'expliquait.
+ *
+ * ── QUI A LE DROIT DE CRÉER, ET POURQUOI C'EST ÉTROIT ─────────────────────────
+ * Le PREMIER appareil d'un projet, et lui seul. Un appareil qui rejoint un projet existant
+ * ne doit RIEN créer : il doit RECEVOIR la clé par une remise attestée (dec#159). En
+ * fabriquer une localement produirait un second epoch portant le même numéro et une clé
+ * différente — donc des enveloppes que personne d'autre ne peut lire, sans qu'aucune erreur
+ * ne se déclenche à l'émission.
+ *
+ * C'est le cas dégénéré du modèle d'équipe, pas une branche parallèle : en solo, le premier
+ * appareil est aussi le seul custodian.
+ *
+ * NE RÉÉCRIT JAMAIS : si une clé existe déjà pour cet epoch, elle est renvoyée telle quelle.
+ * `storeEpochPrivateKey` refuse de son côté d'écraser une clé DIFFÉRENTE.
+ */
+export function ensureFirstEpochKey(
+  cloudProjectId: string,
+  epoch: number,
+  home: string = os.homedir(),
+): { created: boolean; public_key_pem: string; fingerprint: string } {
+  const existing = epochPublicKey(cloudProjectId, epoch, home);
+  if (existing) return { created: false, ...existing };
+
+  const { privateKey } = crypto.generateKeyPairSync('x25519');
+  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  storeEpochPrivateKey(cloudProjectId, epoch, pem, home);
+
+  const materialized = epochPublicKey(cloudProjectId, epoch, home);
+  if (!materialized) {
+    // Vérifier APRÈS écriture plutôt que supposer : une clé qu'on croit détenir mais qui
+    // n'est pas relisible produirait des enveloppes illisibles, découvertes bien plus tard.
+    throw new Error(
+      `Clé d'epoch ${epoch} écrite mais non relisible pour ${cloudProjectId} — ` +
+        'ne pas émettre tant que la cause n\'est pas comprise.',
+    );
+  }
+  return { created: true, ...materialized };
+}

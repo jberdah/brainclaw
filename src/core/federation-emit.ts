@@ -33,6 +33,7 @@ import { loadConnectionState } from './federation-state.js';
 import { epochPublicKey } from './federation-keyring.js';
 import { loadAgentSigningKey, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { loadState } from './state.js';
+import { opaqueIdFor } from './federation-opaque-ids.js';
 import { logger } from './logger.js';
 
 /**
@@ -241,13 +242,18 @@ export function emitProjections(options: EmitOptions = {}): EmitResult {
     try {
       const envelope = buildEnvelope({
         kind: item.kind,
-        idOpaque: item.id,
+        idOpaque: opaqueIdFor(state.cloud_project_id, item.id, cwd),
         cloudProjectId: state.cloud_project_id,
         baseRev: item.rev,
         statusObject: item.status,
         priority: item.priority,
         rank: item.rank,
-        deps: item.deps,
+        // Les DÉPENDANCES portent aussi des ids : les laisser en local exposerait la
+        // structure du magasin, que le reste de la projection s'applique à cacher.
+        deps: item.deps?.map((d) => ({
+          from: opaqueIdFor(state.cloud_project_id, d.from, cwd),
+          to: opaqueIdFor(state.cloud_project_id, d.to, cwd),
+        })),
         occurredAt: item.occurredAt,
         wrapHint: `epoch:${epoch}`,
         operationId: idempotencyKey,
