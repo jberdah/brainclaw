@@ -36,6 +36,8 @@ import {
   createConnectionState,
   loadConnectionState,
   saveConnectionState,
+  upsertPairing,
+  hasActivePairing,
   newDeviceId,
   type FederationConnectionState,
   type DeviceRecord,
@@ -133,7 +135,31 @@ export async function beginPairing(params: {
 
   // (3) LA CLÉ DE CHIFFREMENT DE L'APPAREIL. Distincte de l'identité, jamais dérivée
   // d'elle (RFC §5.1) — c'est ce qui rend « écrire sans lire » possible.
-  const deviceId = params.deviceId ?? newDeviceId();
+  //
+  // MULTI-AGENTS : si un appairage existe déjà pour CE projet cloud, on RÉUTILISE son
+  // appareil (dec#161) — les agents d'une même machine partagent une clé de chiffrement.
+  // Générer un nouveau device par agent multiplierait les clés de déchiffrement sans
+  // raison, et exigerait une remise d'epoch par device au lieu de par machine.
+  const existing = loadConnectionState(cwd);
+  const sameProject = existing && existing.cloud_project_id === cloudProjectId;
+  if (existing && !sameProject) {
+    throw new PairingError(
+      `Ce workspace est déjà appairé au projet ${existing.cloud_project_id} ; un workspace ne ` +
+        'peut pas être lié à deux projets cloud. Utilisez un autre répertoire.',
+      'claim',
+    );
+  }
+  // Ne refuser QUE si l'agent est déjà ACTIF — là il n'y a rien à faire. Un pairing
+  // `pending`/`attested` est une cérémonie interrompue : la relancer est une REPRISE
+  // légitime (nouvelle invitation, nouveau enrollment_id), et upsertPairing remplace
+  // proprement l'ancien enregistrement de cet agent.
+  if (sameProject && existing.pairings.some((p) => p.agent_id === params.agentId && p.stage === 'active')) {
+    throw new PairingError(
+      `L'agent '${params.agentId}' est déjà appairé et actif sur ce workspace. Rien à faire.`,
+      'claim',
+    );
+  }
+  const deviceId = params.deviceId ?? (sameProject ? existing.device.device_id : newDeviceId());
   const device = ensureDeviceKey(deviceId);
 
   // (4) PREUVE DE POSSESSION + ATTESTATION, EN UN SEUL ACTE. Les deux signatures sont
@@ -179,12 +205,18 @@ export async function beginPairing(params: {
     // porteur reste exigé — `recoveryReadiness` continue de refuser tant qu'il manque.
     recovery: true,
   };
-  const state = createConnectionState({
-    cloudProjectId,
-    device: deviceRecord,
-    workspacePath: cwd,
-    enrollmentId,
-  });
+  // AJOUT, pas écrasement (trp#1625). Sur un projet déjà appairé, on greffe le pairing du
+  // nouvel agent sur l'état existant — device et epochs conservés. Sinon, création.
+  const pairing = {
+    agent_id: params.agentId,
+    stage: 'pending' as const,
+    enrollment_id: enrollmentId,
+    updated_at: nowISO(),
+  };
+  const base = sameProject
+    ? existing
+    : createConnectionState({ cloudProjectId, device: deviceRecord, workspacePath: cwd, enrollmentId, agentId: params.agentId });
+  const state = sameProject ? upsertPairing(existing, pairing) : base;
   saveConnectionState(state, cwd);
 
   return {
@@ -226,12 +258,28 @@ export async function checkPairingApproval(params: {
 export function completePairing(params: {
   role?: string;
   cwd?: string;
+  /** Enrôlement à activer. À défaut, le pairing courant (miroir) — cas solo. */
+  enrollmentId?: string;
 }): FederationConnectionState {
   const cwd = params.cwd ?? process.cwd();
   const state = loadConnectionState(cwd);
   if (!state) {
     throw new PairingError("Aucun état d'appairage local — relancer `brainclaw cloud connect`.", 'complete');
   }
+  // Le pairing à activer : celui de l'enrôlement nommé, sinon le miroir courant (solo).
+  const targetEnrollmentId = params.enrollmentId ?? state.enrollment.enrollment_id;
+  const target = state.pairings.find((p) => p.enrollment_id === targetEnrollmentId);
+  if (!target) {
+    throw new PairingError(
+      `Aucun pairing en attente pour l'enrôlement ${String(targetEnrollmentId)} — relancer \`cloud connect\`.`,
+      'complete',
+    );
+  }
+  // La genèse d'epoch ne joue que si AUCUN pairing n'était encore actif : c'est le PREMIER
+  // agent du premier appareil. Un second agent sur le même appareil hérite de l'epoch déjà
+  // détenu — regénérer produirait un epoch concurrent (dec#161). `ensureFirstEpochKey`
+  // reste idempotent en dernier recours, mais la condition dit l'intention.
+  const firstEverActivation = !hasActivePairing(state);
   // ── GENÈSE DE LA PREMIÈRE CLÉ D'EPOCH ───────────────────────────────────────
   //
   // Sans elle, l'appairage s'achevait sur `current_epoch: 0` et `known_epochs: []` : le
@@ -249,10 +297,11 @@ export function completePairing(params: {
   // concurrent. Le roster signé de dec#159 est ce qui fermera ce trou ; en attendant, la
   // limite est nommée plutôt que tue.
   const isFirstDevice = (state.peer_devices?.length ?? 0) === 0;
+  const doGenesis = firstEverActivation && isFirstDevice;
   const epoch = state.keys.current_epoch > 0 ? state.keys.current_epoch : 1;
   let knownEpochs = state.keys.known_epochs;
 
-  if (isFirstDevice) {
+  if (doGenesis) {
     const key = ensureFirstEpochKey(state.cloud_project_id, epoch);
     if (key.created) {
       logger.info(`Epoch ${epoch} créé pour ce projet — empreinte ${key.fingerprint}`);
@@ -260,10 +309,16 @@ export function completePairing(params: {
     knownEpochs = knownEpochs.includes(epoch) ? knownEpochs : [...knownEpochs, epoch];
   }
 
+  // Active le pairing ciblé via upsertPairing (qui maintient le miroir `enrollment`).
+  const activated = upsertPairing(state, {
+    ...target,
+    stage: 'active',
+    role: params.role ?? target.role,
+    updated_at: nowISO(),
+  });
   const next: FederationConnectionState = {
-    ...state,
-    enrollment: { ...state.enrollment, stage: 'active', role: params.role ?? state.enrollment.role, updated_at: nowISO() },
-    keys: { current_epoch: isFirstDevice ? epoch : state.keys.current_epoch, known_epochs: knownEpochs },
+    ...activated,
+    keys: { current_epoch: doGenesis ? epoch : state.keys.current_epoch, known_epochs: knownEpochs },
   };
   saveConnectionState(next, cwd);
   return next;
