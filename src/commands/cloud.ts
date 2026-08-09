@@ -633,6 +633,55 @@ export async function runCloudGrant(options: CloudGrantOptions): Promise<void> {
   console.log("  ⚠ Le destinataire doit lancer `brainclaw cloud pull` pour ranger ces clés.");
 }
 
+export interface CloudRotateOptions { cwd?: string; force?: boolean; json?: boolean }
+
+/**
+ * `brainclaw cloud rotate` — ferme la lecture FUTURE à un appareil révoqué (pln#658).
+ *
+ * Le refus de quorum n'est pas un mur : il NOMME le remède (appairer un second appareil,
+ * ou consentir explicitement). Un blocage sans issue ferait chercher le drapeau `--force`
+ * en premier, ce qui est exactement l'inverse du but.
+ */
+export async function runCloudRotate(options: CloudRotateOptions = {}): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const { rotateEpoch } = await import('../core/federation-rotation.js');
+  const outcome = rotateEpoch({ cwd, force: options.force });
+
+  if (options.json) {
+    console.log(JSON.stringify(outcome, null, 2));
+    if (!outcome.ok) process.exitCode = 1;
+    return;
+  }
+  if (!outcome.ok) {
+    console.log(`Rotation refusée — ${outcome.reason}`);
+    console.log(`  ${outcome.detail}`);
+    console.log('');
+    console.log(`  Pour lever ce refus : ${outcome.remedy}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Rotation d'epoch : ${outcome.previous_epoch} → ${outcome.new_epoch}`);
+  console.log(`  empreinte        : ${outcome.new_epoch_fingerprint}`);
+  console.log(`  encore lisibles  : ${outcome.readable_epochs.join(', ')}`);
+  console.log('');
+  console.log(`  ⚠ ${outcome.forward_only_notice}`);
+  console.log('');
+  console.log('  Prochaine étape : remettre le nouvel epoch aux lecteurs légitimes');
+  console.log(`    brainclaw cloud grant <agentId> --epoch ${outcome.new_epoch}`);
+}
+
+/** `brainclaw cloud accept-solo-risk` — consentement PERSISTÉ au risque solo (dec#163 §4). */
+export async function runCloudAcceptSoloRisk(options: { cwd?: string; json?: boolean } = {}): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const { acceptSoloRecoveryRisk, soloConsentStatement } = await import('../core/federation-rotation.js');
+  const consent = acceptSoloRecoveryRisk(cwd);
+  if (options.json) { console.log(JSON.stringify(consent, null, 2)); return; }
+  console.log('Risque solo accepté et consigné.');
+  console.log(`  accepté le : ${consent.accepted_at}`);
+  console.log('');
+  console.log(`  « ${soloConsentStatement()} »`);
+}
+
 /** Résout la cible depuis le roster attesté du cloud — jamais depuis une saisie humaine. */
 async function resolveGrantTarget(url: string, cloudProjectId: string, deviceId: string): Promise<{
   deviceId: string; x25519PublicKeyPem: string; x25519Fingerprint: string;
