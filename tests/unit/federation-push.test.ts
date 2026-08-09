@@ -44,10 +44,39 @@ function pairActive(cwd: string): void {
   saveConnectionState(state, cwd);
 }
 
+/**
+ * Enveloppe MINIMALE mais RÉALISTE.
+ *
+ * Les fixtures utilisaient `{ ct: 'opaque' }` — une forme qui n'existe nulle part. Elles
+ * passaient tant que le transport se contentait de relayer le blob ; dès qu'il a dû mettre
+ * l'enveloppe à la forme du cloud, elles ont révélé leur irréalisme en faisant échouer la
+ * mise en forme avant même l'appel réseau.
+ *
+ * Une fixture qui ne ressemble pas à la donnée réelle ne teste que le code qui l'ignore.
+ */
+function envelopeFixture(): Record<string, unknown> {
+  return {
+    schema: 'brainclaw.federation-envelope/v1',
+    meta: {
+      id_opaque: '11111111-2222-4333-8444-555555555555',
+      kind: 'plan',
+      status: { object: 'todo' },
+      base_rev: 1,
+      transport: { operation_id: 'op', content_hash: 'x', idempotency_key: 'idem' },
+    },
+    sealed: { alg: 'HPKE', enc: 'e', nonce: 'n', ciphertext: 'c' },
+    key_epoch: 1,
+    origin_sig: { alg: 'Ed25519', key_id: 'fp_origin', value: 'sig' },
+  };
+}
+
 function seedPending(cwd: string, keys: string[]): void {
   for (const key of keys) {
     enqueue(
-      { idempotency_key: key, operation_id: key, base_rev: 1, key_epoch: 1, sealed: { ct: 'opaque' } } as never,
+      {
+        idempotency_key: key, operation_id: key, base_rev: 1, key_epoch: 1,
+        sealed: envelopeFixture(), origin_agent_id: 'agt_test',
+      } as never,
       cwd,
     );
   }
@@ -164,7 +193,14 @@ describe('transport — ce qui part sur le fil', () => {
 
       await pushPending({ cwd: ws.dir, url: URL_, fetchImpl: capture });
 
-      assert.deepEqual(Object.keys(body).sort(), ['base_rev', 'envelope', 'key_epoch']);
+      // La forme RÉELLE attendue par le cloud — à plat, pas `{envelope, ...}`.
+      assert.deepEqual(Object.keys(body).sort(), [
+        'base_rev', 'content_hash', 'entity_id', 'entity_kind', 'id', 'idempotency_key',
+        'key_epoch', 'meta', 'origin_agent_id', 'origin_sig', 'origin_sig_payload_hash',
+        'origin_signer_fingerprint', 'rev', 'sealed_b64',
+      ]);
+      // Le clair ne doit apparaître nulle part : seul `sealed_b64` porte le contenu.
+      assert.equal(typeof body['sealed_b64'], 'string');
       assert.equal(headers['idempotency-key'], 'a@r1', 'le cloud doit pouvoir dédoublonner sans ouvrir le corps');
     } finally { ws.cleanup(); }
   });
