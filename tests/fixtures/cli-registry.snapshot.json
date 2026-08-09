@@ -1134,6 +1134,43 @@
     "arguments": [],
     "options": [
       {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--limit <n>",
+        "long": "--limit",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--url <url>",
+        "long": "--url",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud pull"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
         "flags": "--dry-run",
         "long": "--dry-run",
         "mandatory": false,
