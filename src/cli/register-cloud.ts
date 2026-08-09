@@ -4,6 +4,7 @@ import {
   runCloudConnect,
   runCloudAwait,
   runCloudDisconnect,
+  runCloudPush,
 } from '../commands/cloud.js';
 
 /** Adresse du cloud. Fournie par `--url`, sans quoi la commande demande de la préciser. */
@@ -32,6 +33,21 @@ export function registerCloudCommands(program: Command): void {
     .option('--json', 'Sortie JSON')
     .action((options: { json?: boolean }) => {
       runCloudStatus({ json: options.json });
+    });
+
+  cloud
+    .command('push')
+    .description('Projette les plans et la mémoire projet vers le cloud : scelle, met en file, puis envoie')
+    .requiredOption('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
+    .option('--dry-run', "N'écrit ni n'envoie rien : rapporte ce qui partirait")
+    .option('--limit <n>', 'Borne le lot envoyé', (v: string) => Number.parseInt(v, 10))
+    .option('--json', 'Sortie JSON')
+    .action(async (options: { url: string; dryRun?: boolean; limit?: number; json?: boolean }) => {
+      try {
+        await runCloudPush(options);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
     });
 
   cloud

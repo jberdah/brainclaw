@@ -28,8 +28,10 @@ import { loadAgentSigningKey, ensureAgentSigningKey } from './agent-registry.js'
 import { buildKeyAttestation, fingerprintPem } from './federation-attestation.js';
 import {
   ensureDeviceKey,
+  ensureFirstEpochKey,
   type DeviceKeyMaterial,
 } from './federation-keyring.js';
+import { logger } from './logger.js';
 import {
   createConnectionState,
   loadConnectionState,
@@ -230,9 +232,38 @@ export function completePairing(params: {
   if (!state) {
     throw new PairingError("Aucun état d'appairage local — relancer `brainclaw cloud connect`.", 'complete');
   }
+  // ── GENÈSE DE LA PREMIÈRE CLÉ D'EPOCH ───────────────────────────────────────
+  //
+  // Sans elle, l'appairage s'achevait sur `current_epoch: 0` et `known_epochs: []` : le
+  // projet était « actif » et incapable de sceller quoi que ce soit, échouant sur « clé
+  // d'epoch introuvable » sans qu'aucun message n'explique pourquoi. Mesuré le 2026-08-09 —
+  // `storeEpochPrivateKey` n'avait aucun appelant de production.
+  //
+  // SEUL LE PREMIER APPAREIL crée. Un appareil qui rejoint un projet existant doit RECEVOIR
+  // la clé par une remise attestée (dec#159) : en fabriquer une localement produirait un
+  // second epoch au même numéro avec une clé différente, donc des enveloppes que personne
+  // d'autre ne peut lire — et aucune erreur ne se déclencherait à l'émission.
+  //
+  // `peer_devices` vide est le signal disponible ici. Il est FAIBLE : un cloud hostile peut
+  // prétendre qu'un projet peuplé est vide pour pousser ce client à forger un epoch
+  // concurrent. Le roster signé de dec#159 est ce qui fermera ce trou ; en attendant, la
+  // limite est nommée plutôt que tue.
+  const isFirstDevice = (state.peer_devices?.length ?? 0) === 0;
+  const epoch = state.keys.current_epoch > 0 ? state.keys.current_epoch : 1;
+  let knownEpochs = state.keys.known_epochs;
+
+  if (isFirstDevice) {
+    const key = ensureFirstEpochKey(state.cloud_project_id, epoch);
+    if (key.created) {
+      logger.info(`Epoch ${epoch} créé pour ce projet — empreinte ${key.fingerprint}`);
+    }
+    knownEpochs = knownEpochs.includes(epoch) ? knownEpochs : [...knownEpochs, epoch];
+  }
+
   const next: FederationConnectionState = {
     ...state,
     enrollment: { ...state.enrollment, stage: 'active', role: params.role ?? state.enrollment.role, updated_at: nowISO() },
+    keys: { current_epoch: isFirstDevice ? epoch : state.keys.current_epoch, known_epochs: knownEpochs },
   };
   saveConnectionState(next, cwd);
   return next;
