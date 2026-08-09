@@ -28,6 +28,107 @@ import {
 import { resolveEffectiveCwd } from '../core/store-resolution.js';
 import { nowISO } from '../core/ids.js';
 
+/** Une invitation n'est volontairement valable que quinze minutes. */
+export const INVITATION_TTL_MS = 15 * 60 * 1_000;
+export const APPROVAL_POLL_INTERVAL_MS = 5_000;
+export const AGENT_ID_PATTERN = /^[a-zA-Z0-9_-]{4,64}$/;
+
+const ACTIVATION_URL_FORM = 'https://app.brainclaw.dev/a#<code>';
+const DEFAULT_CLOUD_URL_FORM = 'https://<votre-déploiement>.workers.dev';
+
+/**
+ * Données locales extraites d'une entrée d'activation. Le fragment reste toujours
+ * local : seul `url`, qui est une origine sans fragment, est ensuite donné au transport.
+ */
+export interface ActivationInput {
+  inviteCode: string;
+  url?: string;
+}
+
+/**
+ * Accepte le code historique ou l'URL d'activation. Une URL est délibérément limitée
+ * à `/a#<code>` : cela évite de prendre un code depuis une URL de route API ou de le
+ * transmettre par erreur dans un chemin ou une query string.
+ */
+export function parseActivationInput(input: string): ActivationInput {
+  const value = input.trim();
+  if (!value) {
+    throw new Error(`Code ou URL d'activation attendu (ex. ${ACTIVATION_URL_FORM}).`);
+  }
+  if (!/^[a-z][a-z\d+.-]*:/i.test(value)) return { inviteCode: value };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`URL d'activation invalide. Forme attendue : ${ACTIVATION_URL_FORM}.`);
+  }
+  if (
+    (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+    || parsed.pathname !== '/a'
+    || parsed.search
+    || parsed.username
+    || parsed.password
+    || !parsed.hash.slice(1)
+  ) {
+    throw new Error(`URL d'activation invalide. Forme attendue : ${ACTIVATION_URL_FORM}.`);
+  }
+
+  let inviteCode: string;
+  try {
+    inviteCode = decodeURIComponent(parsed.hash.slice(1));
+  } catch {
+    throw new Error(`Code d'activation invalide dans l'URL. Forme attendue : ${ACTIVATION_URL_FORM}.`);
+  }
+  if (!inviteCode) {
+    throw new Error(`Code d'activation manquant dans l'URL. Forme attendue : ${ACTIVATION_URL_FORM}.`);
+  }
+  return { inviteCode, url: parsed.origin };
+}
+
+/** Valide avant toute construction ou utilisation de transport réseau. */
+export function validateAgentId(agentId: string): string {
+  if (!AGENT_ID_PATTERN.test(agentId)) {
+    throw new Error("Identifiant d'agent invalide : utilisez 4 à 64 caractères parmi a-z, A-Z, 0-9, _ et -.");
+  }
+  return agentId;
+}
+
+/**
+ * Normalise l'origine de déploiement et n'accepte jamais un fragment : le code
+ * d'invitation ne doit pas pouvoir passer au transport HTTP.
+ */
+export function normalizeCloudUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`Adresse cloud invalide. Utilisez une origine HTTPS, par ex. ${DEFAULT_CLOUD_URL_FORM}.`);
+  }
+  if (
+    (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new Error(`Adresse cloud invalide. Utilisez une origine HTTPS, par ex. ${DEFAULT_CLOUD_URL_FORM}.`);
+  }
+  return parsed.origin;
+}
+
+/** Résout l'option explicite, sinon l'origine mémorisée lors de l'appairage v3. */
+export function resolveCloudUrl(
+  explicitUrl: string | undefined,
+  state: ReturnType<typeof loadConnectionState>,
+): string {
+  const url = explicitUrl ?? state?.cloud_url;
+  if (!url) {
+    throw new Error(`Adresse cloud inconnue. Donnez --url ${DEFAULT_CLOUD_URL_FORM} ou utilisez l'URL d'activation ${ACTIVATION_URL_FORM}.`);
+  }
+  return normalizeCloudUrl(url);
+}
+
 export interface CloudStatusOptions {
   json?: boolean;
   cwd?: string;
@@ -113,27 +214,110 @@ export function httpTransport(baseUrl: string): PairingTransport {
   };
 }
 
+export interface CloudApprovalPollingOptions {
+  enrollmentId: string;
+  cwd: string;
+  transport: PairingTransport;
+  /** Horloge et attente injectables : les tests ne dorment jamais réellement. */
+  now?: () => number;
+  sleep?: (delayMs: number) => Promise<void>;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  onPending?: (state: string, remainingMs: number) => void;
+}
+
+export type CloudApprovalResult = Awaited<ReturnType<typeof checkPairingApproval>> & { timedOut: boolean };
+
+const sleepFor = (delayMs: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, delayMs));
+
+/** Affichage concis du délai restant, sans prétendre connaître l'heure serveur. */
+export function formatApprovalTimeRemaining(remainingMs: number): string {
+  const seconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} min ${String(seconds % 60).padStart(2, '0')} s`;
+}
+
+/**
+ * L'approbation est humaine, mais son attente est bornée par le TTL de l'invitation.
+ * Le transport et l'horloge sont injectables afin que le comportement temporel reste
+ * testable sans requête ni temporisation réelle.
+ */
+export async function waitForPairingApproval(options: CloudApprovalPollingOptions): Promise<CloudApprovalResult> {
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? sleepFor;
+  const timeoutMs = Math.max(0, Math.min(options.timeoutMs ?? INVITATION_TTL_MS, INVITATION_TTL_MS));
+  const pollIntervalMs = Math.max(0, options.pollIntervalMs ?? APPROVAL_POLL_INTERVAL_MS);
+  const deadline = now() + timeoutMs;
+
+  while (true) {
+    const result = await checkPairingApproval({
+      enrollmentId: options.enrollmentId,
+      transport: options.transport,
+      cwd: options.cwd,
+    });
+    if (result.approved) return { ...result, timedOut: false };
+
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) return { ...result, timedOut: true };
+    options.onPending?.(result.state, remainingMs);
+    await sleep(Math.min(pollIntervalMs, remainingMs));
+  }
+}
+
 // ── connect ───────────────────────────────────────────────────────────────────
 
 export interface CloudConnectOptions {
+  /** Code nu historique ou URL `https://…/a#<code>`. */
   inviteCode: string;
-  url: string;
+  /** Facultatif avec une URL d'activation ou un appairage déjà mémorisé. */
+  url?: string;
   agentId: string;
   cwd?: string;
   json?: boolean;
   /** Injecté par les tests ; en usage réel le transport HTTP est construit ici. */
   transport?: PairingTransport;
+  now?: () => number;
+  sleep?: (delayMs: number) => Promise<void>;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
+function reportApprovalTimeout(): void {
+  console.error("L'approbation n'est pas arrivée avant l'expiration de l'invitation (15 min).");
+  console.error("Relancez `brainclaw cloud connect` avec une nouvelle URL d'activation. `cloud await` reste disponible après une interruption.");
+  process.exitCode = 1;
+}
+
+function completeApprovedPairing(cwd: string, role: Awaited<ReturnType<typeof checkPairingApproval>>['role']): void {
+  const next = completePairing({ role, cwd });
+  console.log(`Appairage approuvé. Rôle : ${next.enrollment.role ?? '—'}.`);
+  console.log('');
+  // Le premier pull est en LECTURE SEULE et non destructif (RFC §5.2 phase 4) : rien
+  // n'est matérialisé dans la mémoire locale tant que la vérification d'origine n'existe
+  // pas. Le dire évite qu'on croie la synchronisation déjà active.
+  console.log("  Aucune donnée n'est encore matérialisée : la vérification à la réception");
+  console.log("  (signature d'origine, anti-rejeu) est livrée à l'étape suivante.");
 }
 
 export async function runCloudConnect(options: CloudConnectOptions): Promise<void> {
   const cwd = options.cwd ?? resolveEffectiveCwd();
-  const transport = options.transport ?? httpTransport(options.url);
+  const activation = parseActivationInput(options.inviteCode);
+  // Cette validation doit rester avant le moindre appel du transport : un identifiant
+  // invalide ne doit jamais consommer une invitation ni créer une candidature distante.
+  const agentId = validateAgentId(options.agentId);
+  const existing = loadConnectionState(cwd);
+  const explicitUrl = options.url ? normalizeCloudUrl(options.url) : undefined;
+  if (activation.url && explicitUrl && activation.url !== explicitUrl) {
+    throw new Error("L'origine de `--url` ne correspond pas à celle de l'URL d'activation.");
+  }
+  const url = activation.url ?? resolveCloudUrl(explicitUrl, existing);
+  const transport = options.transport ?? httpTransport(url);
 
   let handle;
   try {
     handle = await beginPairing({
-      inviteCode: options.inviteCode,
-      agentId: options.agentId,
+      inviteCode: activation.inviteCode,
+      agentId,
       transport,
       cwd,
     });
@@ -148,61 +332,84 @@ export async function runCloudConnect(options: CloudConnectOptions): Promise<voi
     throw err;
   }
 
+  const pending = loadConnectionState(cwd);
+  if (!pending) throw new Error("L'état d'appairage n'a pas pu être enregistré localement.");
+  // V3 mémorise l'ORIGINE uniquement, jamais l'URL d'activation ni son fragment/code.
+  saveConnectionState({ ...pending, cloud_url: url }, cwd);
+
+  if (!options.json) {
+    console.log('Preuve de possession acceptée. Attestation de clé enregistrée.');
+    console.log('');
+    console.log('  Projet cloud : ' + handle.cloud_project_id);
+    console.log('  Enrôlement   : ' + handle.enrollment_id);
+    console.log('  Workspace    : ' + cwd);
+    console.log('');
+    console.log("  Empreinte d'identité     (Ed25519) : " + handle.fingerprints.identity);
+    console.log('  Empreinte de chiffrement (X25519)  : ' + handle.fingerprints.encryption);
+    console.log('');
+    console.log('  → Faites vérifier CES DEUX EMPREINTES par la personne qui approuve.');
+    console.log("    Si elles diffèrent de ce qu'elle voit, REFUSEZ : quelqu'un s'est interposé.");
+    console.log('');
+    console.log("  En attente d'approbation humaine (expiration de l'invitation dans 15 min 00 s).");
+  }
+
+  const result = await waitForPairingApproval({
+    enrollmentId: handle.enrollment_id,
+    transport,
+    cwd,
+    now: options.now,
+    sleep: options.sleep,
+    pollIntervalMs: options.pollIntervalMs,
+    timeoutMs: options.timeoutMs,
+    onPending: options.json
+      ? undefined
+      : (state, remainingMs) => console.log(`  Toujours en attente (${state}) — expiration dans ${formatApprovalTimeRemaining(remainingMs)}.`),
+  });
+  if (!result.approved) {
+    if (options.json) {
+      console.log(JSON.stringify({
+        enrollment_id: handle.enrollment_id,
+        cloud_project_id: handle.cloud_project_id,
+        awaiting: result.state,
+        expired: result.timedOut,
+      }, null, 2));
+    }
+    reportApprovalTimeout();
+    return;
+  }
+
   if (options.json) {
+    const next = completePairing({ role: result.role, cwd });
     console.log(JSON.stringify({
       enrollment_id: handle.enrollment_id,
       cloud_project_id: handle.cloud_project_id,
       device_id: handle.device.device_id,
       fingerprints: handle.fingerprints,
-      awaiting: 'human_approval',
+      role: next.enrollment.role,
+      approved: true,
     }, null, 2));
     return;
   }
-
-  console.log('Preuve de possession acceptée. Attestation de clé enregistrée.');
-  console.log('');
-  console.log('  Projet cloud : ' + handle.cloud_project_id);
-  console.log('  Enrôlement   : ' + handle.enrollment_id);
-  // LE WORKSPACE APPAIRÉ EST AFFICHÉ, et ce n'est pas décoratif.
-  //
-  // `cloud connect` appaire le RÉPERTOIRE COURANT, en silence. Le 2026-08-09, un appairage
-  // destiné au dépôt core a lié le dépôt cloud parce que le terminal s'y trouvait encore
-  // après un `wrangler login` : côté serveur tout était correct et attesté, côté machine
-  // l'état vivait dans le mauvais projet — et rien, nulle part, ne le disait.
-  //
-  // C'est le seul moment où un humain regarde l'écran pendant cette cérémonie. La ligne
-  // est donc placée AVEC les empreintes qu'il doit comparer, pas dans un journal.
-  console.log('  Workspace    : ' + cwd);
-  console.log('');
-  // CES DEUX EMPREINTES SONT LE CŒUR DE LA CÉRÉMONIE. La personne qui approuve voit les
-  // mêmes à l'écran ; leur comparaison hors bande est ce qui ferme l'attaque de l'homme
-  // du milieu sur l'appairage. Affichées EN ENTIER, pas tronquées : une comparaison sur
-  // 16 caractères se collisionne bien plus facilement qu'elle n'en a l'air.
-  console.log("  Empreinte d'identité     (Ed25519) : " + handle.fingerprints.identity);
-  console.log('  Empreinte de chiffrement (X25519)  : ' + handle.fingerprints.encryption);
-  console.log('');
-  console.log('  → Faites vérifier CES DEUX EMPREINTES par la personne qui approuve.');
-  console.log("    Si elles diffèrent de ce qu'elle voit, REFUSEZ : quelqu'un s'est interposé.");
-  console.log('');
-  console.log("  En attente d'approbation humaine. Constatez-la avec : brainclaw cloud await");
+  completeApprovedPairing(cwd, result.role);
 }
 
 // ── attente d'approbation ─────────────────────────────────────────────────────
 
 export interface CloudAwaitOptions {
-  url: string;
+  url?: string;
   cwd?: string;
   transport?: PairingTransport;
+  now?: () => number;
+  sleep?: (delayMs: number) => Promise<void>;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
 }
 
 /**
- * Constate l'approbation et bascule l'état local en actif.
- *
- * SÉPARÉ DE `connect` : l'approbation dépend d'un humain, dont le délai n'est pas borné.
- * Une commande qui bloquerait indéfiniment sur un tiers serait un mauvais citoyen dans un
- * script, et un appairage interrompu par un Ctrl-C doit rester reprenable.
+ * Reprend un appairage interrompu. Comme `connect`, l'attente est bornée au TTL de
+ * quinze minutes : elle ne bloque donc pas indéfiniment un terminal ou un script.
  */
-export async function runCloudAwait(options: CloudAwaitOptions): Promise<void> {
+export async function runCloudAwait(options: CloudAwaitOptions = {}): Promise<void> {
   const cwd = options.cwd ?? resolveEffectiveCwd();
   const state = loadConnectionState(cwd);
   if (!state?.enrollment.enrollment_id) {
@@ -211,28 +418,28 @@ export async function runCloudAwait(options: CloudAwaitOptions): Promise<void> {
     return;
   }
 
-  const transport = options.transport ?? httpTransport(options.url);
-  const result = await checkPairingApproval({ enrollmentId: state.enrollment.enrollment_id, transport, cwd });
-
+  const url = resolveCloudUrl(options.url, state);
+  const transport = options.transport ?? httpTransport(url);
+  const result = await waitForPairingApproval({
+    enrollmentId: state.enrollment.enrollment_id,
+    transport,
+    cwd,
+    now: options.now,
+    sleep: options.sleep,
+    pollIntervalMs: options.pollIntervalMs,
+    timeoutMs: options.timeoutMs,
+    onPending: (remoteState, remainingMs) => console.log(`Toujours en attente (état distant : ${remoteState}) — expiration dans ${formatApprovalTimeRemaining(remainingMs)}.`),
+  });
   if (!result.approved) {
-    console.log(`Toujours en attente (état distant : ${result.state}).`);
+    reportApprovalTimeout();
     return;
   }
-
-  const next = completePairing({ role: result.role, cwd });
-  console.log(`Appairage approuvé. Rôle : ${next.enrollment.role ?? '—'}.`);
-  console.log('');
-  // Le premier pull est en LECTURE SEULE et non destructif (RFC §5.2 phase 4) : rien
-  // n'est matérialisé dans la mémoire locale tant que la vérification d'origine n'existe
-  // pas. Le dire évite qu'on croie la synchronisation déjà active.
-  console.log("  Aucune donnée n'est encore matérialisée : la vérification à la réception");
-  console.log("  (signature d'origine, anti-rejeu) est livrée à l'étape suivante.");
+  completeApprovedPairing(cwd, result.role);
 }
-
 // ── disconnect ────────────────────────────────────────────────────────────────
 
 export interface CloudDisconnectOptions {
-  url: string;
+  url?: string;
   cwd?: string;
   transport?: PairingTransport;
   forgetKeys?: boolean;
@@ -248,7 +455,8 @@ export async function runCloudDisconnect(options: CloudDisconnectOptions): Promi
 
   let revocationNote = "aucune révocation distante demandée (pas d'enrôlement connu)";
   if (state.enrollment.enrollment_id) {
-    const transport = options.transport ?? httpTransport(options.url);
+    const url = resolveCloudUrl(options.url, state);
+    const transport = options.transport ?? httpTransport(url);
     const res = await requestRevocation({ enrollmentId: state.enrollment.enrollment_id, transport });
     revocationNote = res.revoked
       ? 'autorisation distante révoquée'
@@ -305,9 +513,10 @@ export async function runCloudPush(options: CloudPushOptions = {}): Promise<void
   const cwd = options.cwd ?? resolveEffectiveCwd();
   const { emitProjections } = await import('../core/federation-emit.js');
   const { pushPending } = await import('../core/federation-push.js');
+  const url = resolveCloudUrl(options.url, loadConnectionState(cwd));
 
   const emitted = emitProjections({ cwd, dryRun: options.dryRun });
-  const pushed = await pushPending({ cwd, url: options.url, dryRun: options.dryRun, limit: options.limit });
+  const pushed = await pushPending({ cwd, url, dryRun: options.dryRun, limit: options.limit });
 
   if (options.json) {
     console.log(JSON.stringify({ emitted, pushed, dry_run: Boolean(options.dryRun) }, null, 2));

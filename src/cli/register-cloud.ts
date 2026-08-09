@@ -38,11 +38,11 @@ export function registerCloudCommands(program: Command): void {
   cloud
     .command('push')
     .description('Projette les plans et la mémoire projet vers le cloud : scelle, met en file, puis envoie')
-    .requiredOption('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
+    .option('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
     .option('--dry-run', "N'écrit ni n'envoie rien : rapporte ce qui partirait")
     .option('--limit <n>', 'Borne le lot envoyé', (v: string) => Number.parseInt(v, 10))
     .option('--json', 'Sortie JSON')
-    .action(async (options: { url: string; dryRun?: boolean; limit?: number; json?: boolean }) => {
+    .action(async (options: { url?: string; dryRun?: boolean; limit?: number; json?: boolean }) => {
       try {
         await runCloudPush(options);
       } catch (err) {
@@ -51,14 +51,14 @@ export function registerCloudCommands(program: Command): void {
     });
 
   cloud
-    .command('connect <invite-code>')
-    .description("Rejoint un projet cloud : réclame l'invitation, prouve la possession de l'identité et atteste la clé de chiffrement de cet appareil")
-    .requiredOption('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
-    .requiredOption('--agent <id>', "Identifiant d'agent à enrôler (opaque, 4 à 64 caractères)")
+    .command('connect <url|code>')
+    .description("Rejoint un projet cloud depuis l'URL d'activation ou un code ; attend ensuite l'approbation humaine")
+    .option('--url <url>', `Origine du déploiement si vous fournissez un code nu (ex. ${DEFAULT_URL_HINT})`)
+    .requiredOption('--agent <id>', "Identifiant d'agent à enrôler (4 à 64 caractères : a-z, A-Z, 0-9, _ ou -)")
     .option('--json', 'Sortie JSON')
-    .action(async (inviteCode: string, options: { url: string; agent: string; json?: boolean }) => {
+    .action(async (activation: string, options: { url?: string; agent: string; json?: boolean }) => {
       await runCloudConnect({
-        inviteCode,
+        inviteCode: activation,
         url: options.url,
         agentId: options.agent,
         json: options.json,
@@ -67,12 +67,9 @@ export function registerCloudCommands(program: Command): void {
 
   cloud
     .command('await')
-    .description("Constate l'approbation humaine et active l'appairage local")
-    // Commande DISTINCTE de connect : l'approbation dépend d'un humain dont le délai
-    // n'est pas borné. Bloquer indéfiniment sur un tiers ferait un mauvais citoyen dans
-    // un script, et une interruption doit rester reprenable.
-    .requiredOption('--url <url>', 'Adresse du déploiement cloud')
-    .action(async (options: { url: string }) => {
+    .description("Reprend l'attente d'approbation humaine après une interruption (maximum 15 min)")
+    .option('--url <url>', 'Adresse du déploiement cloud (utilise celle mémorisée après appairage)')
+    .action(async (options: { url?: string }) => {
       await runCloudAwait({ url: options.url })
         .catch((err: unknown) => fail(`Erreur : ${err instanceof Error ? err.message : String(err)}`));
     });
@@ -80,11 +77,11 @@ export function registerCloudCommands(program: Command): void {
   cloud
     .command('disconnect')
     .description("Retire l'autorisation locale et demande la révocation distante")
-    .requiredOption('--url <url>', 'Adresse du déploiement cloud')
+    .option('--url <url>', 'Adresse du déploiement cloud (utilise celle mémorisée après appairage)')
     // Effacer le trousseau rend DÉFINITIVEMENT illisible tout ce qui a été scellé sous
     // ces epochs. Ce n'est donc pas le défaut : on le demande explicitement.
     .option('--forget-keys', "Efface aussi les clés d'epoch de ce projet (le passé scellé devient illisible ici)")
-    .action(async (options: { url: string; forgetKeys?: boolean }) => {
+    .action(async (options: { url?: string; forgetKeys?: boolean }) => {
       await runCloudDisconnect({ url: options.url, forgetKeys: options.forgetKeys })
         .catch((err: unknown) => fail(`Erreur : ${err instanceof Error ? err.message : String(err)}`));
     });
