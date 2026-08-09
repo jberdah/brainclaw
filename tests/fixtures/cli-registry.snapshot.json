@@ -1049,7 +1049,7 @@
       {
         "flags": "--url <url>",
         "long": "--url",
-        "mandatory": true,
+        "mandatory": false,
         "negate": false,
         "short": null,
         "valueOptional": false,
@@ -1063,7 +1063,7 @@
     "aliases": [],
     "arguments": [
       {
-        "name": "invite-code",
+        "name": "url|code",
         "required": true,
         "variadic": false
       }
@@ -1092,7 +1092,7 @@
       {
         "flags": "--url <url>",
         "long": "--url",
-        "mandatory": true,
+        "mandatory": false,
         "negate": false,
         "short": null,
         "valueOptional": false,
@@ -1119,7 +1119,7 @@
       {
         "flags": "--url <url>",
         "long": "--url",
-        "mandatory": true,
+        "mandatory": false,
         "negate": false,
         "short": null,
         "valueOptional": false,
@@ -1166,7 +1166,7 @@
       {
         "flags": "--url <url>",
         "long": "--url",
-        "mandatory": true,
+        "mandatory": false,
         "negate": false,
         "short": null,
         "valueOptional": false,
