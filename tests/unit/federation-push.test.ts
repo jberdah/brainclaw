@@ -232,14 +232,29 @@ describe('transport — ce qui part sur le fil', () => {
       await pushPending({ cwd: ws.dir, url: URL_, fetchImpl: capture });
 
       // La forme RÉELLE attendue par le cloud — à plat, pas `{envelope, ...}`.
+      // `envelope_json` a rejoint le fil avec dec#162 : l'enveloppe SIGNÉE verbatim, dont le
+      // pull a besoin pour vérifier la signature d'AUTEUR (que `origin_sig`, ici de
+      // TRANSPORT, ne porte pas).
       assert.deepEqual(Object.keys(body).sort(), [
-        'base_rev', 'content_hash', 'entity_id', 'entity_kind', 'id', 'idempotency_key',
-        'key_epoch', 'meta', 'origin_agent_id', 'origin_sig', 'origin_sig_payload_hash',
-        'origin_signer_fingerprint', 'rev', 'sealed_b64',
+        'base_rev', 'content_hash', 'entity_id', 'entity_kind', 'envelope_json', 'id',
+        'idempotency_key', 'key_epoch', 'meta', 'origin_agent_id', 'origin_sig',
+        'origin_sig_payload_hash', 'origin_signer_fingerprint', 'rev', 'sealed_b64',
       ]);
       // Le clair ne doit apparaître nulle part : seul `sealed_b64` porte le contenu.
       assert.equal(typeof body['sealed_b64'], 'string');
       assert.equal(headers['idempotency-key'], 'a@r1', 'le cloud doit pouvoir dédoublonner sans ouvrir le corps');
+
+      // `envelope_json` NE DIVULGUE RIEN DE NEUF (dec#162) : c'est l'enveloppe déjà signée —
+      // meta PUBLIQUE (identique à celle déjà envoyée en clair), sealed OPAQUE (chiffré), et
+      // la signature d'AUTEUR. On gèle le fait qu'elle porte `origin_sig.value` (l'auteur) et
+      // un `sealed` chiffré, jamais de clair.
+      const verbatim = JSON.parse(String(body['envelope_json'])) as {
+        meta: unknown; sealed: { ciphertext?: string }; key_epoch: number;
+        origin_sig: { alg: string; key_id: string; value: string };
+      };
+      assert.ok(verbatim.origin_sig?.value, 'la signature d\'AUTEUR doit voyager dans envelope_json');
+      assert.ok(verbatim.sealed?.ciphertext, 'le contenu reste dans sealed, chiffré');
+      assert.deepEqual(verbatim.meta, body['meta'], 'meta verbatim == meta déjà envoyée : aucun champ nouveau ne fuit');
       });
     } finally { ws.cleanup(); }
   });

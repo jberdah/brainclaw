@@ -509,7 +509,47 @@ export interface CloudPushOptions {
  * Les refus des trois filets sont AFFICHÉS, un par un. Un objet refusé n'est pas un objet
  * en retard : c'est un objet qui ne partira jamais tant que la cause n'est pas corrigée.
  */
-export async function runCloudPush(options: CloudPushOptions = {}): Promise<void> {
+export interface CloudPullOptions {
+  cwd?: string;
+  url?: string;
+  limit?: number;
+  json?: boolean;
+}
+
+/** Réception v2 : delta reçu et écritures locales sont affichés séparément. */
+export async function runCloudPull(options: CloudPullOptions = {}): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const { pullFederationDelta } = await import('../core/federation-pull.js');
+  const url = resolveCloudUrl(options.url, loadConnectionState(cwd));
+  const pulled = await pullFederationDelta({ cwd, url, limit: options.limit });
+  if (options.json) {
+    console.log(JSON.stringify(pulled, null, 2));
+    return;
+  }
+  console.log('Réception fédérée');
+  console.log(`  reçues          : ${pulled.received}`);
+  console.log(`  vérifiées        : ${pulled.verified}`);
+  console.log(`  matérialisées    : ${pulled.materialized}`);
+  if (pulled.unreadable_epoch_absent.length) {
+    console.log(`  ILLISIBLES       : ${pulled.unreadable_epoch_absent.length} — conservées, jamais jetées`);
+    for (const item of pulled.unreadable_epoch_absent) console.log(`    epoch ${item.key_epoch ?? '?'} — ${item.reason}`);
+  }
+  if (pulled.deferred.length) {
+    console.log(`  différées        : ${pulled.deferred.length}`);
+    for (const item of pulled.deferred) console.log(`    ${item.idempotency_key ?? 'sans clé'} — ${item.reason}`);
+  }
+  if (pulled.rejected.length) {
+    console.log(`  REJETÉES         : ${pulled.rejected.length}`);
+    for (const item of pulled.rejected) console.log(`    ${item.idempotency_key ?? 'sans clé'} — ${item.reason}`);
+  }
+  console.log(`  curseur feed     : ${pulled.feed_cursor ?? 'inchangé'}`);
+  console.log('');
+  console.log(`  ⚠ ${pulled.roster_limitation}`);
+}
+/**
+ * `brainclaw cloud push` — projette les plans et la mémoire projet vers le cloud.
+ * Les états de mise en file et d'envoi sont volontairement affichés séparément.
+ */export async function runCloudPush(options: CloudPushOptions = {}): Promise<void> {
   const cwd = options.cwd ?? resolveEffectiveCwd();
   const { emitProjections } = await import('../core/federation-emit.js');
   const { pushPending } = await import('../core/federation-push.js');
