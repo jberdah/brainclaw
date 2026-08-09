@@ -47,6 +47,14 @@ export interface OutboxEntry {
    * `{...sealed, extra}` — le troisième filet de l'étape 5 existe pour cette raison.
    */
   sealed: unknown;
+  /**
+   * Agent d'ORIGINE tel que le cloud le connaît — distinct de l'empreinte du signataire.
+   * L'enveloppe ne porte qu'un `key_id` ; le cloud, lui, vérifie DEUX choses : que l'agent
+   * a un enrôlement actif (`origin_agent_id`) ET que l'empreinte de la clé signataire
+   * correspond à son identité attestée. Les confondre rend un 422
+   * SIGNER_FINGERPRINT_MISMATCH parfaitement opaque.
+   */
+  origin_agent_id?: string;
   attempts: number;
   last_error?: string;
   created_at: string;

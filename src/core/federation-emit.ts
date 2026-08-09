@@ -267,7 +267,7 @@ export function emitProjections(options: EmitOptions = {}): EmitResult {
       if (options.dryRun) continue;
 
       const added = enqueue(
-        { idempotency_key: idempotencyKey, operation_id: idempotencyKey, base_rev: item.rev, key_epoch: epoch, sealed: envelope },
+        { idempotency_key: idempotencyKey, operation_id: idempotencyKey, base_rev: item.rev, key_epoch: epoch, sealed: envelope, origin_agent_id: agentId },
         cwd,
       );
       if (added) result.enqueued += 1;
