@@ -6,6 +6,7 @@ import {
   runCloudDisconnect,
   runCloudPull,
   runCloudPush,
+  runCloudGrant,
 } from '../commands/cloud.js';
 
 /** Adresse du cloud. Fournie par `--url`, sans quoi la commande demande de la préciser. */
@@ -60,6 +61,32 @@ export function registerCloudCommands(program: Command): void {
     .action(async (options: { url?: string; limit?: number; json?: boolean }) => {
       try {
         await runCloudPull(options);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    });
+  cloud
+    .command('grant <agentId>')
+    .description("Remet des clés d'epoch à un appareil approuvé — seul un détenteur actif le peut")
+    .option('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
+    // Le défaut est `current` (dec#163 §1) : un membre invité voit à partir de son
+    // arrivée. `all` est réservé à un autre appareil DE LA MÊME personne — c'est un choix
+    // explicite, jamais un effet de bord.
+    .option('--horizon <all|current>', "Étendue remise : 'all' (vos propres appareils) ou 'current' (invité)", 'current')
+    .option('--epoch <n...>', 'Epochs précis à remettre (outrepasse --horizon)', (v: string, acc: number[]) => {
+      acc.push(Number.parseInt(v, 10));
+      return acc;
+    }, [] as number[])
+    .option('--json', 'Sortie JSON')
+    .action(async (agentId: string, options: { url?: string; horizon?: 'all' | 'current'; epoch?: number[]; json?: boolean }) => {
+      try {
+        await runCloudGrant({
+          to: agentId,
+          url: options.url,
+          horizon: options.horizon,
+          epochs: options.epoch?.length ? options.epoch : undefined,
+          json: options.json,
+        });
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }

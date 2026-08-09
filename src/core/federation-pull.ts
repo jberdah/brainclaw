@@ -51,6 +51,10 @@ export interface PullResult {
   retained: number;
   feed_cursor?: string;
   roster_limitation: string;
+  /** Remises de clés d'epoch reçues et rangées pendant ce pull (pln#658). */
+  epoch_keys_received?: number[];
+  /** Remises refusées — nommées une par une, jamais agrégées en un compte muet. */
+  epoch_keys_rejected?: Array<{ epoch?: number; reason: string; detail: string }>;
 }
 
 interface PendingInbound { raw: unknown; key_epoch?: number; received_at: string }
@@ -305,6 +309,37 @@ export async function pullFederationDelta(options: PullOptions): Promise<PullRes
     throw new Error(`${CLOUD_ROSTER_LIMITATION} Le endpoint n'a fourni aucune clé Ed25519 publiquement vérifiable ; aucun clair ne sera matérialisé.`);
   }
 
+  // ── RÉCEPTION DES REMISES DE CLÉS, AVANT DE CHOISIR LES CLÉS D'EPOCH (pln#658) ──
+  //
+  // L'ORDRE EST LE POINT : une clé reçue MAINTENANT rend lisibles, DANS LE MÊME PULL, les
+  // enveloppes conservées comme « illisibles, epoch absent ». Recevoir après aurait obligé
+  // à un second pull pour que la remise produise son effet — et l'opérateur aurait vu un
+  // « 0 matérialisé » juste après avoir reçu ses clés.
+  //
+  // Le roster des custodians est celui des identités attestées actives (dec#163 §2 : tout
+  // détenteur actif peut remettre). Un échec de réception n'interrompt PAS le pull : les
+  // enveloppes déjà lisibles doivent arriver même si la remise de clés échoue.
+  const grantOutcome: { stored: number[]; rejected: Array<{ epoch?: number; reason: string; detail: string }> } =
+    { stored: [], rejected: [] };
+  try {
+    const { receiveEpochGrants } = await import('./federation-grant-transport.js');
+    const received = await receiveEpochGrants({
+      cwd,
+      url: base,
+      apiKey: options.apiKey,
+      fetchImpl: options.fetchImpl,
+      recipientDeviceId: current.device.device_id,
+      activeCustodians: roster.keys,
+    });
+    grantOutcome.stored = received.stored;
+    grantOutcome.rejected = received.rejected;
+  } catch (err) {
+    grantOutcome.rejected.push({
+      reason: 'unavailable',
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   const epochKeys = new Map<number, crypto.KeyObject>();
   for (const [, raw] of entries) {
     const epoch = asRecord(raw)?.['key_epoch'];
@@ -324,6 +359,8 @@ export async function pullFederationDelta(options: PullOptions): Promise<PullRes
     received: delta.envelopes.length, verified: batch.accepted, materialized: 0,
     unreadable_epoch_absent: [], rejected: [], deferred: [], retained: 0,
     feed_cursor: delta.cursor, roster_limitation: CLOUD_ROSTER_LIMITATION,
+    epoch_keys_received: grantOutcome.stored,
+    epoch_keys_rejected: grantOutcome.rejected,
   };
   let next = current;
   const seen = new Set(journal.seen);
