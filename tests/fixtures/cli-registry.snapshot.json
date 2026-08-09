@@ -1047,6 +1047,23 @@
     "arguments": [],
     "options": [
       {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud accept-solo-risk"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
         "flags": "--url <url>",
         "long": "--url",
         "mandatory": false,
@@ -1267,6 +1284,33 @@
       }
     ],
     "path": "brainclaw cloud push"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud rotate"
   },
   {
     "aliases": [],

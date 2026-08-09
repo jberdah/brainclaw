@@ -7,6 +7,8 @@ import {
   runCloudPull,
   runCloudPush,
   runCloudGrant,
+  runCloudRotate,
+  runCloudAcceptSoloRisk,
 } from '../commands/cloud.js';
 
 /** Adresse du cloud. Fournie par `--url`, sans quoi la commande demande de la préciser. */
@@ -87,6 +89,31 @@ export function registerCloudCommands(program: Command): void {
           epochs: options.epoch?.length ? options.epoch : undefined,
           json: options.json,
         });
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    });
+  cloud
+    .command('rotate')
+    .description("Crée l'epoch suivant et y bascule les écritures — ferme la lecture FUTURE à un révoqué")
+    // `--force` existe mais n'est PAS le premier réflexe : le refus de quorum nomme
+    // d'abord `accept-solo-risk`, qui laisse une trace datée. Forcer n'en laisse aucune.
+    .option('--force', 'Passer outre le quorum de récupération SANS consigner de consentement')
+    .option('--json', 'Sortie JSON')
+    .action(async (options: { force?: boolean; json?: boolean }) => {
+      try {
+        await runCloudRotate(options);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    });
+  cloud
+    .command('accept-solo-risk')
+    .description('Consigne votre acceptation du risque solo (perte de cette machine = perte du passé)')
+    .option('--json', 'Sortie JSON')
+    .action(async (options: { json?: boolean }) => {
+      try {
+        await runCloudAcceptSoloRisk(options);
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }
