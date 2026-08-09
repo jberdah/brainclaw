@@ -127,15 +127,41 @@ export function list(state: SyncState, cwd: string = process.cwd()): OutboxEntry
   const dir = stateDir(state, cwd);
   if (!fs.existsSync(dir)) return [];
   const entries: OutboxEntry[] = [];
+  let legacy = 0;
   for (const name of fs.readdirSync(dir)) {
     if (!name.endsWith('.json')) continue;
     try {
-      entries.push(JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8')) as OutboxEntry);
+      const parsed = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8')) as Partial<OutboxEntry>;
+      // ── DÉBRIS v1 DANS LE MÊME RÉPERTOIRE ────────────────────────────────────
+      //
+      // dec#156 a abandonné le format v1 SANS migration — mais la v2 réutilise le même
+      // chemin sur disque, et les entrées v1 y sont restées. Elles n'ont ni `schema` ni
+      // `created_at` (leurs champs sont op/entity_type/enqueued_at/last_status).
+      //
+      // Sans ce filtre, le tri par `created_at` lève « Cannot read properties of
+      // undefined (reading 'localeCompare') » et `brainclaw cloud status` PLANTE —
+      // c'est-à-dire la toute première commande qu'on lance après un appairage réussi.
+      // Constaté sur un magasin réel portant 129 entrées v1 (2026-08-09).
+      //
+      // Elles sont IGNORÉES, pas supprimées : ce sont des opérations peut-être jamais
+      // émises, et les effacer ici retirerait leur seule trace. Le compte est journalisé
+      // pour que leur présence reste visible plutôt que devinée.
+      if (parsed.schema !== OUTBOX_ENTRY_SCHEMA || typeof parsed.created_at !== 'string') {
+        legacy += 1;
+        continue;
+      }
+      entries.push(parsed as OutboxEntry);
     } catch {
       // Une entrée corrompue est ignorée à la lecture mais reste sur disque : la
       // supprimer ici effacerait la seule trace d'une opération peut-être jamais émise.
       logger.warn(`Entrée d'outbox ignorée (illisible) : ${name}`);
     }
+  }
+  if (legacy > 0) {
+    logger.warn(
+      `${legacy} entrée(s) d'outbox au format v1 ignorée(s) dans « ${STATE_DIRS[state]} » — ` +
+        `abandonnées par dec#156, conservées sur disque, sans effet sur la fédération v2.`,
+    );
   }
   return entries.sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
