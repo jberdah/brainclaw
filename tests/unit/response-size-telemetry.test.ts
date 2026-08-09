@@ -25,6 +25,7 @@ import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { mutateState } from '../../src/core/state.js';
 import { saveClaim } from '../../src/core/claims.js';
+import { saveAssignment } from '../../src/core/assignments.js';
 import { nowISO } from '../../src/core/ids.js';
 
 let ws: TestWorkspace;
@@ -72,6 +73,33 @@ function seedDenseStore(cwd: string): void {
       } as never);
     }
   }, cwd);
+
+  // ── UNE ASSIGNATION À DESCRIPTION LONGUE, ET C'EST INDISPENSABLE ───────────────
+  //
+  // `compact` ne tronque QUE les descriptions d'`open_work`, lesquelles proviennent des
+  // assignations (compactOpenWork, OPEN_WORK_DESCRIPTION_LIMIT = 200). Sans assignation
+  // dans le magasin, compact n'a RIEN à compacter : les deux modes rendent exactement la
+  // même réponse, et la comparaison ci-dessous devient un pile ou face que trois
+  // caractères de variation d'environnement suffisent à faire basculer.
+  //
+  // C'est très exactement ce qui s'est produit : vert en local (4079 contre 4079, delta
+  // nul et parfaitement reproductible sur six paires), rouge en CI Windows (4079 contre
+  // 4076). Le test n'attrapait pas une régression du produit — il n'exerçait simplement
+  // pas la fonctionnalité qu'il prétendait mesurer.
+  //
+  // La description dépasse largement la limite pour que la troncature soit AMPLE et non
+  // marginale : un écart de quelques caractères ne prouverait rien, un écart de plusieurs
+  // centaines ne peut pas venir du bruit.
+  saveAssignment({
+    id: 'asgn_seed',
+    claim_id: 'clm_seed',
+    agent: 'seed-agent',
+    dispatcher_agent: 'seed-dispatcher',
+    scope: 'src/seed',
+    description: `Brief de dispatch volontairement long, pour que la troncature de compact ait prise. `.repeat(12),
+    status: 'started',
+    created_at: nowISO(),
+  } as never, cwd);
 
   saveClaim({
     id: 'clm_seed',
@@ -183,7 +211,7 @@ describe('télémétrie — la baseline est MESURÉE, pas supposée', () => {
 });
 
 describe('télémétrie — comparer deux modes exige deux workspaces NEUFS', () => {
-  it('bclaw_work compact ne rend pas plus que le mode plein, à égalité de conditions', async () => {
+  it('bclaw_work compact rend une projection RÉDUITE, à égalité de conditions', async () => {
     // PIÈGE RENCONTRÉ ICI, ET C'EST LA RAISON DE CE COMMENTAIRE. Mesurer les deux modes
     // dans LE MÊME workspace compare deux choses différentes : le PREMIER appel démarre
     // la session et paie ce coût, le second la reprend. Vérifié dans les deux ordres —
@@ -192,14 +220,42 @@ describe('télémétrie — comparer deux modes exige deux workspaces NEUFS', ()
     //
     // Un test qui aurait conclu « compact n'allège rien » aurait accusé le produit d'un
     // défaut appartenant à sa propre méthode de mesure.
+    // INTENT `resume`, PAS `consult` — et ce choix a été MESURÉ, pas supposé.
+    //
+    // La version précédente comparait les deux modes sur `consult`, où ils rendent
+    // RIGOUREUSEMENT la même réponse (4079 contre 4079, delta nul et reproductible sur
+    // six paires de workspaces neufs). L'assertion `compact <= full` y était donc
+    // satisfaite par égalité, PAR ACCIDENT — jusqu'à ce que trois caractères de variation
+    // d'environnement la renversent en CI Windows (4079 contre 4076). Le test n'attrapait
+    // aucune régression : il n'exerçait pas la fonctionnalité qu'il prétendait mesurer.
+    //
+    // Sur `resume`, compact rend une PROJECTION RÉDUITE du payload de contexte
+    // (mcp.ts, branche `useCompact`) : ~2100 caractères d'écart, hors de portée du bruit.
+    // CONTRE-ÉPREUVE FAITE : en forçant `useCompact = false`, vérifié dans le .js compilé,
+    // ce test vire au rouge. Une première tentative visait `compactOpenWork` — neutraliser
+    // la troncature laissait le test VERT, parce qu'`open_work` est nul ici. L'économie
+    // vient de la projection réduite, pas de la troncature des briefs.
     const compact = await inFreshWorkspace((cwd) =>
-      measureIn(cwd, 'bclaw_work', { intent: 'consult', compact: true }));
+      measureIn(cwd, 'bclaw_work', { intent: 'resume', compact: true }));
     const full = await inFreshWorkspace((cwd) =>
-      measureIn(cwd, 'bclaw_work', { intent: 'consult' }));
+      measureIn(cwd, 'bclaw_work', { intent: 'resume', compact: false }));
 
+    // ASSERTION STRICTE, redevenue mesurable. La version précédente écrivait
+    // `compact <= full` sur un magasin SANS assignation : les deux valeurs étaient
+    // identiques et l'égalité satisfaisait l'assertion par accident, jusqu'à ce qu'une
+    // variation d'environnement de trois caractères la renverse en CI.
+    //
+    // Avec une assignation à description longue semée, compact DOIT rendre strictement
+    // moins — et de beaucoup. Exiger un écart substantiel plutôt qu'un simple ordre
+    // empêche ce test de redevenir un pile ou face si la troncature disparaissait.
     assert.ok(
-      compact <= full,
-      `compact rend ${compact} caractères contre ${full} en mode plein, à conditions égales`,
+      compact < full,
+      `compact rend ${compact} caractères contre ${full} en mode plein : la troncature n'a pas eu lieu`,
+    );
+    assert.ok(
+      full - compact > 200,
+      `compact n'économise que ${full - compact} caractères — trop peu pour distinguer une ` +
+        `troncature réelle du bruit d'environnement (mesuré à 3 caractères en CI Windows)`,
     );
   });
 

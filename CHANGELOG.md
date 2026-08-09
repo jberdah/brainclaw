@@ -5,6 +5,47 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] — 2026-08-09
+
+A maintenance release with one theme: **the MCP tool catalog stops being hand-written prose and becomes derived from zod** — and the guards meant to prove such a migration is transparent turn out not to have been able to. No breaking changes; the public surface fingerprint does not move.
+
+### Changed
+
+- **Fifteen MCP tools now derive their `inputSchema` from zod sources** (pln#599; #221, #222). Five families: capture (`write_note`, `quick_capture`), sequence (`create_sequence`, `update_sequence`), claim (`claim`, `release_claim`), session (`session_start`, `session_end`), step (`add_step`, `update_step`, `complete_step`, `delete_step`) and assignment (`assignment_update`, `assignment_action`, `assignment_events`). This closes the trp#180 class — a duplicated sub-schema fixed on one side only — for every family it covers: the sequence lane item was literally two copies of the same JSON and is now one zod source.
+
+  Each family exposed a different way to change the published surface while believing you are not:
+
+  - **sequence** — `rank` silently went from REQUIRED to optional. A loosening: a call missing `rank` would be accepted by the published schema, then rejected further down.
+  - **session** — neither tool has *any* required field, deliberately (`bclaw_session_start` with no argument is the normal call). zod only emits `required` when a non-optional field survives, so one forgotten `.optional()` would have created a requirement where none existed — a hardening that breaks the argument-less call.
+  - **step** — invalidated the rule the previous family had produced. "Strip `additionalProperties` at the ROOT only" was true for sequence (whose lane item carried one by hand) and **false as a general rule**: `add_step`'s `data` sub-object carries none, so root-only would have left the one zod emits — reintroducing the exact hardening the rule existed to prevent. The instruction was never "root"; it is *reproduce the hand-written schema bit for bit*. `OPEN_SCHEMAS` is now a `Map` of name → `'root' | 'deep'`, each entry justified by what was published.
+  - **assignment** — `payload` and `response_schema` are published as a bare `{ type: 'object' }`. Four zod constructs were measured rather than assumed: `z.object({})` yields an object that accepts **nothing**, `z.looseObject({})` and `z.record(…)` each add keys the published version never had, and only `z.unknown().meta({ type: 'object' })` is exact. Two nested `required` sets (`artifacts[]` → `type`+`ref`, `action_required` → `kind`+`title`+`prompt`) were verified on the generated output.
+
+### Added
+
+- **`tests/unit/mcp-migrated-surface-freeze.test.ts` — the migrated surface is frozen WITH its descriptions.** None of the three existing guards could see a description drift: `mcp-governance` strips descriptions before hashing (deliberately — it measures the shape of the contract, not its prose), `mcp-zod-parity` only compares `LoopPhase`/`LoopSlotInput`, and `cli-registry-snapshot` measures the weaker CLI surface. Relying on the last one to claim a migration was transparent had already shipped three undetected surface changes.
+
+  Demonstrated, not asserted: changing **one** description in `bclaw_claim`'s zod source turns the new freeze red — naming the tool and both fingerprints — **while `mcp-governance` stays green at 2/2**. For an agent, the description *is* contract: it is what it reads to decide whether to call a tool and with which values.
+- **A measured response-size baseline** for the MCP read tools, with per-tool ceilings and an assertion that no measured response is empty — a zero would otherwise pass every ceiling (pln#598; #214). Comparing two modes uses **fresh workspaces per measurement**: session-start cost lands on whichever call runs first and would otherwise be read as a difference between the modes.
+- **An executable exclusion criterion for the intent-polymorphic facades** (pln#599; #217). A schema is excluded when its `intent` property carries an enum — the valid shape of the rest then depends on the chosen value. The plan named three facades; the measurement found **four** (`bclaw_loop` too). A name list goes stale at the next facade; this criterion does not.
+- **A docs-vs-facts guard** on the catalog counts and facade table (pln#599; #213), so the drift between published tool counts and documentation cannot be reintroduced.
+
+### Fixed
+
+- **A session resolved against a different project is now traced instead of silently swallowed** (pln#648; #209). `brainclaw switch` surfaces `session_divergence` in both text and JSON, recorded during the existing session probe at **zero extra disk reads**.
+- **`bclaw_coordinate(intent=consult)` no longer ignores `autoExecute` in silence** (pln#626; #218), reporting `auto_execute_ignored_on_consult` rather than leaving the caller to believe work was dispatched.
+- **The dead `dispatch` flag is gone from `bclaw_loop(intent=turn)`**, along with the misleading trust gate it guarded (pln#626; #212). The flag did nothing, but the gate it opened suggested it did.
+- **`next_actions` is omitted when empty** rather than emitted as `[]` (pln#598; #219), with the observed coverage frozen against regression.
+
+### Performance
+
+- **`open_work` is projected compactly**: briefs truncated at 200 characters with `description_truncated` and a ready-made `full_text_via` call to fetch the whole text on demand (pln#598; #215).
+- **`bclaw_code_brief` summarises its related memory** at 300 characters, keeping `id`, `kind`, `tags` and `related_paths` WHOLE — the fields an agent navigates by (pln#598; #216).
+
+### Notes
+
+- MCP public surface fingerprint: **unchanged**. That is pln#599's acceptance criterion, not a side effect — a migration that moves the fingerprint is no longer a migration.
+- Remaining in the batch: bootstrap, context, search, inbox — then `find`/`create`/`update` last, since a schema regression on the canonical grammar would show up everywhere.
+
 ## [1.22.0] — 2026-08-08
 
 The federation v2 release: the cloud path is rebuilt from scratch as an end-to-end encrypted projection, and joining a project becomes an attested key ceremony instead of a PEM you paste. Eight PRs closing pln#651 end to end (8/8 steps), with a companion rewrite of the Cloud backend (pln#103, 7/7).
