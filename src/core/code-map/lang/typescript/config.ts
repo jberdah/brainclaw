@@ -286,7 +286,12 @@ export function typeScriptSpecifierBases(
   if (matches.length > 1) return [];
   if (matches.length === 1) {
     const { mapping, wildcard } = matches[0]!;
-    return mapping.targets.map((target) => target.replace('*', wildcard));
+    // `parsePaths` garantit AU PLUS une `*` par cible (starCount > 1 ⇒ config invalide,
+    // donc abstention totale) : split/join et replace-première-occurrence sont ici
+    // équivalents. split/join est préféré parce qu'il reste correct même si cet
+    // invariant bougeait — et il est lisible par l'analyse statique (js/incomplete-
+    // sanitization signalait le replace sans pouvoir voir l'invariant amont).
+    return mapping.targets.map((target) => target.split('*').join(wildcard));
   }
   return config.baseUrl === null ? [] : [path.posix.join(config.baseUrl, specifier)];
 }
