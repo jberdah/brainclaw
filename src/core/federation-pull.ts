@@ -10,8 +10,14 @@ import { verifyInboundBatch, type AttestedRoster, type VerificationAccepted } fr
 import { loadEpochPrivateKey } from './federation-keyring.js';
 import { localIdForOpaque, rememberOpaqueId } from './federation-opaque-ids.js';
 import { addStep, createPlan, updatePlan, updateStep } from './operations/plan.js';
+import { createConstraint, createDecision, createTrap } from './operations/memory-write.js';
+import { updateMemoryItem } from './operations/memory-mutation.js';
+import { createSequence, updateSequence } from './sequence.js';
+import { generateRuntimeNoteId, listRuntimeNotes, saveRuntimeNote } from './runtime.js';
+import { HandoffSchema, type Handoff } from './schema.js';
+import { generateIdWithLabel, nowISO } from './ids.js';
+import { mutateState } from './state.js';
 import { memoryDir, writeFileAtomic } from './io.js';
-import { nowISO } from './ids.js';
 import { loadConnectionState, recordRevision, saveConnectionState, type FederationConnectionState } from './federation-state.js';
 
 const INBOUND_SCHEMA = 'brainclaw.federation-inbound-pull/v1';
@@ -196,6 +202,64 @@ function priorityOf(value: unknown): 'low' | 'medium' | 'high' | 'critical' | un
   return value === 'low' || value === 'medium' || value === 'high' || value === 'critical' ? value : undefined;
 }
 
+function statusOf<T extends string>(value: unknown, accepted: readonly T[]): T | undefined {
+  return typeof value === 'string' && (accepted as readonly string[]).includes(value) ? value as T : undefined;
+}
+
+function authorOf(accepted: VerificationAccepted): string {
+  // L'identité de signature a été vérifiée par verifyInboundBatch contre le roster :
+  // elle est sûre à conserver comme provenance locale, sans prétendre connaître un nom.
+  return `federation:${accepted.envelope.origin_sig.key_id}`;
+}
+
+function textAndTagsPatch(text: string, tags: string[] | undefined): Record<string, unknown> {
+  return { text, ...(tags ? { tags } : {}) };
+}
+
+/**
+ * Handoff has no standalone create operation yet. This goes through mutateState, the same
+ * canonical mutation pipeline used by its lifecycle operations: it never writes an entity
+ * JSON file directly. The remote projection does not carry `from`/`to`, so their local
+ * receiver values deliberately describe the federation hop rather than invent source data.
+ */
+function saveFederatedHandoff(input: {
+  id?: string;
+  text: string;
+  tags?: string[];
+  status?: 'open' | 'accepted' | 'closed';
+  author: string;
+}, cwd: string): string {
+  if (input.id) {
+    mutateState((state) => {
+      const current = state.open_handoffs.find((handoff) => handoff.id === input.id);
+      if (!current) throw new Error(`handoff with id '${input.id}' not found locally despite its opaque mapping`);
+      const next: Handoff = HandoffSchema.parse({
+        ...current,
+        text: input.text,
+        tags: input.tags ?? current.tags,
+        status: input.status ?? current.status,
+      });
+      Object.assign(current, next);
+    }, cwd);
+    return input.id;
+  }
+
+  const { id, short_label } = generateIdWithLabel('open_handoffs', cwd);
+  mutateState((state) => {
+    state.open_handoffs.push(HandoffSchema.parse({
+      id,
+      short_label,
+      from: input.author,
+      to: 'local',
+      text: input.text,
+      created_at: nowISO(),
+      author: input.author,
+      status: input.status ?? 'open',
+      tags: input.tags ?? [],
+    }));
+  }, cwd);
+  return id;
+}
 class DeferredMaterialization extends Error {}
 
 /**
@@ -247,8 +311,106 @@ function materialize(accepted: VerificationAccepted, state: FederationConnection
     return;
   }
 
-  // Les familles sans mutation canonique correspondante sont différées. Les accepter dans
-  // high_water les ferait disparaître du feed sans jamais atteindre le magasin local.
+  const author = authorOf(accepted);
+  const text = content['text'] as string;
+
+  if (accepted.kind === 'decision') {
+    if (existing) {
+      updateMemoryItem({ id: existing, type: 'decision', patch: textAndTagsPatch(text, tags) }, cwd);
+      return;
+    }
+    const created = createDecision({ text, author, tags }, cwd);
+    rememberOpaqueId(state.cloud_project_id, created.id, opaque, cwd);
+    return;
+  }
+
+  if (accepted.kind === 'constraint') {
+    const status = statusOf(accepted.envelope.meta.status.object, ['active', 'resolved', 'expired'] as const);
+    if (existing) {
+      updateMemoryItem({
+        id: existing,
+        type: 'constraint',
+        patch: { ...textAndTagsPatch(text, tags), ...(status ? { status } : {}) },
+      }, cwd);
+      return;
+    }
+    const created = createConstraint({ text, author, tags }, cwd);
+    // createConstraint correctly owns ID/provenance creation; its lifecycle starts at active,
+    // so apply a projected terminal state through the same mutation path afterwards.
+    if (status && status !== 'active') {
+      updateMemoryItem({ id: created.id, type: 'constraint', patch: { status } }, cwd);
+    }
+    rememberOpaqueId(state.cloud_project_id, created.id, opaque, cwd);
+    return;
+  }
+
+  if (accepted.kind === 'trap') {
+    const status = statusOf(accepted.envelope.meta.status.object, ['active', 'resolved', 'expired'] as const);
+    const severity = accepted.envelope.meta.priority === 'low' || accepted.envelope.meta.priority === 'medium'
+      ? accepted.envelope.meta.priority
+      : accepted.envelope.meta.priority === 'high' || accepted.envelope.meta.priority === 'critical'
+        ? 'high'
+        : undefined;
+    if (existing) {
+      updateMemoryItem({
+        id: existing,
+        type: 'trap',
+        patch: {
+          ...textAndTagsPatch(text, tags),
+          ...(status ? { status } : {}),
+          ...(severity ? { severity } : {}),
+        },
+      }, cwd);
+      return;
+    }
+    const created = createTrap({ text, author, tags, status, severity }, cwd);
+    rememberOpaqueId(state.cloud_project_id, created.id, opaque, cwd);
+    return;
+  }
+
+  if (accepted.kind === 'handoff') {
+    const status = statusOf(accepted.envelope.meta.status.object, ['open', 'accepted', 'closed'] as const);
+    const id = saveFederatedHandoff({ id: existing, text, tags, status, author }, cwd);
+    if (!existing) rememberOpaqueId(state.cloud_project_id, id, opaque, cwd);
+    return;
+  }
+
+  if (accepted.kind === 'sequence') {
+    const status = statusOf(accepted.envelope.meta.status.object, ['draft', 'active', 'archived'] as const);
+    if (existing) {
+      updateSequence({ id: existing, name: text, tags, status }, cwd);
+      return;
+    }
+    const created = createSequence({ name: text, author, tags, status }, cwd);
+    rememberOpaqueId(state.cloud_project_id, created.id, opaque, cwd);
+    return;
+  }
+
+  if (accepted.kind === 'runtime_note') {
+    if (existing) {
+      const current = listRuntimeNotes({ visibility: 'all', includeAllHosts: true }, cwd)
+        .find((note) => note.id === existing);
+      if (!current) throw new Error(`runtime_note with id '${existing}' not found locally despite its opaque mapping`);
+      saveRuntimeNote({ ...current, text, tags: tags ?? current.tags }, cwd);
+      return;
+    }
+    const id = generateRuntimeNoteId();
+    saveRuntimeNote({
+      id,
+      agent: 'federation',
+      agent_id: accepted.envelope.origin_sig.key_id,
+      text,
+      created_at: nowISO(),
+      tags: tags ?? [],
+      visibility: 'shared',
+      note_type: 'observation',
+    }, cwd);
+    rememberOpaqueId(state.cloud_project_id, id, opaque, cwd);
+    return;
+  }
+
+  // Les familles hors projection restent dans le journal : les accepter dans high_water
+  // les ferait disparaître du feed sans jamais atteindre le magasin local.
   throw new DeferredMaterialization(`kind '${accepted.kind}' sans mutation canonique de réception.`);
 }
 

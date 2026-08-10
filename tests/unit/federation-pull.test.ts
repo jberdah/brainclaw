@@ -15,10 +15,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createTestWorkspace } from '../helpers/workspace.js';
-import { buildEnvelope, newOpaqueId, type FederationEnvelope } from '../../src/core/federation-projection.js';
+import { buildEnvelope, newOpaqueId, type FederatedKind, type FederationEnvelope } from '../../src/core/federation-projection.js';
 import { createConnectionState, newDeviceId, saveConnectionState, loadConnectionState } from '../../src/core/federation-state.js';
 import { pullFederationDelta } from '../../src/core/federation-pull.js';
 import { loadState } from '../../src/core/state.js';
+import { listSequences } from '../../src/core/sequence.js';
+import { listRuntimeNotes } from '../../src/core/runtime.js';
 import { localIdForOpaque } from '../../src/core/federation-opaque-ids.js';
 import { nowISO } from '../../src/core/ids.js';
 
@@ -38,22 +40,70 @@ function activeConnection(cwd: string): void {
   saveConnectionState(state, cwd);
 }
 
-function world(epoch = 1, text = 'Plan venu de A', signerKeyId = 'signer_a') {
+interface WorldCredentials {
+  recipientPrivateKey: crypto.KeyObject;
+  recipientPublicKeyPem: string;
+  signerPrivateKeyPem: string;
+  signerPem: string;
+}
+
+interface WorldOptions {
+  credentials?: WorldCredentials;
+  deps?: Array<{ from: string; to: string }>;
+  baseRev?: number;
+  epoch?: number;
+  idOpaque?: string;
+  signerKeyId?: string;
+}
+
+function worldCredentials(): WorldCredentials {
   const recipient = crypto.generateKeyPairSync('x25519');
   const signer = crypto.generateKeyPairSync('ed25519');
-  const opaque = newOpaqueId();
-  const envelope = buildEnvelope({
-    kind: 'plan', idOpaque: opaque, cloudProjectId: PROJECT, baseRev: 1,
-    statusObject: 'todo', occurredAt: '2026-08-09T10:00:00.000Z', wrapHint: `epoch:${epoch}`,
-    operationId: `op_${epoch}_${signerKeyId}`, keyEpoch: epoch, content: { text, type: 'feat' },
-    recipientPublicKeyPem: recipient.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
-    originKeyId: signerKeyId,
-    originPrivateKeyPem: signer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
-  });
   return {
-    opaque, envelope, recipientPrivateKey: recipient.privateKey,
+    recipientPrivateKey: recipient.privateKey,
+    recipientPublicKeyPem: recipient.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    signerPrivateKeyPem: signer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
     signerPem: signer.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
   };
+}
+
+function statusFor(kind: FederatedKind): string {
+  if (kind === 'plan' || kind === 'plan_step') return 'todo';
+  if (kind === 'handoff') return 'open';
+  if (kind === 'sequence') return 'active';
+  return 'active';
+}
+
+function federatedWorld(kind: FederatedKind, text: string, options: WorldOptions = {}) {
+  const credentials = options.credentials ?? worldCredentials();
+  const opaque = options.idOpaque ?? newOpaqueId();
+  const epoch = options.epoch ?? 1;
+  const baseRev = options.baseRev ?? 1;
+  const signerKeyId = options.signerKeyId ?? 'signer_a';
+  const content = kind === 'plan'
+    ? { text, type: 'feat', tags: ['federation-test'] }
+    : { text, tags: ['federation-test'] };
+  const envelope = buildEnvelope({
+    kind,
+    idOpaque: opaque,
+    cloudProjectId: PROJECT,
+    baseRev,
+    statusObject: statusFor(kind),
+    occurredAt: '2026-08-09T10:00:00.000Z',
+    wrapHint: `epoch:${epoch}`,
+    operationId: `op_${kind}_${opaque}_r${baseRev}`,
+    keyEpoch: epoch,
+    deps: options.deps,
+    content,
+    recipientPublicKeyPem: credentials.recipientPublicKeyPem,
+    originKeyId: signerKeyId,
+    originPrivateKeyPem: credentials.signerPrivateKeyPem,
+  });
+  return { opaque, envelope, recipientPrivateKey: credentials.recipientPrivateKey, signerPem: credentials.signerPem };
+}
+
+function world(epoch = 1, text = 'Plan venu de A', signerKeyId = 'signer_a') {
+  return federatedWorld('plan', text, { epoch, signerKeyId });
 }
 
 /**
@@ -182,6 +232,133 @@ describe('federation pull', () => {
       assert.equal(plans[0]!.id, localAtB, 'le plan porte l id local de B, pas l opaque');
     } finally {
       wsB.cleanup();
+    }
+  });
+  const deferredFamilies = ['decision', 'constraint', 'trap', 'handoff', 'sequence', 'runtime_note'] as const;
+
+  function textsForFamily(kind: typeof deferredFamilies[number], cwd: string): string[] {
+    const state = loadState(cwd);
+    switch (kind) {
+      case 'decision': return state.recent_decisions.map((item) => item.text);
+      case 'constraint': return state.active_constraints.map((item) => item.text);
+      case 'trap': return state.known_traps.map((item) => item.text);
+      case 'handoff': return state.open_handoffs.map((item) => item.text);
+      case 'sequence': return listSequences(cwd).map((item) => item.name);
+      case 'runtime_note': return listRuntimeNotes({ visibility: 'all', includeAllHosts: true }, cwd).map((item) => item.text);
+    }
+  }
+
+  for (const kind of deferredFamilies) {
+    it(`matérialise ${kind}, persiste son mapping opaque et dédoublonne le rejeu`, async () => {
+      const ws = createTestWorkspace({ prefix: `bclaw-pull-${kind}-` });
+      try {
+        activeConnection(ws.dir);
+        const credentials = worldCredentials();
+        const text = `${kind} venu de A`;
+        const w = federatedWorld(kind, text, { credentials });
+        const fetchImpl = service(
+          [cloudItem(w.envelope)],
+          [{ signer_fingerprint: 'signer_a', identity_public_key_pem: w.signerPem }],
+          [],
+        );
+        const keyFor = (_project: string, epoch: number) => epoch === 1 ? w.recipientPrivateKey : undefined;
+
+        const first = await pullFederationDelta({ cwd: ws.dir, url: URL, fetchImpl, epochKeyFor: keyFor });
+        assert.equal(first.materialized, 1);
+        const local = localIdForOpaque(PROJECT, w.opaque, ws.dir);
+        assert.ok(local, `${kind}: mapping opaque -> id local persistant`);
+        assert.notEqual(local, w.opaque, `${kind}: l'id local reste neuf`);
+        assert.deepEqual(textsForFamily(kind, ws.dir).filter((item) => item === text), [text]);
+
+        const updatedText = `${kind} mis à jour`;
+        const revised = federatedWorld(kind, updatedText, { credentials, idOpaque: w.opaque, baseRev: 2 });
+        const revisedFetch = service(
+          [cloudItem(revised.envelope)],
+          [{ signer_fingerprint: 'signer_a', identity_public_key_pem: revised.signerPem }],
+          [],
+        );
+        const updated = await pullFederationDelta({ cwd: ws.dir, url: URL, fetchImpl: revisedFetch, epochKeyFor: keyFor });
+        assert.equal(updated.materialized, 1, `${kind}: un opaque connu met à jour l'objet local`);
+        assert.deepEqual(textsForFamily(kind, ws.dir).filter((item) => item === updatedText), [updatedText]);
+
+        const replay = await pullFederationDelta({ cwd: ws.dir, url: URL, fetchImpl: revisedFetch, epochKeyFor: keyFor });
+        assert.equal(replay.materialized, 0, `${kind}: le rejeu ne crée pas de doublon`);
+        assert.deepEqual(textsForFamily(kind, ws.dir).filter((item) => item === updatedText), [updatedText]);
+      } finally {
+        ws.cleanup();
+      }
+    });
+  }
+
+  it('matérialise un magasin complet : plan, étape et les six familles projetées', async () => {
+    const ws = createTestWorkspace({ prefix: 'bclaw-pull-complete-store-' });
+    try {
+      activeConnection(ws.dir);
+      const credentials = worldCredentials();
+      const plan = federatedWorld('plan', 'Plan complet', { credentials });
+      const stepOpaque = newOpaqueId();
+      const step = federatedWorld('plan_step', 'Étape complète', {
+        credentials,
+        idOpaque: stepOpaque,
+        deps: [{ from: stepOpaque, to: plan.opaque }],
+      });
+      const projected = deferredFamilies.map((kind) => federatedWorld(kind, `${kind} complet`, { credentials }));
+      const all = [plan, step, ...projected];
+      const fetchImpl = service(
+        all.map((entry) => cloudItem(entry.envelope)),
+        [{ signer_fingerprint: 'signer_a', identity_public_key_pem: credentials.signerPem }],
+        [],
+      );
+      const keyFor = (_project: string, epoch: number) => epoch === 1 ? credentials.recipientPrivateKey : undefined;
+
+      const first = await pullFederationDelta({ cwd: ws.dir, url: URL, fetchImpl, epochKeyFor: keyFor });
+      assert.equal(first.materialized, 8, 'plan + étape + six familles doivent tous atteindre B');
+      const state = loadState(ws.dir);
+      assert.equal(state.plan_items.filter((item) => item.text === 'Plan complet').length, 1);
+      assert.equal(state.plan_items.flatMap((item) => item.steps ?? []).filter((item) => item.text === 'Étape complète').length, 1);
+      for (const kind of deferredFamilies) {
+        assert.deepEqual(textsForFamily(kind, ws.dir).filter((item) => item === `${kind} complet`), [`${kind} complet`]);
+      }
+
+      const replay = await pullFederationDelta({ cwd: ws.dir, url: URL, fetchImpl, epochKeyFor: keyFor });
+      assert.equal(replay.materialized, 0, 'le magasin complet ne duplique rien au rejeu');
+      assert.equal(loadState(ws.dir).plan_items.length, 1);
+      for (const kind of deferredFamilies) {
+        assert.equal(textsForFamily(kind, ws.dir).filter((item) => item === `${kind} complet`).length, 1);
+      }
+    } finally {
+      ws.cleanup();
+    }
+  });
+
+  it('reprend une enveloppe différée par une ancienne version du pull', async () => {
+    const ws = createTestWorkspace({ prefix: 'bclaw-pull-replay-deferred-' });
+    try {
+      activeConnection(ws.dir);
+      const w = federatedWorld('decision', 'Décision précédemment différée');
+      const inbound = path.join(ws.dir, '.brainclaw', 'coordination', 'federation', 'inbound-pull.json');
+      fs.mkdirSync(path.dirname(inbound), { recursive: true });
+      // Entrée laissée par la version qui vérifiait la décision mais ne savait pas la
+      // matérialiser. Le journal stocke l'enveloppe déballée, pas la ligne cloud plate.
+      fs.writeFileSync(inbound, JSON.stringify({
+        schema: 'brainclaw.federation-inbound-pull/v1',
+        seen: [],
+        pending: {
+          legacy_decision: { raw: w.envelope, key_epoch: 1, received_at: nowISO() },
+        },
+      }));
+      const result = await pullFederationDelta({
+        cwd: ws.dir,
+        url: URL,
+        fetchImpl: service([], [{ signer_fingerprint: 'signer_a', identity_public_key_pem: w.signerPem }], []),
+        epochKeyFor: (_project, epoch) => epoch === 1 ? w.recipientPrivateKey : undefined,
+      });
+      assert.equal(result.received, 0, 'aucun nouvel item cloud n’est nécessaire à la reprise');
+      assert.equal(result.materialized, 1);
+      assert.deepEqual(textsForFamily('decision', ws.dir), ['Décision précédemment différée']);
+      assert.equal(JSON.parse(fs.readFileSync(inbound, 'utf8')).pending.legacy_decision, undefined);
+    } finally {
+      ws.cleanup();
     }
   });
 });
