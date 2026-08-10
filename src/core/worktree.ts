@@ -1721,9 +1721,21 @@ export function isGitRepo(cwd: string): boolean {
   return runGit(['rev-parse', '--is-inside-work-tree'], cwd).ok;
 }
 
-/** Comparison key for worktree paths: absolute, forward slashes, case-folded on win32. */
+/**
+ * Comparison key for worktree paths: PHYSICAL identity when the path exists
+ * (realpath expands Windows 8.3 short names — `RUNNER~1` and `runneradmin`
+ * are the same directory but different strings, and git always reports the
+ * long form while a claim may carry the short one), else plain resolution.
+ * Forward slashes, case-folded on win32.
+ */
 function worktreePathKey(p: string): string {
-  const resolved = path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '');
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync.native(p);
+  } catch {
+    resolved = path.resolve(p);
+  }
+  resolved = resolved.replace(/\\/g, '/').replace(/\/+$/, '');
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
