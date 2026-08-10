@@ -238,9 +238,16 @@ export async function pushPending(options: PushOptions = {}): Promise<PushResult
     );
   }
 
+  const pending = list('pending', cwd);
+  // File vide = rien à signer : sortir AVANT de résoudre l'identité. Le signataire est
+  // déduit de la première entrée pending ; le chercher sur une file vide transformait
+  // « tout est déjà parti » en erreur d'identité — vécu le 2026-08-10, juste après un
+  // envoi complet dont il ne restait que des conflits.
+  if (pending.length === 0) return result;
+
   // L'identité SIGNATAIRE du transport : celle de l'agent qui a produit les enveloppes.
   // Elle est portée par l'entrée d'outbox, donc le transport n'a pas à deviner qui signe.
-  const agentId = options.agentId ?? list('pending', cwd)[0]?.origin_agent_id;
+  const agentId = options.agentId ?? pending[0]?.origin_agent_id;
   const identity = agentId ? loadAgentSigningKey(agentId) : undefined;
   if (!identity) {
     throw new Error(
@@ -250,7 +257,6 @@ export async function pushPending(options: PushOptions = {}): Promise<PushResult
   }
   const identityPem = identity.privateKeyPem;
 
-  const pending = list('pending', cwd);
   const batch = options.limit ? pending.slice(0, options.limit) : pending;
   result.attempted = batch.length;
   if (options.dryRun) return result;
@@ -278,7 +284,14 @@ export async function pushPending(options: PushOptions = {}): Promise<PushResult
       // réel en écrasement silencieux du travail d'un autre appareil.
       if (res.status === 409) {
         const detail = (await res.clone().json().catch(() => ({}))) as Record<string, unknown>;
-        const expected = detail['expected_base_rev'] ?? detail['expected'];
+        // `current_head_rev` est le nom que le serveur DÉPLOYÉ répond (projection.ts,
+        // REV_CONFLICT). Les deux autres sont des noms historiques gardés en repli.
+        // Dérive constatée le 2026-08-10 : le client lisait `expected_base_rev` sur une
+        // réponse qui ne l'a jamais porté — le recalage ne se déclenchait donc JAMAIS et
+        // chaque mise à jour finissait en conflit. Le test unitaire rejoue depuis la
+        // forme de réponse RÉELLE du serveur ; leçon dec#160/162, un contrat inter-
+        // services ne se vérifie que contre le service.
+        const expected = detail['current_head_rev'] ?? detail['expected_base_rev'] ?? detail['expected'];
         if (typeof expected === 'string' || typeof expected === 'number') {
           // On RESIGNE avec la nouvelle base_rev : c'est précisément ce que la signature
           // au niveau du transport rend possible, et qu'une signature figée à l'émission
