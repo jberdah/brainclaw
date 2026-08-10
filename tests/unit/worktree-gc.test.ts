@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { gcWorktreeIfHarvested } from '../../src/core/worktree.js';
+import { cleanMergedWorktrees, gcWorktreeIfHarvested } from '../../src/core/worktree.js';
 
 /**
  * pln#594 — gcWorktreeIfHarvested: safe garbage-collection of a dispatched
@@ -113,5 +113,121 @@ describe('gcWorktreeIfHarvested (pln#594)', () => {
     const d = gcWorktreeIfHarvested(os.tmpdir(), path.join(os.tmpdir(), 'bclaw-gc-missing-zzz'));
     assert.equal(d.removed, false);
     assert.equal(d.reason, 'already gone');
+  });
+});
+
+/**
+ * Incident 2026-08-10 — the post-merge `worktree clean` destroyed a LIVE
+ * dispatched lane during its startup window: a fresh lane branch has no commits
+ * (→ ancestor of HEAD → "merged" by both probes) and the agent had not written
+ * yet (→ no uncommitted changes). Both historical gates passed and
+ * `cleanMergedWorktrees` emptied the worktree under the running agent.
+ *
+ * The coordination store is the authority on liveness: a worktree referenced by
+ * an ACTIVE, non-expired claim is untouchable — merged or not, clean or not,
+ * force or not. The escape hatch is releasing the claim, never bypassing it.
+ */
+describe('cleanMergedWorktrees — active-claim gate (incident 2026-08-10)', () => {
+  /**
+   * Physical-identity key, mirroring the production comparison. On the Windows
+   * CI runner os.tmpdir() goes through an 8.3 short name (`RUNNER~1`) while git
+   * reports long canonical paths — plain path.resolve equality never matches.
+   * Capture the key while the path still EXISTS (realpath fails after removal);
+   * paths reported by cleanMergedWorktrees are git-canonical long forms, so the
+   * resolve fallback compares correctly against a pre-captured long key.
+   */
+  function pathKey(p: string): string {
+    let resolved: string;
+    try {
+      resolved = fs.realpathSync.native(p);
+    } catch {
+      resolved = path.resolve(p);
+    }
+    return resolved.replace(/\\/g, '/').toLowerCase();
+  }
+
+  function writeClaim(
+    repo: string,
+    wt: string,
+    overrides: Record<string, unknown> = {},
+  ): void {
+    const dir = path.join(repo, '.brainclaw', 'coordination', 'claims');
+    fs.mkdirSync(dir, { recursive: true });
+    const claim = {
+      id: 'clm_test0001',
+      agent: 'codex',
+      scope: 'src/x.ts',
+      description: 'lane under test',
+      created_at: new Date().toISOString(),
+      status: 'active',
+      worktree_path: wt,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(dir, `${claim.id as string}.json`), JSON.stringify(claim));
+  }
+
+  it('NEVER removes a fresh no-commit lane worktree with an active claim (the incident shape)', () => {
+    const { repo, wt } = makeRepoWithWorktree('lane/live-fresh');
+    writeClaim(repo, wt);
+    const wtKey = pathKey(wt);
+    const result = cleanMergedWorktrees(repo, {});
+    assert.equal(fs.existsSync(path.join(wt, '.git')), true, 'worktree left fully intact');
+    assert.ok(
+      result.skipped.some((s) => pathKey(s.path) === wtKey && s.reason === 'active claim'),
+      `expected an 'active claim' skip, got: ${JSON.stringify(result.skipped)} / removed: ${JSON.stringify(result.removed)}`,
+    );
+    assert.ok(!result.removed.some((p) => pathKey(p) === wtKey), 'not in removed');
+  });
+
+  it('the active claim beats --force (escape hatch = release the claim, not bypass it)', () => {
+    const { repo, wt } = makeRepoWithWorktree('lane/live-force');
+    writeClaim(repo, wt);
+    const wtKey = pathKey(wt);
+    const result = cleanMergedWorktrees(repo, { force: true });
+    assert.equal(fs.existsSync(path.join(wt, '.git')), true, 'worktree survives --force');
+    assert.ok(result.skipped.some((s) => pathKey(s.path) === wtKey && s.reason === 'active claim'));
+  });
+
+  it('a released claim does not protect — the same worktree becomes GC-able again', () => {
+    const { repo, wt } = makeRepoWithWorktree('lane/released');
+    writeClaim(repo, wt, { status: 'released' });
+    const wtKey = pathKey(wt);
+    const result = cleanMergedWorktrees(repo, {});
+    assert.ok(result.removed.some((p) => pathKey(p) === wtKey), 'released lane is GC-able');
+    assert.equal(fs.existsSync(wt), false);
+  });
+
+  it('an EXPIRED active claim does not protect (zombie claims must not block GC forever)', () => {
+    const { repo, wt } = makeRepoWithWorktree('lane/zombie');
+    writeClaim(repo, wt, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+    const wtKey = pathKey(wt);
+    const result = cleanMergedWorktrees(repo, {});
+    assert.ok(result.removed.some((p) => pathKey(p) === wtKey), 'expired claim is not a shield');
+  });
+
+  it('an unreadable claim file never blocks GC of other worktrees (lenient parse)', () => {
+    const { repo, wt } = makeRepoWithWorktree('lane/garbage-claim');
+    const dir = path.join(repo, '.brainclaw', 'coordination', 'claims');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'clm_broken.json'), '{not json');
+    const wtKey = pathKey(wt);
+    const result = cleanMergedWorktrees(repo, {});
+    assert.ok(result.removed.some((p) => pathKey(p) === wtKey), 'GC proceeds past the broken record');
+  });
+
+  it('protects an ORPHAN dir (git admin gone) that an active claim still references', () => {
+    const { repo, wt } = makeRepoWithWorktree('lane/orphan-live');
+    // Simulate the corrupted-admin state the incident left behind: the git
+    // worktree registration disappears but the dir (and the agent in it) remain.
+    git(['worktree', 'remove', '--force', wt], repo);
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, 'agent-scratch.txt'), 'still working here\n');
+    writeClaim(repo, wt);
+    const wtKey = pathKey(wt);
+    // Orphan cleaning only touches dirs under the brainclaw worktrees base for
+    // this repo — our temp `wt` lives elsewhere, so drive the gate directly.
+    const result = cleanMergedWorktrees(repo, {});
+    assert.equal(fs.existsSync(path.join(wt, 'agent-scratch.txt')), true, 'orphan dir with active claim preserved');
+    assert.ok(!result.removed.some((p) => pathKey(p) === wtKey));
   });
 });
