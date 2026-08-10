@@ -19,6 +19,7 @@ import path from 'node:path';
 import { refresh } from '../../../src/core/code-map/refresh.js';
 import { defaultRegistry } from '../../../src/core/code-map/core.js';
 import { computeExtractorConfigHash, shardFreshnessStatus } from '../../../src/core/code-map/freshness.js';
+import { loadTypeScriptResolutionConfig } from '../../../src/core/code-map/lang/typescript/config.js';
 import { DEFAULT_EXTRACTOR_CONFIG } from '../../../src/core/code-map/refresh.js';
 import { readManifest, listShards, readSymbolsIndex, readImportsIndex } from '../../../src/core/code-map/store.js';
 import type { CodeLanguageRegistry, RegistryLanguageEntry } from '../../../src/core/code-map/lang/provider.js';
@@ -144,16 +145,19 @@ describe('code-map refresh ↔ registry (P1a cutover)', () => {
 
     // The config hash folds in the registry fingerprint, so a different query-asset
     // hash yields a different extractor_config_hash for the SAME config + langs.
+    const resolverConfigFingerprint = loadTypeScriptResolutionConfig(root).fingerprint;
     const baseHash = computeExtractorConfigHash(
       DEFAULT_EXTRACTOR_CONFIG,
       defaultRegistry.activeLanguages(),
       defaultRegistry.configHashInputs(),
+      resolverConfigFingerprint,
     );
     const bumpedReg = registryWithBumpedQueryHash();
     const bumpedHash = computeExtractorConfigHash(
       DEFAULT_EXTRACTOR_CONFIG,
       bumpedReg.activeLanguages(),
       bumpedReg.configHashInputs(),
+      resolverConfigFingerprint,
     );
     assert.notEqual(baseHash, bumpedHash, 'editing a query asset changes the config hash');
 
