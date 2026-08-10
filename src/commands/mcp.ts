@@ -1394,8 +1394,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
     // Code Map tools (spec §9). These delegate to the async JsonlBackend, so
     // they are handled here rather than via the synchronous read-tool path.
-    // status/find/brief are reads; refresh is a write (prompt approval).
-    if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_refresh') {
+    // status/find/brief/outline are reads; refresh is a write (prompt approval).
+    if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_outline' || name === 'bclaw_code_refresh') {
       const { JsonlBackend } = await import('../core/code-map/backend.js');
       const be = new JsonlBackend();
       if (name === 'bclaw_code_status') {
@@ -1428,6 +1428,21 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map find "${result.query}": ${result.matches.length} match(es), freshness=${result.freshness_badge.status}` }],
+            structuredContent: { ...result, freshness_badge: result.freshness_badge },
+          }),
+        };
+      }
+      // bclaw_code_outline
+      if (name === 'bclaw_code_outline') {
+        const outlinePath = typeof args.path === 'string' ? args.path : '';
+        if (!outlinePath.trim()) {
+          return { response: createToolErrorResponse('validation_error', 'bclaw_code_outline requires a non-empty path.') };
+        }
+        const limit = typeof args.limit === 'number' ? args.limit : undefined;
+        const result = await be.outline({ path: outlinePath, limit, cwd });
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Code Map outline "${result.path}": ${result.symbols.length}/${result.symbol_count} symbol(s), index=${result.index_status}, freshness=${result.freshness_badge.status}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };

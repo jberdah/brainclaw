@@ -408,7 +408,10 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:8241fa50b8cb4805`
+- MCP public surface fingerprint: `sha256:2a9f7d4cd72609df`
+  (updated 2026-08-10 for pln#660: `bclaw_code_outline` — new Tier-B read tool,
+  source-ordered symbols of one indexed file from the existing shard; no reparse,
+  no mutation, bounded output. Purely additive.)
   (updated 2026-07-25 for pln#632: `bclaw_loop` gains the `bind` intent — an
   implementation loop dispatches its linked sequence and advances bind→execute — plus
   its typed inputSchema properties `dry_run`, `lanes`, `auto_execute`, `model`, and

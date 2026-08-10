@@ -414,6 +414,19 @@ export const MCP_READ_TOOLS = [
       required: ['target'],
     },
   },
+  {
+    name: 'bclaw_code_outline',
+    description: 'Return a bounded source-ordered outline for one indexed file: symbol name, kind, subtype, span, exported flag, and persisted confidence. Read-only: it reads the existing file shard only, never parses or refreshes. `index_status` distinguishes a missing index, a file not indexed, and an indexed file with zero symbols.',
+    annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative source file path (for example `src/app/App.tsx`).' },
+        limit: { type: 'number', description: 'Maximum symbols to return; clamped to the hard cap of 200.' },
+      },
+      required: ['path'],
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [

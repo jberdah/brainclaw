@@ -10,15 +10,16 @@
  */
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { readManifest, storeExists } from './store.js';
+import { readManifest, readShard, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift, withCoarse } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
+import { fileId } from './ids.js';
 import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } from './aggregate.js';
 import { defaultMemoryReader } from './memory-reader.js';
 import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
 import { loadConfig } from '../config.js';
-import type { FreshnessBadge, FreshnessStatus, Manifest } from './types.js';
+import type { FreshnessBadge, FreshnessStatus, Manifest, ParseStatus, Span } from './types.js';
 
 // --- Input / output types (spec §8, §9) ---
 
@@ -162,17 +163,100 @@ export interface CodeBrief {
 /** spec §9 caps the brief reading list at 12 files. */
 export const BRIEF_FILE_CAP = 12;
 
+/**
+ * Agent-facing file outline (P2b). The symbol count is deliberately bounded:
+ * an outline is a navigation aid, not a replacement for opening a generated
+ * source file. `symbol_count` always records the complete indexed count.
+ */
+export const OUTLINE_SYMBOL_CAP = 200;
+
+/** Diagnostics are useful context, but unbounded provider facts are not. */
+export const OUTLINE_DIAGNOSTIC_CAP = 20;
+
+export interface CodeOutlineInput extends CodeBackendContext {
+  /** Workspace-relative source path, or an absolute path under the project root. */
+  path: string;
+  /** Optional caller cap, clamped to {@link OUTLINE_SYMBOL_CAP}. */
+  limit?: number;
+}
+
+export interface CodeOutlineSymbol {
+  name: string;
+  kind: string;
+  subtype: string | null;
+  span: Span | null;
+  exported: boolean;
+  /** Extractor confidence retained from the persisted symbol node, never recomputed here. */
+  confidence: number;
+}
+
+/** Separates no Code Map index from a known indexed file with no symbols. */
+export type CodeOutlineIndexStatus = 'missing_index' | 'file_not_indexed' | 'indexed';
+
+export interface CodeOutlineResult {
+  /** Normalized, project-relative source path used to address the shard. */
+  path: string;
+  /** `indexed` includes a parsed shard whose `symbols` array is empty. */
+  index_status: CodeOutlineIndexStatus;
+  file_indexed: boolean;
+  parse_status: ParseStatus | null;
+  /** Complete symbol count before the response cap is applied. */
+  symbol_count: number;
+  symbols: CodeOutlineSymbol[];
+  truncated: boolean;
+  diagnostics: unknown[];
+  diagnostics_truncated: boolean;
+  freshness_badge: FreshnessBadge;
+}
 export interface CodeQueryBackend {
   status(input: CodeStatusInput): Promise<CodeStatus>;
   refresh(input: CodeRefreshInput): Promise<CodeRefreshResult>;
   find(input: CodeFindInput): Promise<CodeFindResult>;
   brief(input: CodeBriefInput): Promise<CodeBrief>;
+  outline(input: CodeOutlineInput): Promise<CodeOutlineResult>;
 }
 
 function badge(status: FreshnessStatus, details: Record<string, unknown> = {}): FreshnessBadge {
   // pln#601 — stamp the coarse rollup at construction so every backend-built badge
   // (status, missing_index fallbacks, find/brief base) carries it uniformly.
   return withCoarse({ status, details });
+}
+/**
+ * Convert a user path into the POSIX project-relative identity used by shards.
+ * This is pure path arithmetic: outline must not stat, parse, or otherwise touch
+ * the live source file on its read path.
+ */
+function normalizeOutlinePath(requestedPath: string, projectRoot: string): string | null {
+  const root = path.resolve(projectRoot);
+  const absolute = path.resolve(root, requestedPath);
+  const relative = path.relative(root, absolute);
+  if (!relative || relative === '.' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return null;
+  }
+  return relative.replace(/\\/g, '/');
+}
+
+function outlineLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return OUTLINE_SYMBOL_CAP;
+  return Math.min(Math.max(Math.floor(limit), 0), OUTLINE_SYMBOL_CAP);
+}
+
+function compareOutlineSymbols(a: CodeOutlineSymbol & { node_id: string }, b: CodeOutlineSymbol & { node_id: string }): number {
+  // Symbols normally always have spans. Keep malformed/legacy span-less nodes
+  // deterministic and at the end instead of trusting shard append order.
+  const as = a.span;
+  const bs = b.span;
+  if (as && bs) {
+    return as.start_line - bs.start_line
+      || as.start_col - bs.start_col
+      || as.end_line - bs.end_line
+      || as.end_col - bs.end_col
+      || a.name.localeCompare(b.name)
+      || a.node_id.localeCompare(b.node_id);
+  }
+  if (as) return -1;
+  if (bs) return 1;
+  return a.name.localeCompare(b.name) || a.node_id.localeCompare(b.node_id);
 }
 
 /**
@@ -410,6 +494,92 @@ export class JsonlBackend implements CodeQueryBackend {
       suggested_files_to_read: out.suggested_files_to_read,
       related_memory: out.related_memory,
       freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
+    };
+  }
+
+  /**
+   * Return an indexed file's symbols in source order. This reads exactly one
+   * manifest and one deterministic shard; it never calls refresh, extractor, or
+   * the lazy live-file validator, so the response is a snapshot of the index.
+   */
+  async outline(input: CodeOutlineInput): Promise<CodeOutlineResult> {
+    const cwd = input.cwd ?? process.cwd();
+    const manifest = readManifest(input.cwd, input.preferredDirName);
+    const root = manifest?.project_root ?? cwd;
+    const normalizedPath = normalizeOutlinePath(input.path.trim(), root) ?? input.path.trim().replace(/\\/g, '/');
+    const missing = (): CodeOutlineResult => ({
+      path: normalizedPath,
+      index_status: 'missing_index',
+      file_indexed: false,
+      parse_status: null,
+      symbol_count: 0,
+      symbols: [],
+      truncated: false,
+      diagnostics: [],
+      diagnostics_truncated: false,
+      freshness_badge: badge('missing_index', { hint: 'run refresh' }),
+    });
+    if (!manifest || manifest.freshness.status === 'missing_index') return missing();
+
+    const freshnessBadge = this.withHeadDrift(
+      badge(manifest.freshness.status, {
+        stale_file_count: manifest.freshness.stale_file_count,
+        partial_reason: manifest.freshness.partial_reason,
+      }),
+      manifest,
+      input.cwd,
+    );
+    const safePath = normalizeOutlinePath(input.path.trim(), root);
+    if (!safePath) {
+      return {
+        ...missing(),
+        index_status: 'file_not_indexed',
+        freshness_badge: freshnessBadge,
+      };
+    }
+
+    const shard = readShard(fileId(manifest.project_id, safePath), input.cwd, input.preferredDirName);
+    if (!shard || shard.path !== safePath) {
+      return {
+        path: safePath,
+        index_status: 'file_not_indexed',
+        file_indexed: false,
+        parse_status: null,
+        symbol_count: 0,
+        symbols: [],
+        truncated: false,
+        diagnostics: [],
+        diagnostics_truncated: false,
+        freshness_badge: freshnessBadge,
+      };
+    }
+
+    const allSymbols = shard.nodes
+      .filter((node) => node.kind === 'symbol')
+      .map((node) => ({
+        node_id: node.id,
+        name: node.name,
+        kind: node.kind,
+        subtype: node.subtype ?? null,
+        span: node.span ?? null,
+        exported: node.exported,
+        confidence: node.confidence,
+      }))
+      .sort(compareOutlineSymbols);
+    const limit = outlineLimit(input.limit);
+    const diagnostics = shard.diagnostics.slice(0, OUTLINE_DIAGNOSTIC_CAP);
+
+    return {
+      path: safePath,
+      index_status: 'indexed',
+      file_indexed: true,
+      parse_status: shard.parse_status,
+      symbol_count: allSymbols.length,
+      symbols: allSymbols.slice(0, limit).map(({ node_id: _nodeId, ...symbol }) => symbol),
+      truncated: allSymbols.length > limit,
+      diagnostics,
+      diagnostics_truncated: shard.diagnostics.length > diagnostics.length,
+      freshness_badge: freshnessBadge,
     };
   }
 
