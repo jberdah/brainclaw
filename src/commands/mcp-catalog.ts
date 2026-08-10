@@ -415,6 +415,20 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
+    name: 'bclaw_code_impact',
+    description: 'Explain a symbol or source file\'s local blast radius from existing resolved imports: definition, direct dependents with edge causes, optional bounded transitives, affected test files, low-confidence naming suggestions kept separate, and a count-based risk score. Read-only; never refreshes.',
+    annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Symbol name or source-file path whose impact to inspect.' },
+        depth: { type: 'number', description: 'Maximum graph depth. 1 (default) returns direct dependents only; 2+ opts into transitives. Clamped to 4.' },
+        limit: { type: 'number', description: 'Maximum rows in each dependent section and in naming suggestions. Clamped to 100.' },
+      },
+      required: ['target'],
+    },
+  },
+  {
     name: 'bclaw_code_outline',
     description: 'Return a bounded source-ordered outline for one indexed file: symbol name, kind, subtype, span, exported flag, and persisted confidence. Read-only: it reads the existing file shard only, never parses or refreshes. `index_status` distinguishes a missing index, a file not indexed, and an indexed file with zero symbols.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },

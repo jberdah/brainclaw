@@ -1460,6 +1460,16 @@
         "variadic": false
       },
       {
+        "flags": "--depth <n>",
+        "long": "--depth",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--json",
         "long": "--json",
         "mandatory": false,

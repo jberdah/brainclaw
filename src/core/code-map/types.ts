@@ -341,6 +341,21 @@ export type ImportsIndex = z.infer<typeof ImportsIndexSchema>;
 // --- resolution index (P1d) — reverse dependency maps over the P1c graph ---
 
 /**
+ * One concrete resolved edge which made an importer depend on a target. Kept
+ * alongside the compact aggregate fields on {@link DependencyIndexEntrySchema}
+ * so impact analysis can explain every relation without re-reading all shards.
+ */
+export const DependencyReasonSchema = z.object({
+  kind: z.enum(['resolves_to', 'imports_symbol']),
+  module: z.string().optional(),
+  imported: z.array(z.string()).default([]),
+  confidence: z.number().optional(),
+  /** Source line of the import edge when the extractor supplied one. */
+  source_line: z.number().int().nullable().optional(),
+});
+export type DependencyReason = z.infer<typeof DependencyReasonSchema>;
+
+/**
  * One DEPENDENT of a target (file or symbol): the importing file + enough metadata
  * to lazy-validate it (file_id) and explain WHY it appears (module specifier the
  * import was written as, source-side imported names, edge confidence).
@@ -356,6 +371,8 @@ export const DependencyIndexEntrySchema = z.object({
   imported: z.array(z.string()).default([]),
   /** Resolution edge confidence (inherited from the A file resolution). */
   confidence: z.number().optional(),
+  /** Every resolved edge merged into this importer/target row, source ordered. */
+  reasons: z.array(DependencyReasonSchema).default([]),
 });
 export type DependencyIndexEntry = z.infer<typeof DependencyIndexEntrySchema>;
 
