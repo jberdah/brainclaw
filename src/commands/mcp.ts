@@ -1394,8 +1394,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
     // Code Map tools (spec §9). These delegate to the async JsonlBackend, so
     // they are handled here rather than via the synchronous read-tool path.
-    // status/find/brief/impact/outline are reads; refresh is a write (prompt approval).
-    if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_impact' || name === 'bclaw_code_outline' || name === 'bclaw_code_refresh') {
+    // status/find/brief/impact/export/outline are reads; refresh is a write (prompt approval).
+    if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_impact' || name === 'bclaw_code_export' || name === 'bclaw_code_outline' || name === 'bclaw_code_refresh') {
       const { JsonlBackend } = await import('../core/code-map/backend.js');
       const be = new JsonlBackend();
       if (name === 'bclaw_code_status') {
@@ -1432,6 +1432,28 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }),
         };
       }
+      // bclaw_code_export
+      if (name === 'bclaw_code_export') {
+        const target = typeof args.target === 'string' ? args.target : '';
+        if (!target.trim()) {
+          return { response: createToolErrorResponse('validation_error', 'bclaw_code_export requires a non-empty target.') };
+        }
+        const targetKind = args.targetKind === 'symbol' || args.targetKind === 'file' ? args.targetKind : undefined;
+        const direction = args.direction === 'outgoing' || args.direction === 'incoming' || args.direction === 'both' ? args.direction : undefined;
+        const depth = typeof args.depth === 'number' ? args.depth : undefined;
+        const maxNodes = typeof args.maxNodes === 'number' ? args.maxNodes : undefined;
+        const maxEdges = typeof args.maxEdges === 'number' ? args.maxEdges : undefined;
+        const minConfidence = typeof args.minConfidence === 'number' ? args.minConfidence : undefined;
+        const format = args.format === 'mermaid' ? 'mermaid' : args.format === 'json' ? 'json' : undefined;
+        const result = await be.exportGraph({ target, targetKind, direction, depth, maxNodes, maxEdges, minConfidence, format, cwd });
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Code Map export "${result.target}": ${result.nodes.length} node(s), ${result.edges.length} edge(s), depth=${result.limits.max_depth}, freshness=${result.freshness_badge.status}` }],
+            structuredContent: { ...result, freshness_badge: result.freshness_badge },
+          }),
+        };
+      }
+
       // bclaw_code_impact
       if (name === 'bclaw_code_impact') {
         const target = typeof args.target === 'string' ? args.target : '';
