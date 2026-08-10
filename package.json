@@ -1,6 +1,6 @@
 {
   "name": "brainclaw",
-  "version": "1.24.0",
+  "version": "1.25.0",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "repository": {
