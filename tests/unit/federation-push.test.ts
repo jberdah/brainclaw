@@ -210,6 +210,59 @@ describe('transport — échecs, la partie qui compte', () => {
       });
     } finally { ws.cleanup(); }
   });
+
+  it('un 409 REV_CONFLICT à la forme RÉELLE du serveur déclenche le recalage — resigné sur current_head_rev, puis synced', async () => {
+    // Dérive constatée le 2026-08-10 : le serveur répond `current_head_rev`, le client
+    // lisait `expected_base_rev` — champ qui n'a jamais existé côté serveur. Le recalage
+    // ne se déclenchait donc jamais et CHAQUE mise à jour d'un objet déjà poussé finissait
+    // en conflit définitif. Cette fixture est copiée de la réponse REV_CONFLICT de
+    // projection.ts (brainclaw-cloud) : si l'un des deux bouge, ce test doit bouger AVEC.
+    const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
+    try {
+      await withSigningKey(async () => {
+      pairActive(ws.dir);
+      seedPending(ws.dir, ['a@r2']);
+      const bodies: Array<Record<string, unknown>> = [];
+      const serverShaped409 = JSON.stringify({
+        error: 'base_rev does not match current head — refresh and retry',
+        code: 'REV_CONFLICT',
+        current_head_rev: 'r-head-77',
+        base_rev_provided: 'r2',
+        reason: 'stale',
+      });
+      const rebaseFetch = (async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return bodies.length === 1
+          ? new Response(serverShaped409, { status: 409 })
+          : new Response('{}', { status: 202 });
+      }) as unknown as typeof fetch;
+
+      const res = await pushPending({ cwd: ws.dir, url: URL_, fetchImpl: rebaseFetch });
+
+      assert.equal(bodies.length, 2, 'le refus doit provoquer EXACTEMENT un renvoi');
+      assert.equal(bodies[1]?.['base_rev'], 'r-head-77', 'le renvoi porte la tête annoncée par le serveur');
+      assert.equal(res.sent, 1);
+      assert.equal(res.conflicts, 0);
+      assert.equal(counters(ws.dir).synced >= 1, true, 'l\'entrée recalée est synced, pas en conflit');
+      });
+    } finally { ws.cleanup(); }
+  });
+
+  it('une file vide est un succès silencieux — pas d\'erreur d\'identité quand il n\'y a rien à signer', async () => {
+    // Vécu le 2026-08-10 : après un envoi complet (file pending vide, seuls des conflits
+    // restants), le push relançait « Identité de signature introuvable » — le signataire
+    // était résolu depuis la première entrée d'une file... vide.
+    const ws = createTestWorkspace({ prefix: 'bclaw-push-' });
+    try {
+      await withSigningKey(async () => {
+      pairActive(ws.dir);
+      const neverCalled = (async () => { throw new Error('ne doit pas être appelé'); }) as unknown as typeof fetch;
+      const res = await pushPending({ cwd: ws.dir, url: URL_, fetchImpl: neverCalled });
+      assert.equal(res.attempted, 0);
+      assert.equal(res.sent, 0);
+      });
+    } finally { ws.cleanup(); }
+  });
 });
 
 describe('transport — ce qui part sur le fil', () => {
