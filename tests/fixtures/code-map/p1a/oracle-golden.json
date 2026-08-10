@@ -2216,6 +2216,18 @@
             "path": "src/p1a/default-export.ts",
             "line": 5
           }
+        },
+        {
+          "id": "4463d798fc5428d8286796db384bc646b1d71b90c4c4f3d777abc4b83ac3854c",
+          "from": "file:cc21b83d7a6fe72413939a8086835aaa830977b33a460ac16cea938c3f536fb9",
+          "to": "sym:36c9d42f5517a5d253b31550f2908b3d03c1a079e456d2def824549761f913ee",
+          "kind": "references",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/default-export.ts",
+            "line": 5
+          },
+          "origin": "usage_local"
         }
       ],
       "diagnostics": []
@@ -2597,6 +2609,18 @@
             "path": "src/p1a/component.jsx",
             "line": 12
           }
+        },
+        {
+          "id": "7e4ac3dbf85461d12317a976306f9959b5c56c739de973157584e7f862c48ecf",
+          "from": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "to": "sym:cf62f7efd79276371a6fddd657b55aa81bbaa43fe1eb7f6fbc6dfbc6529b9b96",
+          "kind": "references",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/component.jsx",
+            "line": 12
+          },
+          "origin": "usage_local"
         }
       ],
       "diagnostics": []

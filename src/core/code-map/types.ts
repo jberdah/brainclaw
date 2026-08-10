@@ -170,8 +170,36 @@ export const EdgeSchema = z.object({
     })
     .nullable()
     .optional(),
+  /**
+   * Optional provenance for P4 usage edges. It lets the project resolver replace
+   * only import-derived usages on a later refresh without deleting lexical calls
+   * already proven inside the source file.
+   */
+  origin: z.enum(['usage_local', 'usage_import', 'usage_textual']).optional(),
 });
 export type CodeEdge = z.infer<typeof EdgeSchema>;
+
+/** P4's three deliberately non-interchangeable usage classifications. */
+export const UsageKindSchema = z.enum(['calls', 'references', 'possible_textual_match']);
+export type UsageKind = z.infer<typeof UsageKindSchema>;
+
+/**
+ * An import-binding usage that is lexical in one file but needs the project-wide
+ * import pass before its target symbol is known. This is persisted on the shard,
+ * never surfaced as a `calls`/`references` edge until that target is unique.
+ */
+export const ReferenceCandidateSchema = z.object({
+  from: z.string(),
+  kind: z.enum(['calls', 'references']),
+  module: z.string(),
+  imported_name: z.string(),
+  confidence: z.number().default(1.0),
+  source: z.object({
+    path: z.string(),
+    line: z.number().int().nullable().optional(),
+  }),
+});
+export type ReferenceCandidate = z.infer<typeof ReferenceCandidateSchema>;
 
 // --- Per-file shard (spec §5.3) ---
 
@@ -201,6 +229,8 @@ export const FileShardSchema = z.object({
   freshness: ShardFreshnessSchema,
   nodes: z.array(NodeSchema).default([]),
   edges: z.array(EdgeSchema).default([]),
+  /** Deferred P4 imported-binding usages; resolved by the whole-project pass. */
+  reference_candidates: z.array(ReferenceCandidateSchema).optional(),
   diagnostics: z.array(z.unknown()).default([]),
 });
 export type FileShard = z.infer<typeof FileShardSchema>;
@@ -383,6 +413,23 @@ export type DependencyIndexEntry = z.infer<typeof DependencyIndexEntrySchema>;
  * read-path scan of every shard. Forward deps are read straight from a target's own
  * shard, so they need no index.
  */
+/** A persisted, high-confidence P4 usage cause targeting one symbol. */
+export const UsageReasonSchema = z.object({
+  kind: z.enum(['calls', 'references']),
+  caller_node_id: z.string(),
+  confidence: z.number(),
+  source_line: z.number().int().nullable().optional(),
+});
+export type UsageReason = z.infer<typeof UsageReasonSchema>;
+
+/** One importing file's lexical uses of a target symbol. */
+export const UsageIndexEntrySchema = z.object({
+  path: z.string(),
+  file_id: Sha256Hash,
+  reasons: z.array(UsageReasonSchema).default([]),
+});
+export type UsageIndexEntry = z.infer<typeof UsageIndexEntrySchema>;
+
 export const ResolutionIndexSchema = z.object({
   schema_version: z.number().int().default(CODE_MAP_SCHEMA_VERSION),
   project_id: z.string(),
@@ -391,6 +438,8 @@ export const ResolutionIndexSchema = z.object({
   dependents_by_file: z.record(z.string(), z.array(DependencyIndexEntrySchema)).default({}),
   /** Keys are TARGET symbol node ids (reverse `imports_symbol`). */
   dependents_by_symbol: z.record(z.string(), z.array(DependencyIndexEntrySchema)).default({}),
+  /** Keys are TARGET symbol ids; only proven P4 call/reference usages are indexed. */
+  usages_by_symbol: z.record(z.string(), z.array(UsageIndexEntrySchema)).default({}),
 });
 export type ResolutionIndex = z.infer<typeof ResolutionIndexSchema>;
 

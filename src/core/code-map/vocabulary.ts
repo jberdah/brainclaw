@@ -60,6 +60,12 @@ export const UniversalEdgeKinds = [
   'resolves_to',
   'imports_symbol',
   'tests_for',
+  // P4 usages: a direct lexical invocation, a non-call lexical binding use, or
+  // an explicitly low-confidence text/property hint. Only `calls` is a proven
+  // invocation; consumers must never promote `possible_textual_match`.
+  'calls',
+  'references',
+  'possible_textual_match',
   'extends',
   'implements',
   'annotates',

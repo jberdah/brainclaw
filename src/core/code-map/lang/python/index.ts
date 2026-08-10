@@ -28,11 +28,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Node as TsNode } from 'web-tree-sitter';
+import type { Node as TsNode, Tree } from 'web-tree-sitter';
 import type { CodeLang, CodeNode, NodeSubtype, Span } from '../../types.js';
 import type { ExtractionDraft, DefinitionDraft } from '../../drafts.js';
 import { loadGrammarWasm, grammarHashForWasm } from '../../wasm-loader.js';
 import { extractWithQueries } from '../query-runtime.js';
+import { extractLexicalUsages } from '../usages.js';
 import type {
   CodeLanguageProvider,
   ExtractionServices,
@@ -128,7 +129,7 @@ const queries: QueryDeclarations = {
 
 const vocabulary: ProviderVocabularyDeclaration = {
   nodeSubtypes: ['function', 'method', 'class', 'variable', 'constant', 'property'],
-  edgeKinds: ['contains', 'defines', 'imports'],
+  edgeKinds: ['contains', 'defines', 'imports', 'calls', 'references', 'possible_textual_match'],
   captureMap: queries.captureMap,
 };
 
@@ -321,7 +322,8 @@ export class PythonProvider implements CodeLanguageProvider {
 
       return d;
     });
-    return { ...draft, definitions };
+    const tree = draft.attributes?.__tree as Tree | undefined;
+    return { ...draft, definitions, usages: extractLexicalUsages(tree?.rootNode, definitions, 'python') };
   }
 
   /**

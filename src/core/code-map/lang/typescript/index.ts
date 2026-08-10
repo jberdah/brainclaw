@@ -24,11 +24,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Node as TsNode } from 'web-tree-sitter';
+import type { Node as TsNode, Tree } from 'web-tree-sitter';
 import type { CodeLang, NodeSubtype } from '../../types.js';
 import type { ExtractionDraft, DefinitionDraft } from '../../drafts.js';
 import { grammarHash, grammarName, loadGrammar } from '../../wasm-loader.js';
 import { extractWithQueries } from '../query-runtime.js';
+import { extractLexicalUsages } from '../usages.js';
 import type {
   CodeLanguageProvider,
   ExtractionServices,
@@ -177,7 +178,7 @@ const queries: QueryDeclarations = {
 
 const vocabulary: ProviderVocabularyDeclaration = {
   nodeSubtypes: ['function', 'class', 'type', 'interface', 'variable', 'component', 'hook', 'export'],
-  edgeKinds: ['contains', 'defines', 'imports', 'exports'],
+  edgeKinds: ['contains', 'defines', 'imports', 'exports', 'calls', 'references', 'possible_textual_match'],
   captureMap: queries.captureMap,
 };
 
@@ -346,7 +347,8 @@ export class TypeScriptProvider implements CodeLanguageProvider {
       }
       return d;
     });
-    return { ...draft, definitions };
+    const tree = draft.attributes?.__tree as Tree | undefined;
+    return { ...draft, definitions, usages: extractLexicalUsages(tree?.rootNode, definitions, 'js-ts') };
   }
 
   /**

@@ -18,6 +18,7 @@ import {
   type ResolutionIndex,
   type SymbolIndexEntry,
   type SymbolsIndex,
+  type UsageIndexEntry,
 } from './types.js';
 import { fileNodeId } from './ids.js';
 
@@ -146,6 +147,39 @@ export function buildResolutionIndex(projectId: string, shards: FileShard[]): Re
   // target key -> (importer path -> merged entry)
   const byFile = new Map<string, Map<string, DependencyIndexEntry>>();
   const bySymbol = new Map<string, Map<string, DependencyIndexEntry>>();
+  const byUsageSymbol = new Map<string, Map<string, UsageIndexEntry>>();
+
+  const addUsage = (
+    targetSymbolId: string,
+    importerPath: string,
+    importerFileId: string,
+    edge: { kind: 'calls' | 'references'; from: string; confidence: number; source?: { line?: number | null } | null },
+  ): void => {
+    const perImporter = byUsageSymbol.get(targetSymbolId) ?? new Map<string, UsageIndexEntry>();
+    const entry = perImporter.get(importerPath) ?? { path: importerPath, file_id: importerFileId, reasons: [] };
+    const reason = {
+      kind: edge.kind,
+      caller_node_id: edge.from,
+      confidence: edge.confidence,
+      ...(edge.source?.line !== undefined ? { source_line: edge.source.line } : {}),
+    };
+    if (!entry.reasons.some((existing) =>
+      existing.kind === reason.kind
+      && existing.caller_node_id === reason.caller_node_id
+      && existing.confidence === reason.confidence
+      && existing.source_line === reason.source_line,
+    )) {
+      entry.reasons.push(reason);
+      entry.reasons.sort((a, b) =>
+        a.kind.localeCompare(b.kind)
+        || a.caller_node_id.localeCompare(b.caller_node_id)
+        || (a.source_line ?? -1) - (b.source_line ?? -1)
+        || a.confidence - b.confidence,
+      );
+    }
+    perImporter.set(importerPath, entry);
+    byUsageSymbol.set(targetSymbolId, perImporter);
+  };
 
   const addDependent = (
     bucket: Map<string, Map<string, DependencyIndexEntry>>,
@@ -217,6 +251,12 @@ export function buildResolutionIndex(projectId: string, shards: FileShard[]): Re
       if (n.kind === 'module') moduleById.set(n.id, { name: n.name, imported: n.imported_names ?? [] });
     }
     for (const e of shard.edges) {
+      if (e.kind === 'calls' || e.kind === 'references') {
+        // `possible_textual_match` remains deliberately absent: it is a hint on
+        // the shard, never an impact dependency.
+        addUsage(e.to, shard.path, shard.file_id, { ...e, kind: e.kind as 'calls' | 'references' });
+        continue;
+      }
       if (e.kind !== 'resolves_to' && e.kind !== 'imports_symbol') continue;
       const mod = moduleById.get(e.from);
       if (e.kind === 'resolves_to') {
@@ -245,11 +285,21 @@ export function buildResolutionIndex(projectId: string, shards: FileShard[]): Re
     return out;
   };
 
+  const finalizeUsages = (
+    bucket: Map<string, Map<string, UsageIndexEntry>>,
+  ): Record<string, UsageIndexEntry[]> => {
+    const out: Record<string, UsageIndexEntry[]> = Object.create(null);
+    for (const key of [...bucket.keys()].sort()) {
+      out[key] = [...bucket.get(key)!.values()].sort((a, b) => a.path.localeCompare(b.path));
+    }
+    return out;
+  };
   return {
     schema_version: CODE_MAP_SCHEMA_VERSION,
     project_id: projectId,
     updated_at: new Date().toISOString(),
     dependents_by_file: finalize(byFile),
     dependents_by_symbol: finalize(bySymbol),
+    usages_by_symbol: finalizeUsages(byUsageSymbol),
   };
 }
