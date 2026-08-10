@@ -1206,6 +1206,16 @@
     "arguments": [],
     "options": [
       {
+        "flags": "--api-key <key>",
+        "long": "--api-key",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--json",
         "long": "--json",
         "mandatory": false,
@@ -1242,6 +1252,16 @@
     "aliases": [],
     "arguments": [],
     "options": [
+      {
+        "flags": "--api-key <key>",
+        "long": "--api-key",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
       {
         "flags": "--dry-run",
         "long": "--dry-run",

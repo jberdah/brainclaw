@@ -44,11 +44,12 @@ export function registerCloudCommands(program: Command): void {
     .description('Projette les plans et la mémoire projet vers le cloud : scelle, met en file, puis envoie')
     .option('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
     .option('--dry-run', "N'écrit ni n'envoie rien : rapporte ce qui partirait")
+    .option('--api-key <key>', 'Clé porteuse exigée par l ingestion (ou BRAINCLAW_CLOUD_API_KEY)')
     .option('--limit <n>', 'Borne le lot envoyé', (v: string) => Number.parseInt(v, 10))
     .option('--json', 'Sortie JSON')
     .action(async (options: { url?: string; dryRun?: boolean; limit?: number; json?: boolean }) => {
       try {
-        await runCloudPush(options);
+        await runCloudPush({ ...options, apiKey: (options as { apiKey?: string }).apiKey });
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }
@@ -58,11 +59,12 @@ export function registerCloudCommands(program: Command): void {
     .command('pull')
     .description('Tire le delta cloud, vérifie chaque enveloppe, puis matérialise les objets acceptés')
     .option('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
+    .option('--api-key <key>', 'Clé porteuse exigée par l ingestion (ou BRAINCLAW_CLOUD_API_KEY)')
     .option('--limit <n>', 'Borne le delta reçu', (v: string) => Number.parseInt(v, 10))
     .option('--json', 'Sortie JSON')
     .action(async (options: { url?: string; limit?: number; json?: boolean }) => {
       try {
-        await runCloudPull(options);
+        await runCloudPull({ ...options, apiKey: (options as { apiKey?: string }).apiKey });
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }

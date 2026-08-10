@@ -239,7 +239,12 @@ export async function checkPairingApproval(params: {
   transport: PairingTransport;
   cwd?: string;
 }): Promise<{ state: string; role?: string; approved: boolean }> {
-  const res = await params.transport.get(`/api/v1/enrollments/${params.enrollmentId}`);
+  // `/status` et non la route complète : l'agent en cours d'appairage n'a NI JWT NI clé
+  // d'API — il n'en obtient une qu'une fois approuvé. Interroger `GET /enrollments/:id`
+  // (withUserAuth) échouait donc sur « Missing API key » juste après une preuve de
+  // possession réussie, laissant la cérémonie à un pas de la fin (constaté en production
+  // le 2026-08-10). `/status` est public et ne rend que l'état du cycle de vie.
+  const res = await params.transport.get(`/api/v1/enrollments/${params.enrollmentId}/status`);
   if (res.status !== 200) {
     throw new PairingError(describeError(res.body, "l'état de l'enrôlement n'a pas pu être lu"), 'poll', res.status);
   }

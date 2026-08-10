@@ -496,6 +496,29 @@ export interface CloudPushOptions {
   dryRun?: boolean;
   limit?: number;
   json?: boolean;
+  /** Clé porteuse exigée par l'ingestion. Voir `resolveCloudApiKey` pour la tension assumée. */
+  apiKey?: string;
+}
+
+/**
+ * Résout la clé d'API d'ingestion : option explicite, sinon `BRAINCLAW_CLOUD_API_KEY`.
+ *
+ * ── UNE BÉQUILLE, ET ELLE EST NOMMÉE COMME TELLE ──────────────────────────────
+ * dec#8 bannit les clés d'API du parcours d'appairage : l'humain ne manipule qu'un code
+ * d'invitation et compare des empreintes. Mais l'endpoint d'ingestion en exige une (401
+ * « Missing API key »), et l'appairage attesté n'en produit aucune — mesuré en production
+ * le 2026-08-10, après un push qui a scellé 1999 enveloppes pour les voir toutes refusées.
+ *
+ * L'appareil possède pourtant DÉJÀ de quoi s'authentifier : son identité Ed25519 est
+ * attestée côté cloud, et chaque enveloppe porte sa signature — une preuve plus forte
+ * qu'un jeton porteur, qui ne prouve que sa propre détention. La vraie correction est que
+ * l'ingestion accepte cette signature ; ce paramètre est une transition, pas le modèle.
+ *
+ * La variable d'environnement existe pour que la clé n'ait à passer ni par l'historique du
+ * shell ni par un fichier de configuration versionné.
+ */
+export function resolveCloudApiKey(explicit?: string): string | undefined {
+  return explicit ?? process.env['BRAINCLAW_CLOUD_API_KEY'] ?? undefined;
 }
 
 /**
@@ -514,6 +537,8 @@ export interface CloudPullOptions {
   url?: string;
   limit?: number;
   json?: boolean;
+  /** Même béquille transitoire que pour le push — voir `resolveCloudApiKey`. */
+  apiKey?: string;
 }
 
 /** Réception v2 : delta reçu et écritures locales sont affichés séparément. */
@@ -521,7 +546,7 @@ export async function runCloudPull(options: CloudPullOptions = {}): Promise<void
   const cwd = options.cwd ?? resolveEffectiveCwd();
   const { pullFederationDelta } = await import('../core/federation-pull.js');
   const url = resolveCloudUrl(options.url, loadConnectionState(cwd));
-  const pulled = await pullFederationDelta({ cwd, url, limit: options.limit });
+  const pulled = await pullFederationDelta({ cwd, url, limit: options.limit, apiKey: resolveCloudApiKey(options.apiKey) });
   if (options.json) {
     console.log(JSON.stringify(pulled, null, 2));
     return;
@@ -725,7 +750,7 @@ async function resolveGrantTarget(url: string, cloudProjectId: string, deviceId:
   const url = resolveCloudUrl(options.url, loadConnectionState(cwd));
 
   const emitted = emitProjections({ cwd, dryRun: options.dryRun });
-  const pushed = await pushPending({ cwd, url, dryRun: options.dryRun, limit: options.limit });
+  const pushed = await pushPending({ cwd, url, dryRun: options.dryRun, limit: options.limit, apiKey: resolveCloudApiKey(options.apiKey) });
 
   if (options.json) {
     console.log(JSON.stringify({ emitted, pushed, dry_run: Boolean(options.dryRun) }, null, 2));

@@ -255,7 +255,19 @@ export function emitProjections(options: EmitOptions = {}): EmitResult {
   // de l'origine d'une enveloppe. `DeviceRecord` ne porte volontairement pas d'agent_id —
   // un même appareil peut servir plusieurs agents, et lier l'origine à la machine plutôt
   // qu'à l'auteur rendrait la signature inutilisable pour dire QUI a émis.
-  const agentId = options.agentId ?? resolveCurrentAgentIdentity(cwd)?.agent_id;
+  // ── L'AGENT QUI SIGNE EST CELUI QUI EST APPAIRÉ, PAS CELUI DU REGISTRE LOCAL ──
+  //
+  // Constaté en production le 2026-08-10 : `resolveCurrentAgentIdentity` rend l'agent du
+  // registre du workspace (ici `agt_687aa…`), qui n'a AUCUN rapport avec l'agent enrôlé
+  // côté cloud (`claude-code-frams99`). Émettre sous cette identité produisait « Identité
+  // de signature Ed25519 introuvable » — et, si une clé avait existé, aurait produit des
+  // enveloppes signées par une identité NON ATTESTÉE que le cloud aurait refusées en 422.
+  //
+  // Le signataire doit être une identité que le cloud reconnaît pour CE projet : c'est par
+  // définition celle de l'appairage actif. Le registre local sert à d'autres fins et n'a
+  // aucune raison de coïncider.
+  const pairedAgentId = state.pairings?.find((p) => p.stage === 'active')?.agent_id;
+  const agentId = options.agentId ?? pairedAgentId ?? resolveCurrentAgentIdentity(cwd)?.agent_id;
   if (!agentId) {
     throw new Error(
       'Agent courant non résolu : impossible de déterminer qui signe l\'origine des enveloppes.',
