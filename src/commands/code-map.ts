@@ -1,13 +1,14 @@
 /**
  * `brainclaw code-map <subcommand>` — CLI surface over the Code Map backend
  * (spec §9). Mirrors plan-resource.ts: a switch over the subcommand delegating
- * to a JsonlBackend (status | refresh | find | brief | outline). The backend owns
+ * to a JsonlBackend (status | refresh | find | brief | impact | export | outline). The backend owns
  * query logic; this file only adapts it to argv + stdout (text or --json), and
  * every output carries the freshness_badge.
  */
 import { JsonlBackend } from '../core/code-map/backend.js';
-import type { CodeBrief, CodeFindResult, CodeImpactResult, CodeOutlineResult, CodeRefreshResult, CodeStatus } from '../core/code-map/backend.js';
+import type { CodeBrief, CodeExportResult, CodeFindResult, CodeImpactResult, CodeOutlineResult, CodeRefreshResult, CodeStatus } from '../core/code-map/backend.js';
 import type { FreshnessBadge } from '../core/code-map/types.js';
+import type { CodeGraphDirection, CodeGraphFormat, CodeGraphTargetKind } from '../core/code-map/export.js';
 
 interface CodeMapOptions {
   json?: boolean;
@@ -16,12 +17,21 @@ interface CodeMapOptions {
   limit?: number;
   /** Maximum graph depth for impact (1 = direct only; transitives require 2+). */
   depth?: number;
+  /** Subgraph export traversal direction. */
+  direction?: CodeGraphDirection;
+  /** Subgraph export projection format. */
+  format?: CodeGraphFormat;
+  /** Strict subgraph export caps (also bounded by library hard caps). */
+  maxNodes?: number;
+  maxEdges?: number;
+  minConfidence?: number;
+  targetKind?: CodeGraphTargetKind;
   cwd?: string;
   /** Multi-project cascade for refresh/status (DGX Finding 2). */
   cascade?: boolean;
 }
 
-const KNOWN_SUBCOMMANDS = new Set(['status', 'refresh', 'find', 'brief', 'impact', 'outline']);
+const KNOWN_SUBCOMMANDS = new Set(['status', 'refresh', 'find', 'brief', 'impact', 'export', 'outline']);
 
 function backend(): JsonlBackend {
   return new JsonlBackend();
@@ -95,6 +105,28 @@ export async function runCodeMap(
     }
     const result = await be.impact({ target, depth: options.depth, limit: options.limit, cwd });
     printImpact(result, options);
+    return;
+  }
+
+  if (normalized === 'export') {
+    const target = args.join(' ').trim();
+    if (!target) {
+      console.error('Error: code-map export requires <symbol-or-path>.');
+      console.error('  Usage: brainclaw code-map export <symbol-or-path> [--direction both] [--depth 1] [--max-nodes 100] [--max-edges 200]');
+      process.exit(1);
+    }
+    const result = await be.exportGraph({
+      target,
+      targetKind: options.targetKind,
+      direction: options.direction,
+      depth: options.depth,
+      maxNodes: options.maxNodes,
+      maxEdges: options.maxEdges,
+      minConfidence: options.minConfidence,
+      format: options.format,
+      cwd,
+    });
+    printExport(result, options);
     return;
   }
 
@@ -218,6 +250,26 @@ function printImpact(result: CodeImpactResult, options: CodeMapOptions): void {
   console.log(`  Tests: ${result.risk.counters.resolved_test_files} resolved, ${result.risk.counters.suggested_test_files} naming suggestion(s)`);
   for (const test of result.tests_for) console.log(`    [${test.relation}, confidence=${test.confidence}] ${test.path} — ${test.reason}`);
   console.log(`  Risk: ${result.risk.score} (${result.risk.formula}; direct=${result.risk.counters.direct_dependents}, transitive=${result.risk.counters.transitive_dependents})`);
+}
+
+function printExport(result: CodeExportResult, options: CodeMapOptions): void {
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`Code Map export: "${result.target}" (${result.target_kind})`);
+  console.log(`  ${badgeLine(result.freshness_badge)}`);
+  console.log(`  Roots: ${result.root_node_ids.length}; nodes=${result.nodes.length}/${result.limits.max_nodes}; edges=${result.edges.length}/${result.limits.max_edges}; depth=${result.limits.max_depth}; direction=${result.limits.direction}; min-confidence=${result.limits.min_confidence}`);
+  const truncation = Object.entries(result.truncated).filter(([, value]) => value).map(([key]) => key);
+  if (truncation.length > 0) console.log(`  Truncated: ${truncation.join(', ')}`);
+  if (result.format === 'mermaid' && result.mermaid) {
+    console.log(result.mermaid);
+    return;
+  }
+  for (const edge of result.edges) {
+    const source = edge.source ? ` @ ${edge.source.path}${edge.source.line === null || edge.source.line === undefined ? '' : `:${edge.source.line}`}` : '';
+    console.log(`  ${edge.from} -[${edge.kind}, confidence=${edge.confidence}${source}]-> ${edge.to}`);
+  }
 }
 
 function printOutline(result: CodeOutlineResult, options: CodeMapOptions): void {

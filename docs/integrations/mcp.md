@@ -25,7 +25,7 @@ The default dynamic workflow is:
 1. `bclaw_work` to start the session and load the relevant context in one call (returns compact payload by default — pass `compact: false` for the full context result)
 2. `bclaw_context({ kind: "execution" })` early when the agent needs local tooling signals or package update visibility
 3. `bclaw_context({ kind: "memory" })`, `bclaw_context({ kind: "board" })`, or `bclaw_context({ kind: "delta" })` when the target path changes or full memory is needed beyond the compact summary
-4. `bclaw_code_brief({ target })` / `bclaw_code_find({ query })` before editing unfamiliar code — get a ranked reading list (with related decisions/traps) and locate symbols from the Code Map instead of grepping blind. Use `bclaw_code_impact({ target, depth: 2 })` when you need an explainable local blast radius; its `tests_for` separates resolved imports from low-confidence filename suggestions. A `missing_index` badge means run `bclaw_code_refresh` first. See [code map](../code-map.md)
+4. `bclaw_code_brief({ target })` / `bclaw_code_find({ query })` before editing unfamiliar code — get a ranked reading list (with related decisions/traps) and locate symbols from the Code Map instead of grepping blind. Use `bclaw_code_impact({ target, depth: 2 })` when you need an explainable local blast radius; its `tests_for` separates resolved imports from low-confidence filename suggestions. Use `bclaw_code_export({ target, direction, depth, maxNodes, maxEdges })` when you need a compact bounded subgraph; every returned edge keeps `kind`, `source`, and `confidence`, and `format: 'mermaid'` is projected from that same JSON model. A `missing_index` badge means run `bclaw_code_refresh` first. See [code map](../code-map.md)
 5. `bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition` for entity reads and writes
 6. `bclaw_coordinate`, `bclaw_dispatch`, or `bclaw_loop` for assign, consult, review, reroute, summarize, dispatch, or multi-turn loop flows
 7. `bclaw_read_inbox` when resuming delegated work
@@ -47,7 +47,7 @@ Every tool has one of three tiers in its `annotations.tier` field:
 - **standard** — Day-to-day coordination tools: plans, claims, messaging, sequences, dispatch, review, memory. Returned by default alongside facades.
 - **advanced** — Specialized governance, audit, registry, and power tools.
 
-By default, `tools/list` returns **facade + standard** tools (48 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
+By default, `tools/list` returns **facade + standard** tools (49 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
 
 Published tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 
@@ -112,6 +112,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_code_find` | discovery | Search the Code Map symbol index by name (function/class/component/hook/type) |
 | `bclaw_code_brief` | discovery | Ranked reading list + related decisions/traps before editing a symbol or path |
 | `bclaw_code_impact` | discovery | Explainable local blast radius from resolved imports: definition, direct dependents, opt-in bounded transitives, tests, and count-based risk |
+| `bclaw_code_export` | discovery | Compact bounded local nodes/edges around one symbol or file; preserves edge kind/source/confidence, with optional Mermaid projection |
 | `bclaw_code_outline` | discovery | Source-ordered symbols of one indexed file (span, exported, confidence) — no reparse |
 | `bclaw_code_refresh` | discovery | Rebuild the Code Map index (`scope: changed \| all`) |
 

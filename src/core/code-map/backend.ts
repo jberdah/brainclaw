@@ -15,6 +15,7 @@ import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift, withCoarse } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
 import { impact as runImpact, type CodeImpactOutput } from './impact.js';
+import { exportSubgraph, type CodeGraphExportOutput, type CodeGraphExportOptions } from './export.js';
 import { fileId } from './ids.js';
 import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } from './aggregate.js';
 import { defaultMemoryReader } from './memory-reader.js';
@@ -140,6 +141,14 @@ export interface CodeImpactInput extends CodeBackendContext {
   limit?: number;
 }
 
+/** Bounded local graph projection; does not aggregate or export a workspace graph. */
+export interface CodeExportInput extends CodeBackendContext, CodeGraphExportOptions {
+  /** Required symbol name or source-file path around which to select the subgraph. */
+  target: string;
+}
+
+export type CodeExportResult = CodeGraphExportOutput;
+
 export type CodeImpactResult = CodeImpactOutput;
 
 export interface CodeBriefReadEntry {
@@ -226,6 +235,7 @@ export interface CodeQueryBackend {
   find(input: CodeFindInput): Promise<CodeFindResult>;
   brief(input: CodeBriefInput): Promise<CodeBrief>;
   impact(input: CodeImpactInput): Promise<CodeImpactResult>;
+  exportGraph(input: CodeExportInput): Promise<CodeExportResult>;
   outline(input: CodeOutlineInput): Promise<CodeOutlineResult>;
 }
 
@@ -518,6 +528,22 @@ export class JsonlBackend implements CodeQueryBackend {
   async impact(input: CodeImpactInput): Promise<CodeImpactResult> {
     const ctx = this.queryContext(input);
     const out = runImpact(input.target, { depth: input.depth, limit: input.limit }, ctx);
+    const manifest = readManifest(input.cwd, input.preferredDirName);
+    const base: FreshnessBadge = badge(out.freshness_badge.status, out.freshness_badge.details);
+    return {
+      ...out,
+      freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
+    };
+  }
+
+  /**
+   * Export only a caller-selected, hard-bounded local graph. This stays
+   * store-local even at a multi-project root: implicit workspace graph dumps
+   * are intentionally unsupported.
+   */
+  async exportGraph(input: CodeExportInput): Promise<CodeExportResult> {
+    const ctx = this.queryContext(input);
+    const out = exportSubgraph(input.target, input, ctx);
     const manifest = readManifest(input.cwd, input.preferredDirName);
     const base: FreshnessBadge = badge(out.freshness_badge.status, out.freshness_badge.details);
     return {

@@ -24,6 +24,7 @@ rebuilds it.
   brainclaw memory.
 - **To locate** a function/class/component/hook by name without grepping:
   `code-map find <query>` (or `bclaw_code_find`).
+- **To inspect a bounded local dependency neighborhood**: `code-map export <symbol-or-path>` (or `bclaw_code_export`) returns compact nodes and edges, not a repository graph dump.
 - **To check coverage / staleness**: `code-map status` (or `bclaw_code_status`).
 - **After pulling changes or doing work**: `code-map refresh` to bring the index
   back to `fresh`.
@@ -95,9 +96,30 @@ Read-only. Builds a reading brief for a symbol or file: a ranked
 brainclaw code-map brief App
 ```
 
+### `brainclaw code-map export <symbol-or-path>`
+
+Read-only export of a **local** persisted subgraph around one symbol or file. It
+never refreshes, reparses, calls a service, or silently turns into a whole-project
+graph export. The default is one hop in both directions; limits are always
+reported and hard-capped at depth 4, 100 nodes, and 200 edges.
+
+```bash
+brainclaw code-map export useAuth --direction incoming --depth 2 --json
+brainclaw code-map export src/hooks/useAuth.ts --format mermaid
+```
+
+`--direction` is `outgoing`, `incoming`, or `both` (default). `--max-nodes` and
+`--max-edges` can tighten the response only; `--min-confidence` cannot be set
+below 0.5. JSON is canonical and includes compact `nodes`, `edges`, root IDs,
+limits, truncation flags, and a freshness badge. Every edge retains `kind`,
+`source`, and `confidence`; low-confidence nodes/relations are excluded so an
+extraction heuristic cannot appear indistinguishable from a high-confidence
+relation. `--format mermaid` adds a Mermaid rendering projected from those exact
+JSON nodes and edges—never from a second traversal.
+
 ## MCP tools
 
-Capable agents should prefer the MCP surface. The four tools mirror the CLI and
+Capable agents should prefer the MCP surface. The read tools mirror the CLI and
 all return a `freshness_badge`:
 
 | Tool | Kind | Purpose |
@@ -105,6 +127,7 @@ all return a `freshness_badge`:
 | `bclaw_code_status` | read | Store presence, freshness badge, index stats. Never refreshes. |
 | `bclaw_code_find` | read | Ranked symbol-index search (`query`, optional `limit`). Never refreshes. |
 | `bclaw_code_brief` | read | Reading brief for a symbol/path (`target`, optional `limit`, files capped at 12). Never refreshes. |
+| `bclaw_code_export` | read | Bounded local subgraph around required `target`; direction/depth/node/edge caps, confidence filtering, and optional Mermaid projection. Never refreshes. |
 | `bclaw_code_refresh` | write | Rebuild the index. `scope` = `"changed"` (default) or `"all"`. Fails fast on a live lock. |
 
 The read tools never trigger a parse — if `bclaw_code_status` /

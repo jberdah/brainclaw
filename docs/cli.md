@@ -652,6 +652,14 @@ Search the symbol index by name (function / class / component / hook / type). Re
 ### `brainclaw code-map brief <target> [--limit <n>]`
 
 Given a symbol or path, return a ranked reading list (`suggested_files_to_read`) plus related memory (decisions/traps/constraints) — what to read before editing.
+### `brainclaw code-map export <symbol-or-path> [--direction outgoing|incoming|both]`
+
+Export a compact **local** Code Map subgraph around one symbol or file. The default
+is one hop in both directions; hard caps always apply (depth 4, 100 nodes, 200
+edges), so the command never defaults to a whole-graph export. `--max-nodes`,
+`--max-edges`, and `--depth` only tighten the result; `--min-confidence` has a
+hard floor of 0.5. JSON keeps each edge's `kind`, `source`, and `confidence`.
+Use `--format mermaid` for a diagram projected from that same JSON model.
 
 ```bash
 brainclaw code-map refresh --all
