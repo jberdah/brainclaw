@@ -1394,8 +1394,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
     // Code Map tools (spec §9). These delegate to the async JsonlBackend, so
     // they are handled here rather than via the synchronous read-tool path.
-    // status/find/brief/outline are reads; refresh is a write (prompt approval).
-    if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_outline' || name === 'bclaw_code_refresh') {
+    // status/find/brief/impact/outline are reads; refresh is a write (prompt approval).
+    if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_impact' || name === 'bclaw_code_outline' || name === 'bclaw_code_refresh') {
       const { JsonlBackend } = await import('../core/code-map/backend.js');
       const be = new JsonlBackend();
       if (name === 'bclaw_code_status') {
@@ -1428,6 +1428,22 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map find "${result.query}": ${result.matches.length} match(es), freshness=${result.freshness_badge.status}` }],
+            structuredContent: { ...result, freshness_badge: result.freshness_badge },
+          }),
+        };
+      }
+      // bclaw_code_impact
+      if (name === 'bclaw_code_impact') {
+        const target = typeof args.target === 'string' ? args.target : '';
+        if (!target.trim()) {
+          return { response: createToolErrorResponse('validation_error', 'bclaw_code_impact requires a non-empty target.') };
+        }
+        const depth = typeof args.depth === 'number' ? args.depth : undefined;
+        const limit = typeof args.limit === 'number' ? args.limit : undefined;
+        const result = await be.impact({ target, depth, limit, cwd });
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Code Map impact "${result.target}": ${result.risk.counters.direct_dependents} direct, ${result.risk.counters.transitive_dependents} transitive dependent(s), risk=${result.risk.score}, freshness=${result.freshness_badge.status}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };

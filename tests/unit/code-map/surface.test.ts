@@ -156,6 +156,20 @@ describe('runCodeMap CLI surface', () => {
     assert.ok(parsed.suggested_files_to_read.length <= 12);
     assert.equal(parsed.suggested_files_to_read[0].path, 'src/app/App.tsx');
   });
+  it('impact exposes direct resolved dependents through the CLI JSON surface', async () => {
+    const root = tmpProject();
+    fixture(root);
+    writeSrc(root, 'src/impact-consumer.ts', "import { useAuth } from './hooks/useAuth';\nexport const useIt = useAuth;\n");
+    await refreshAll(root);
+
+    const jsonOut = await captureCli(() => runCodeMap('impact', ['useAuth'], { cwd: root, depth: 2, json: true }));
+    const parsed = JSON.parse(jsonOut);
+    assert.equal(parsed.target, 'useAuth');
+    assert.equal(parsed.freshness_badge.status, 'fresh');
+    assert.ok(parsed.direct_dependents.some((dependent: { path: string }) => dependent.path === 'src/impact-consumer.ts'));
+    assert.equal(parsed.risk.score, parsed.risk.counters.direct_dependents + parsed.risk.counters.transitive_dependents);
+  });
+
   it('outline returns the indexed file structure with a freshness badge', async () => {
     const root = tmpProject();
     fixture(root);
@@ -291,6 +305,23 @@ describe('MCP code-map tool handlers', () => {
     const sc = out.response.structuredContent as Record<string, unknown>;
     assert.equal((sc.freshness_badge as { status: string }).status, 'fresh');
     assert.ok((sc.suggested_files_to_read as unknown[]).length > 0);
+  });
+
+  it('bclaw_code_impact returns direct causes and a count-based risk score', async () => {
+    const root = tmpProject();
+    fixture(root);
+    writeSrc(root, 'src/impact-consumer.ts', "import { useAuth } from './hooks/useAuth';\nexport const useIt = useAuth;\n");
+    await refreshAll(root);
+
+    const out = await executeMcpToolCall({ name: 'bclaw_code_impact', args: { target: 'useAuth', depth: 2 }, cwd: root });
+    assert.equal(out.response.isError, false);
+    const sc = out.response.structuredContent as Record<string, any>;
+    assert.equal(sc.target, 'useAuth');
+    assert.ok(sc.direct_dependents.some((dependent: { path: string; causes: unknown[] }) => dependent.path === 'src/impact-consumer.ts' && dependent.causes.length > 0));
+    assert.equal(sc.risk.score, sc.risk.counters.direct_dependents + sc.risk.counters.transitive_dependents);
+
+    const invalid = await executeMcpToolCall({ name: 'bclaw_code_impact', args: { target: '' }, cwd: root });
+    assert.equal(invalid.response.isError, true);
   });
 
   it('bclaw_code_refresh returns a result with freshness_badge', async () => {

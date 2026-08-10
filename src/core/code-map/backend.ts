@@ -14,6 +14,7 @@ import { readManifest, readShard, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift, withCoarse } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
+import { impact as runImpact, type CodeImpactOutput } from './impact.js';
 import { fileId } from './ids.js';
 import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } from './aggregate.js';
 import { defaultMemoryReader } from './memory-reader.js';
@@ -130,6 +131,17 @@ export interface CodeBriefInput extends CodeBackendContext {
   traversal?: TraversalMode;
 }
 
+export interface CodeImpactInput extends CodeBackendContext {
+  /** Symbol name or source-file path whose resolved blast radius to inspect. */
+  target: string;
+  /** Maximum graph distance: 1 is direct only; 2+ opts into transitives (capped at 4). */
+  depth?: number;
+  /** Per-section response cap for direct, transitive, and naming-suggestion rows (capped at 100). */
+  limit?: number;
+}
+
+export type CodeImpactResult = CodeImpactOutput;
+
 export interface CodeBriefReadEntry {
   path: string;
   reason: string;
@@ -213,6 +225,7 @@ export interface CodeQueryBackend {
   refresh(input: CodeRefreshInput): Promise<CodeRefreshResult>;
   find(input: CodeFindInput): Promise<CodeFindResult>;
   brief(input: CodeBriefInput): Promise<CodeBrief>;
+  impact(input: CodeImpactInput): Promise<CodeImpactResult>;
   outline(input: CodeOutlineInput): Promise<CodeOutlineResult>;
 }
 
@@ -493,6 +506,22 @@ export class JsonlBackend implements CodeQueryBackend {
       target: out.target,
       suggested_files_to_read: out.suggested_files_to_read,
       related_memory: out.related_memory,
+      freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
+    };
+  }
+
+  /**
+   * Explain a target's resolved blast radius. Unlike brief(), this deliberately
+   * stays store-local: impact only traverses persisted P1c/P1d edges and reports
+   * their concrete causes, with an opt-in bounded transitive walk.
+   */
+  async impact(input: CodeImpactInput): Promise<CodeImpactResult> {
+    const ctx = this.queryContext(input);
+    const out = runImpact(input.target, { depth: input.depth, limit: input.limit }, ctx);
+    const manifest = readManifest(input.cwd, input.preferredDirName);
+    const base: FreshnessBadge = badge(out.freshness_badge.status, out.freshness_badge.details);
+    return {
+      ...out,
       freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
     };
   }

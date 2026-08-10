@@ -5,12 +5,13 @@ export function registerCodeMapCommands(program: Command): void {
   // --- code-map ---
   program
     .command('code-map <subcommand> [args...]')
-    .description('Query the per-project Code Map (status, refresh, find, brief, outline)')
+    .description('Query the per-project Code Map (status, refresh, find, brief, impact, outline)')
     .option('--json', 'Output as JSON')
     .option('--all', 'For refresh: enumerate all supported files (full refresh)')
     .option('--changed', 'For refresh: only changed files (default)')
     .option('--cascade', 'For refresh/status in a multi-project workspace: cascade across every nested project (each gets its own store; the root store is scoped to files no child owns)')
-    .option('--limit <n>', 'Max results for find/brief/outline', (v) => parseInt(v, 10))
+    .option('--limit <n>', 'Max results for find/brief/impact/outline', (v) => parseInt(v, 10))
+    .option('--depth <n>', 'For impact: maximum graph depth (1 = direct only; 2+ includes transitives)', (v) => parseInt(v, 10))
     .action((subcommand, args, options) => {
       void runCodeMap(subcommand, args, options).catch((err: unknown) => {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);

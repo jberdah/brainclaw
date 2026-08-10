@@ -6,7 +6,7 @@
  * every output carries the freshness_badge.
  */
 import { JsonlBackend } from '../core/code-map/backend.js';
-import type { CodeBrief, CodeFindResult, CodeOutlineResult, CodeRefreshResult, CodeStatus } from '../core/code-map/backend.js';
+import type { CodeBrief, CodeFindResult, CodeImpactResult, CodeOutlineResult, CodeRefreshResult, CodeStatus } from '../core/code-map/backend.js';
 import type { FreshnessBadge } from '../core/code-map/types.js';
 
 interface CodeMapOptions {
@@ -14,12 +14,14 @@ interface CodeMapOptions {
   all?: boolean;
   changed?: boolean;
   limit?: number;
+  /** Maximum graph depth for impact (1 = direct only; transitives require 2+). */
+  depth?: number;
   cwd?: string;
   /** Multi-project cascade for refresh/status (DGX Finding 2). */
   cascade?: boolean;
 }
 
-const KNOWN_SUBCOMMANDS = new Set(['status', 'refresh', 'find', 'brief', 'outline']);
+const KNOWN_SUBCOMMANDS = new Set(['status', 'refresh', 'find', 'brief', 'impact', 'outline']);
 
 function backend(): JsonlBackend {
   return new JsonlBackend();
@@ -81,6 +83,18 @@ export async function runCodeMap(
     }
     const result = await be.brief({ target, limit: options.limit, cwd });
     printBrief(result, options);
+    return;
+  }
+
+  if (normalized === 'impact') {
+    const target = args.join(' ').trim();
+    if (!target) {
+      console.error('Error: code-map impact requires <symbol-or-path>.');
+      console.error('  Usage: brainclaw code-map impact <symbol-or-path> [--depth 2]');
+      process.exit(1);
+    }
+    const result = await be.impact({ target, depth: options.depth, limit: options.limit, cwd });
+    printImpact(result, options);
     return;
   }
 
@@ -182,6 +196,28 @@ function printBrief(result: CodeBrief, options: CodeMapOptions): void {
       console.log(`    ${mem.id} (${mem.kind}): ${mem.text.slice(0, 80)}`);
     }
   }
+}
+
+function printImpact(result: CodeImpactResult, options: CodeMapOptions): void {
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const cause = (row: { causes: Array<{ kind: string; module?: string; source_line?: number | null }> }): string =>
+    row.causes.map((item) => `${item.kind}${item.module ? ` ${item.module}` : ''}${item.source_line ? `:${item.source_line}` : ''}`).join(', ');
+  console.log(`Code Map impact: "${result.target}"`);
+  console.log(`  ${badgeLine(result.freshness_badge)}`);
+  console.log(`  Definition: ${result.definition.entries.length} (${result.definition.match_kind})`);
+  for (const entry of result.definition.entries) console.log(`    ${entry.name} — ${entry.path}`);
+  console.log(`  Direct dependents: ${result.direct_dependents.length}${result.limits.direct_truncated ? '+' : ''}`);
+  for (const dependent of result.direct_dependents) console.log(`    ${dependent.path} — ${cause(dependent)}`);
+  if (result.limits.max_depth > 1) {
+    console.log(`  Transitive dependents: ${result.transitive_dependents.length}${result.limits.transitive_truncated ? '+' : ''}`);
+    for (const dependent of result.transitive_dependents) console.log(`    [depth ${dependent.depth}] ${dependent.path} — ${cause(dependent)}`);
+  }
+  console.log(`  Tests: ${result.risk.counters.resolved_test_files} resolved, ${result.risk.counters.suggested_test_files} naming suggestion(s)`);
+  for (const test of result.tests_for) console.log(`    [${test.relation}, confidence=${test.confidence}] ${test.path} — ${test.reason}`);
+  console.log(`  Risk: ${result.risk.score} (${result.risk.formula}; direct=${result.risk.counters.direct_dependents}, transitive=${result.risk.counters.transitive_dependents})`);
 }
 
 function printOutline(result: CodeOutlineResult, options: CodeMapOptions): void {
