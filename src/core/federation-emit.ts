@@ -33,6 +33,7 @@ import { loadConnectionState } from './federation-state.js';
 import { epochPublicKey } from './federation-keyring.js';
 import { loadAgentSigningKey, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { loadState } from './state.js';
+import { listSequences } from './sequence.js';
 import { opaqueIdFor } from './federation-opaque-ids.js';
 import { logger } from './logger.js';
 
@@ -150,7 +151,12 @@ export function collectProjectable(cwd: string = process.cwd()): ProjectableItem
     ['decision', 'recent_decisions'],
     ['constraint', 'active_constraints'],
     ['trap', 'known_traps'],
-    ['handoff', 'handoffs'],
+    // ── DEUX NOMS DE CHAMP FAUX, DEUX FAMILLES MUETTES (corrigé 2026-08-10) ──────
+    // `handoffs` n'existe pas dans l'état : le champ s'appelle `open_handoffs`. La boucle
+    // faisait `if (!Array.isArray(rows)) continue;` — donc 438 handoffs de ce projet étaient
+    // déclarés projetables et collectés à ZÉRO, sans la moindre erreur. Un nom de champ faux
+    // ne casse rien : il rend simplement une famille entière invisible.
+    ['handoff', 'open_handoffs'],
     ['runtime_note', 'runtime_notes'],
   ];
   for (const [kind, field] of memoryFamilies) {
@@ -173,6 +179,35 @@ export function collectProjectable(cwd: string = process.cwd()): ProjectableItem
         },
       });
     }
+  }
+
+  // ── SÉQUENCES — déclarées projetables, sans AUCUN collecteur (corrigé 2026-08-10) ──
+  //
+  // `sequence` figurait dans PROJECTED_KINDS depuis l'origine, mais rien ne la ramassait :
+  // ni la boucle des plans, ni celle des familles mémoire. 64 séquences de ce projet ne
+  // sortaient donc jamais. Elles vivent dans des fichiers propres (coordination/sequences),
+  // pas dans l'état agrégé — d'où l'oubli.
+  //
+  // Le CONTENU retenu reste étroit, comme partout ailleurs : nom et description. Les
+  // `items` (les lanes, avec leurs planId locaux) NE SORTENT PAS — ils exposeraient des
+  // identifiants locaux et la structure d'exécution, que la table de classification ne
+  // range pas en clair. Le board rend une séquence et son état, pas son plan de bataille.
+  for (const sequence of listSequences(cwd)) {
+    const row = sequence as unknown as Record<string, unknown>;
+    const id = String(row['id'] ?? '');
+    if (!id) continue;
+    items.push({
+      kind: 'sequence',
+      id,
+      rev: revisionOf(row as never),
+      status: String(row['status'] ?? 'draft'),
+      occurredAt: String(row['updated_at'] ?? row['created_at'] ?? new Date(0).toISOString()),
+      content: {
+        text: row['name'] ?? '',
+        tags: Array.isArray(row['tags']) ? row['tags'] : undefined,
+        short_label: row['short_label'] ?? undefined,
+      },
+    });
   }
 
   return items;
