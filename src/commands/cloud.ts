@@ -707,6 +707,114 @@ export async function runCloudAcceptSoloRisk(options: { cwd?: string; json?: boo
   console.log(`  « ${soloConsentStatement()} »`);
 }
 
+export interface CloudGrantWebOptions {
+  cwd?: string;
+  url?: string;
+  /** Empreinte (complète ou préfixe ≥ 16 hexa) affichée par le NAVIGATEUR. */
+  fingerprint: string;
+  horizon?: 'all' | 'current';
+  epochs?: number[];
+  json?: boolean;
+  apiKey?: string;
+}
+
+/**
+ * `brainclaw cloud grant-web` — remet des clés d'epoch à une SESSION NAVIGATEUR (dec#165).
+ *
+ * ── OÙ EST LA CÉRÉMONIE ──────────────────────────────────────────────────────
+ * Le navigateur AFFICHE l'empreinte de sa clé de session ; l'humain la RECOPIE ici. L'acte
+ * de recopier EST la comparaison : une empreinte tapée qui ne correspond à aucune clé
+ * enregistrée échoue, et une clé enregistrée par un tiers a une empreinte que l'humain n'a
+ * pas sous les yeux. On réaffiche l'empreinte complète et l'étiquette avant de sceller,
+ * pour que la dernière vérification soit possible.
+ *
+ * Même protocole de remise que pln#658 — seule la CIBLE change (clé de session web au lieu
+ * d'un appareil attesté). Le cloud relaie sans lire, le navigateur vérifie tout.
+ */
+export async function runCloudGrantWeb(options: CloudGrantWebOptions): Promise<void> {
+  const cwd = options.cwd ?? resolveEffectiveCwd();
+  const state = loadConnectionState(cwd);
+  if (!state) throw new Error("Aucun appairage local : rien à remettre.");
+  const url = resolveCloudUrl(options.url, state);
+  const apiKey = resolveCloudApiKey(options.apiKey);
+
+  const wanted = options.fingerprint.trim().toLowerCase();
+  if (!/^[a-f0-9]{16,64}$/.test(wanted)) {
+    throw new Error("Empreinte invalide : recopiez au moins 16 caractères hexadécimaux depuis le navigateur.");
+  }
+
+  // Les clés de session web ACTIVES du projet — la clé publique est résolue AU CLOUD
+  // derrière l'empreinte recopiée, jamais fournie par la ligne de commande.
+  const res = await fetch(
+    `${url}/api/v1/projects/${encodeURIComponent(state.cloud_project_id)}/web-keys`,
+    { headers: apiKey ? { accept: 'application/json', authorization: `Bearer ${apiKey}` } : { accept: 'application/json' } },
+  );
+  if (!res.ok) throw new Error(`Lecture des clés de session impossible (HTTP ${res.status}).`);
+  const body = (await res.json()) as { web_keys?: Array<{ id: string; fingerprint: string; public_key_pem: string; label?: string | null; user_id: string }> };
+  const matches = (body.web_keys ?? []).filter((k) => k.fingerprint.startsWith(wanted));
+  if (matches.length === 0) {
+    throw new Error(
+      "Aucune clé de session active ne porte cette empreinte. Vérifiez que le navigateur a bien " +
+      "enregistré sa clé (bouton « Déverrouiller le contenu ») et recopiez l'empreinte affichée.",
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error('Empreinte ambiguë : plusieurs clés correspondent — recopiez-la en entier.');
+  }
+  const webKey = matches[0]!;
+
+  const { grantEpochsToDevice } = await import('../core/federation-grant-transport.js');
+  const { heldEpochs } = await import('../core/federation-keyring.js');
+
+  const held = heldEpochs(state.cloud_project_id);
+  if (held.length === 0) {
+    throw new Error("Cet appareil ne détient aucune clé d'epoch : seul un détenteur actif est custodian (dec#163 §2).");
+  }
+  const epochs = options.epochs?.length
+    ? options.epochs
+    : options.horizon === 'all' ? held : [held[held.length - 1]!];
+
+  // Le SIGNATAIRE est l'agent APPAIRÉ — pas celui du registre local du workspace, qui n'a
+  // aucun rapport avec l'identité que le cloud a attestée (même correction que l'émission).
+  const custodianAgentId = state.pairings?.find((p) => p.stage === 'active')?.agent_id;
+  if (!custodianAgentId) {
+    throw new Error('Aucun agent appairé actif : le custodian signe son manifeste, sans quoi le navigateur le refusera.');
+  }
+
+  const outcome = await grantEpochsToDevice({
+    cwd, url, apiKey,
+    target: {
+      deviceId: `web:${webKey.id}`,
+      x25519PublicKeyPem: webKey.public_key_pem,
+      x25519Fingerprint: webKey.fingerprint,
+      active: true, attested: true, canRead: true,
+      authorizedEpochs: epochs,
+    },
+    epochs,
+    custodianAgentId,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify({ ...outcome, target_fingerprint: webKey.fingerprint }, null, 2));
+    return;
+  }
+  console.log('Remise de clés vers une session navigateur');
+  console.log(`  empreinte cible  : ${webKey.fingerprint}`);
+  if (webKey.label) console.log(`  étiquette        : ${webKey.label}`);
+  console.log('');
+  console.log('  ⚠ VÉRIFIEZ que cette empreinte est EXACTEMENT celle affichée dans le navigateur.');
+  console.log('    Si elle diffère, révoquez la clé depuis la page du projet : quelqu\'un s\'est interposé.');
+  console.log('');
+  console.log(`  remis            : ${outcome.granted.length ? outcome.granted.join(', ') : 'aucun'}`);
+  if (outcome.skipped.length) {
+    console.log(`  IGNORÉS          : ${outcome.skipped.length}`);
+    for (const s of outcome.skipped) console.log(`    epoch ${s.epoch} — ${s.reason}`);
+  }
+  console.log('');
+  console.log('  Le navigateur peut maintenant cliquer « Déverrouiller » à nouveau : il vérifiera');
+  console.log('  la signature du custodian et déchiffrera localement. Le serveur, lui, ne peut toujours rien lire.');
+}
+
 /** Résout la cible depuis le roster attesté du cloud — jamais depuis une saisie humaine. */
 async function resolveGrantTarget(url: string, cloudProjectId: string, deviceId: string): Promise<{
   deviceId: string; x25519PublicKeyPem: string; x25519Fingerprint: string;

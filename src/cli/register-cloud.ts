@@ -7,6 +7,7 @@ import {
   runCloudPull,
   runCloudPush,
   runCloudGrant,
+  runCloudGrantWeb,
   runCloudRotate,
   runCloudAcceptSoloRisk,
 } from '../commands/cloud.js';
@@ -89,6 +90,31 @@ export function registerCloudCommands(program: Command): void {
           url: options.url,
           horizon: options.horizon,
           epochs: options.epoch?.length ? options.epoch : undefined,
+          json: options.json,
+        });
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    });
+  cloud
+    .command('grant-web <fingerprint>')
+    .description("Remet des clés d'epoch à une session NAVIGATEUR — recopiez l'empreinte affichée par le navigateur")
+    .option('--url <url>', `Adresse du déploiement cloud (ex. ${DEFAULT_URL_HINT})`)
+    .option('--horizon <all|current>', "Étendue remise : 'all' ou 'current'", 'current')
+    .option('--epoch <n...>', 'Epochs précis à remettre (outrepasse --horizon)', (v: string, acc: number[]) => {
+      acc.push(Number.parseInt(v, 10));
+      return acc;
+    }, [] as number[])
+    .option('--api-key <key>', "Clé porteuse exigée par l'ingestion (ou BRAINCLAW_CLOUD_API_KEY)")
+    .option('--json', 'Sortie JSON')
+    .action(async (fingerprint: string, options: { url?: string; horizon?: 'all' | 'current'; epoch?: number[]; apiKey?: string; json?: boolean }) => {
+      try {
+        await runCloudGrantWeb({
+          fingerprint,
+          url: options.url,
+          horizon: options.horizon,
+          epochs: options.epoch?.length ? options.epoch : undefined,
+          apiKey: options.apiKey,
           json: options.json,
         });
       } catch (err) {
