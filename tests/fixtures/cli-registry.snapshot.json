@@ -1203,8 +1203,83 @@
   },
   {
     "aliases": [],
+    "arguments": [
+      {
+        "name": "fingerprint",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--api-key <key>",
+        "long": "--api-key",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": [],
+        "flags": "--epoch <n...>",
+        "long": "--epoch",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "defaultValue": "current",
+        "flags": "--horizon <all|current>",
+        "long": "--horizon",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--url <url>",
+        "long": "--url",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cloud grant-web"
+  },
+  {
+    "aliases": [],
     "arguments": [],
     "options": [
+      {
+        "flags": "--api-key <key>",
+        "long": "--api-key",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
       {
         "flags": "--json",
         "long": "--json",
@@ -1242,6 +1317,16 @@
     "aliases": [],
     "arguments": [],
     "options": [
+      {
+        "flags": "--api-key <key>",
+        "long": "--api-key",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
       {
         "flags": "--dry-run",
         "long": "--dry-run",
