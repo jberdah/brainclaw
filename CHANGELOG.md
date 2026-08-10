@@ -5,6 +5,30 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] — 2026-08-10
+
+The federation release: **the cloud stops being write-only.** 1.23.0 could seal envelopes; nothing could come back, keys could not be handed to a second reader, and a browser could only stare at opaque handles. This release closes the loop end to end — every leg proven against the deployed service, never against a mock (dec#160 discipline, applied five times).
+
+### Added
+
+- **Pull v2 — federation becomes bidirectional** (pln#656; #229, dec#162). `brainclaw cloud pull` fetches the delta, verifies every envelope (author signature against the attested roster, AAD, epoch decryption), and materializes accepted plaintext through the canonical mutations — never by writing entity JSON directly. Envelopes for an epoch you do not hold are **kept, not dropped**, and re-read after a key arrives. The inter-service gap that made this impossible — the cloud stored a *transport* signature and a flat row, while the verifier needs the *author* signature over the nested envelope — is closed by carrying the signed envelope **verbatim** (`envelope_json`), additively: nothing new reaches the relay that the push did not already send in clear.
+- **Attested epoch-key handover** (pln#658; #230, dec#159/dec#163). A custodian seals the epoch private key in HPKE to the *target device's* attested X25519 key, signs a manifest binding project/epoch/target/grant-id, and the recipient verifies signer, AAD and the re-derived public key against the signed announcement **before** `storeEpochPrivateKey`. Reception is wired into `cloud pull` *before* key selection, so a key received now unlocks the previously-unreadable envelopes in the same run. `cloud grant <agentId> [--horizon all|current]` — horizon is an explicit choice (dec#163 §1), the target is resolved from the attested roster, and a non-held epoch is reported, never silently skipped. Proven live with two distinct on-disk keyrings: B held nothing, the grant transited the real cloud, B read what A sealed.
+- **Epoch rotation with an enforced recovery quorum** (pln#658; #231, dec#163 §3–4). `cloud rotate` creates epoch N+1 and cuts writes over to it; the past **stays readable**. `recoveryReadiness` was reported and never blocking — it now gates rotation, the moment where losing a machine stops being theoretical. Solo operation is allowed with an explicit, **persisted** consent (`cloud accept-solo-risk`); re-accepting never rewrites the original date. What rotation cannot do is stated at the moment you turn the key: a revoked device keeps reading what was sealed *before* the cutover — no cryptography can do otherwise, and pretending would be lying.
+- **Browser-session key handover** (pln#668; #233, dec#165). `cloud grant-web <fingerprint>` seals epoch keys to a web session's X25519 key — same protocol, different target. The human copies the fingerprint shown by the browser; the act of copying *is* the fingerprint comparison, and the CLI re-displays it before sealing. The signer is the **paired** agent, not the local registry identity. The relay still never sees a key or a byte of plaintext.
+- **`--api-key` / `BRAINCLAW_CLOUD_API_KEY` on push and pull** — named in code as the transitional crutch it is: the device already holds a stronger credential (its attested signature) than a bearer token, and the real fix is ingestion accepting it (dec#8 tension, measured when 1,999 sealed envelopes were all refused with 401).
+
+### Fixed
+
+- **Pairing now completes on its own** (#232-adjacent, shipped with grant-web). `cloud connect` polled a user-authenticated route to learn it had been approved — but an agent mid-pairing has neither JWT nor API key, so the ceremony died on "Missing API key" one step from the end, *after* a successful proof of possession. A minimal public `GET /enrollments/:id/status` (lifecycle state and role only — no fingerprints, no keys, no project id; the 24-hex id is the capability) lets the agent follow its own ceremony to completion.
+- **Emission signs with the paired agent** — `resolveCurrentAgentIdentity` returns the workspace-registry agent, which has no relation to the identity the cloud attested. Emitting under it failed outright ("signing identity not found"), and had a key existed, would have produced envelopes the cloud rejects as unattested.
+- **Two projectable families never left the machine** (#232). `handoff` read `state.handoffs` while the field is `open_handoffs` — the loop's `continue` on a missing field made 438 handoffs silently invisible; `sequence` was declared in `PROJECTED_KINDS` with **no collector at all** (64 sequences). Measured on a real store: 1,501 → 2,003 collected. Four objects are refused by the egress filters because their *text* contains real local paths — correct behaviour, stated per object.
+- **`gh pr merge --auto` drains serially** and the CLI registry freeze caught every new cloud subcommand (`pull`, `grant`, `rotate`, `accept-solo-risk`, `grant-web`) — the snapshot now carries 146 commands.
+
+### Changed
+
+- **Multi-agent pairing state v3** (pln#653; #227): one device, a list of agent pairings — a second `connect` on the same machine grafts instead of overwriting. Tolerant v2 read; `cloud status` lists every paired agent.
+- **Activation-URL onboarding** (pln#655; #228): `cloud connect https://…/a#<code> --agent <id>` — the invite code travels in the URL *fragment* (never in server logs), agent ids are validated before any network call, and `cloud push`/`pull` remember the cloud origin from pairing.
+
 ## [1.23.0] — 2026-08-09
 
 A maintenance release with one theme: **the MCP tool catalog stops being hand-written prose and becomes derived from zod** — and the guards meant to prove such a migration is transparent turn out not to have been able to. No breaking changes; the public surface fingerprint does not move.
