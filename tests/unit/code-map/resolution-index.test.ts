@@ -61,6 +61,12 @@ describe('code-map P1d buildResolutionIndex', () => {
     const bySym = idx.dependents_by_symbol['sym:foo'];
     assert.ok(bySym, 'sym:foo has dependents');
     assert.equal(bySym![0]!.path, 'a.ts');
+    assert.deepEqual(byFile![0]!.reasons, [{
+      kind: 'resolves_to', module: './b', imported: ['foo'], confidence: 1, source_line: 1,
+    }]);
+    assert.deepEqual(bySym![0]!.reasons, [{
+      kind: 'imports_symbol', module: './b', imported: ['foo'], confidence: 1, source_line: 1,
+    }]);
   });
 
   it('skips a resolves_to whose target node id is not an indexed file', () => {

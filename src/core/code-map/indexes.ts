@@ -155,6 +155,8 @@ export function buildResolutionIndex(projectId: string, shards: FileShard[]): Re
     module: string | undefined,
     imported: readonly string[],
     confidence: number | undefined,
+    kind: 'resolves_to' | 'imports_symbol',
+    sourceLine: number | null | undefined,
   ): void => {
     const perImporter = bucket.get(targetKey) ?? new Map<string, DependencyIndexEntry>();
     const prev = perImporter.get(importerPath);
@@ -165,6 +167,7 @@ export function buildResolutionIndex(projectId: string, shards: FileShard[]): Re
         module,
         imported: [...new Set(imported)].sort(),
         confidence,
+        reasons: [],
       });
     } else {
       // Merge a second edge from the same importer to the same target.
@@ -175,6 +178,33 @@ export function buildResolutionIndex(projectId: string, shards: FileShard[]): Re
       if (typeof confidence === 'number') {
         prev.confidence = typeof prev.confidence === 'number' ? Math.max(prev.confidence, confidence) : confidence;
       }
+    }
+    const current = perImporter.get(importerPath)!;
+    const reason = {
+      kind,
+      ...(module ? { module } : {}),
+      imported: [...new Set(imported)].sort(),
+      ...(typeof confidence === 'number' ? { confidence } : {}),
+      ...(sourceLine !== undefined ? { source_line: sourceLine } : {}),
+    };
+    // Multiple module nodes can resolve to one target from one importer. Keep
+    // every concrete cause, deduping an identical extractor edge defensively.
+    if (!current.reasons.some((existing) =>
+      existing.kind === reason.kind
+      && existing.module === reason.module
+      && existing.confidence === reason.confidence
+      && existing.source_line === reason.source_line
+      && existing.imported.length === reason.imported.length
+      && existing.imported.every((name, index) => name === reason.imported[index]),
+    )) {
+      current.reasons.push(reason);
+      current.reasons.sort((a, b) =>
+        a.kind.localeCompare(b.kind)
+        || (a.module ?? '').localeCompare(b.module ?? '')
+        || (a.source_line ?? -1) - (b.source_line ?? -1)
+        || a.imported.join('\0').localeCompare(b.imported.join('\0'))
+        || (a.confidence ?? -1) - (b.confidence ?? -1),
+      );
     }
     bucket.set(targetKey, perImporter);
   };
@@ -192,9 +222,15 @@ export function buildResolutionIndex(projectId: string, shards: FileShard[]): Re
       if (e.kind === 'resolves_to') {
         const targetPath = fileNodeIdToPath.get(e.to);
         if (!targetPath) continue; // target id not an indexed file (defensive)
-        addDependent(byFile, targetPath, shard.path, shard.file_id, mod?.name, mod?.imported ?? [], e.confidence);
+        addDependent(
+          byFile, targetPath, shard.path, shard.file_id, mod?.name, mod?.imported ?? [], e.confidence,
+          'resolves_to', e.source?.line,
+        );
       } else {
-        addDependent(bySymbol, e.to, shard.path, shard.file_id, mod?.name, mod?.imported ?? [], e.confidence);
+        addDependent(
+          bySymbol, e.to, shard.path, shard.file_id, mod?.name, mod?.imported ?? [], e.confidence,
+          'imports_symbol', e.source?.line,
+        );
       }
     }
   }
