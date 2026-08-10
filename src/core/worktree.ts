@@ -7,6 +7,7 @@ import yaml from 'yaml';
 import { logger } from './logger.js';
 import { loadConfig } from './config.js';
 import { parsePorcelainZ, isSystemDirtyPath } from './dirty-scope.js';
+import { entityRecordDirs } from './io.js';
 
 /** Normalizes a path for use in git CLI arguments (forward slashes on Windows). */
 function gitPath(p: string): string {
@@ -1720,6 +1721,56 @@ export function isGitRepo(cwd: string): boolean {
   return runGit(['rev-parse', '--is-inside-work-tree'], cwd).ok;
 }
 
+/** Comparison key for worktree paths: absolute, forward slashes, case-folded on win32. */
+function worktreePathKey(p: string): string {
+  const resolved = path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Worktree paths referenced by an ACTIVE, non-expired claim — the set the GC
+ * must never touch.
+ *
+ * Read directly from the claims record dirs (both layouts, pln#649) instead of
+ * claims.ts: claims.ts imports worktree.ts, so the dependency can only point
+ * this way. The parse is deliberately lenient — an unreadable claim simply does
+ * not protect anything; it never blocks the GC of OTHER worktrees.
+ *
+ * Scope note: dispatch claims are project-local, so the project store is the
+ * right authority here; workspace-level claims (cross-project) never carry a
+ * lane worktree_path.
+ */
+function activeClaimWorktreePaths(cwd: string): Set<string> {
+  const out = new Set<string>();
+  const now = new Date();
+  for (const dir of entityRecordDirs('claims', cwd)) {
+    let files: string[];
+    try {
+      files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      try {
+        const claim = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')) as {
+          status?: string;
+          worktree_path?: string;
+          expires_at?: string;
+        };
+        if (claim.status !== 'active') continue;
+        if (typeof claim.worktree_path !== 'string' || !claim.worktree_path) continue;
+        // Mirror isClaimExpired: a zombie claim past its expiry must not make a
+        // worktree un-GC-able forever.
+        if (claim.expires_at && new Date(claim.expires_at) < now) continue;
+        out.add(worktreePathKey(claim.worktree_path));
+      } catch {
+        /* lenient by design — see above */
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Removes worktrees whose branch has been fully merged into the current branch
  * (typically master/main after a merge). Also removes brainclaw-managed
@@ -1733,6 +1784,16 @@ export function isGitRepo(cwd: string): boolean {
  *   - content (`git cherry HEAD <branch>`, patch-id): catches squash merges,
  *     which is GitHub's default merge strategy on this repo and previously left
  *     every squashed lane un-GC-able forever.
+ *
+ * ACTIVE-CLAIM GATE (incident 2026-08-10): a freshly-dispatched lane worktree
+ * has no commits of its own — its branch IS an ancestor of HEAD, so both merged
+ * probes say "merged" — and before the agent's first write it has no uncommitted
+ * changes either. Both historical gates therefore pass during a lane's startup
+ * window, and the post-merge hook destroyed a live codex lane 7 minutes after
+ * spawn (worktree emptied under the running agent). The coordination store is
+ * the authority on liveness: a worktree referenced by an active claim is
+ * untouchable — merged or not, clean or not, force or not. The escape hatch is
+ * releasing the claim, never bypassing it.
  */
 export function cleanMergedWorktrees(
   mainWorktreePath: string,
@@ -1761,9 +1822,17 @@ export function cleanMergedWorktrees(
   );
 
   const worktrees = listWorktrees(mainWorktreePath);
+  const protectedPaths = activeClaimWorktreePaths(mainWorktreePath);
 
   for (const wt of worktrees) {
     if (wt.is_main) continue;
+
+    // Active-claim gate — see the function doc. Checked BEFORE the merged
+    // probes and BEFORE `force`: a live dispatched lane is never GC-able.
+    if (protectedPaths.has(worktreePathKey(wt.path))) {
+      result.skipped.push({ path: wt.path, reason: 'active claim' });
+      continue;
+    }
 
     // trp#926 — a lane's branch is "merged" if EITHER git says its commits are
     // ancestors of HEAD (fast-forward / merge-commit) OR every commit's patch
@@ -1806,7 +1875,7 @@ export function cleanMergedWorktrees(
   }
 
   // Clean orphan brainclaw worktree directories (no matching git worktree)
-  cleanOrphanWorktreeDirs(mainWorktreePath, worktrees, result, options.dryRun);
+  cleanOrphanWorktreeDirs(mainWorktreePath, worktrees, result, options.dryRun, protectedPaths);
 
   return result;
 }
@@ -1932,6 +2001,7 @@ function cleanOrphanWorktreeDirs(
   activeWorktrees: WorktreeInfo[],
   result: CleanResult,
   dryRun?: boolean,
+  protectedPaths: Set<string> = new Set(),
 ): void {
   const base = worktreesBaseDir(mainWorktreePath);
   if (!fs.existsSync(base)) return;
@@ -1949,6 +2019,14 @@ function cleanOrphanWorktreeDirs(
     if (!entry.isDirectory()) continue;
     const dirPath = path.resolve(path.join(base, entry.name));
     if (activePaths.has(dirPath)) continue;
+
+    // Active-claim gate: a dir whose git admin entry vanished can still host a
+    // LIVE agent (the 2026-08-10 incident left exactly this state behind). If a
+    // claim still points here, it is not debris.
+    if (protectedPaths.has(worktreePathKey(dirPath))) {
+      result.skipped.push({ path: dirPath, reason: 'active claim' });
+      continue;
+    }
 
     // This directory is not referenced by any git worktree — it's orphaned
     if (dryRun) {
