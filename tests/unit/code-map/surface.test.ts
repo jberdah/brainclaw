@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isolateAgentEnv } from '../../helpers/workspace.js';
 import { refresh } from '../../../src/core/code-map/refresh.js';
+import { JsonlBackend, OUTLINE_SYMBOL_CAP } from '../../../src/core/code-map/backend.js';
 import { runCodeMap } from '../../../src/commands/code-map.js';
 import { executeMcpToolCall } from '../../../src/commands/mcp.js';
 import { codeMapWorkSection, codeMapRefreshNextActions, WORK_SECTION_MAX_WAIT_MS } from '../../../src/core/code-map/work-section.js';
@@ -155,8 +156,83 @@ describe('runCodeMap CLI surface', () => {
     assert.ok(parsed.suggested_files_to_read.length <= 12);
     assert.equal(parsed.suggested_files_to_read[0].path, 'src/app/App.tsx');
   });
+  it('outline returns the indexed file structure with a freshness badge', async () => {
+    const root = tmpProject();
+    fixture(root);
+    await refreshAll(root);
+
+    const jsonOut = await captureCli(() => runCodeMap('outline', ['src/app/App.tsx'], { cwd: root, json: true }));
+    const parsed = JSON.parse(jsonOut);
+    assert.equal(parsed.path, 'src/app/App.tsx');
+    assert.equal(parsed.index_status, 'indexed');
+    assert.equal(parsed.file_indexed, true);
+    assert.equal(parsed.freshness_badge.status, 'fresh');
+    assert.ok(parsed.symbols.some((symbol: { name: string }) => symbol.name === 'App'));
+  });
 });
 
+
+describe('JsonlBackend outline contract', () => {
+  it('reads only the indexed shard in source order and separates index states', async () => {
+    const root = tmpProject();
+    writeSrc(root, 'src/outline.ts', [
+      'export function first() { return 1; }',
+      'export class Second {}',
+      'export const third = () => 3;',
+    ].join('\n'));
+    writeSrc(root, 'src/empty.ts', '// intentionally no symbols\n');
+    await refreshAll(root);
+
+    const backend = new JsonlBackend();
+    const outline = await backend.outline({ path: 'src/outline.ts', cwd: root });
+    assert.equal(outline.index_status, 'indexed');
+    assert.equal(outline.file_indexed, true);
+    assert.equal(outline.parse_status, 'parsed');
+    assert.ok(outline.symbol_count >= 3);
+    assert.ok(outline.symbols.every((symbol) => symbol.kind === 'symbol' && symbol.span !== null));
+    assert.ok(outline.symbols.every((symbol, index) => index === 0 || (
+      symbol.span!.start_line > outline.symbols[index - 1]!.span!.start_line
+      || (symbol.span!.start_line === outline.symbols[index - 1]!.span!.start_line
+        && symbol.span!.start_col >= outline.symbols[index - 1]!.span!.start_col)
+    )));
+    assert.ok(outline.symbols.some((symbol) => symbol.name === 'first' && symbol.exported && symbol.confidence === 1));
+    assert.equal(Array.isArray(outline.diagnostics), true);
+
+    const noSymbols = await backend.outline({ path: 'src/empty.ts', cwd: root });
+    assert.equal(noSymbols.index_status, 'indexed');
+    assert.equal(noSymbols.file_indexed, true);
+    assert.equal(noSymbols.symbol_count, 0);
+
+    const notIndexed = await backend.outline({ path: 'src/not-indexed.ts', cwd: root });
+    assert.equal(notIndexed.index_status, 'file_not_indexed');
+    assert.equal(notIndexed.file_indexed, false);
+
+    const noStore = await backend.outline({ path: 'src/outline.ts', cwd: tmpProject() });
+    assert.equal(noStore.index_status, 'missing_index');
+    assert.equal(noStore.file_indexed, false);
+    assert.equal(noStore.freshness_badge.status, 'missing_index');
+  });
+
+  it('enforces caller and hard response caps without reparsing', async () => {
+    const root = tmpProject();
+    writeSrc(
+      root,
+      'src/large.ts',
+      Array.from({ length: OUTLINE_SYMBOL_CAP + 1 }, (_, index) => `export function symbol${index}() { return ${index}; }`).join('\n'),
+    );
+    await refreshAll(root);
+
+    const backend = new JsonlBackend();
+    const hardCapped = await backend.outline({ path: 'src/large.ts', cwd: root, limit: OUTLINE_SYMBOL_CAP + 50 });
+    assert.equal(hardCapped.symbol_count, OUTLINE_SYMBOL_CAP + 1);
+    assert.equal(hardCapped.symbols.length, OUTLINE_SYMBOL_CAP);
+    assert.equal(hardCapped.truncated, true);
+
+    const callerCapped = await backend.outline({ path: 'src/large.ts', cwd: root, limit: 1 });
+    assert.equal(callerCapped.symbols.length, 1);
+    assert.equal(callerCapped.truncated, true);
+  });
+});
 // ───────────────────────── MCP tool handlers ─────────────────────────
 
 describe('MCP code-map tool handlers', () => {
@@ -188,6 +264,21 @@ describe('MCP code-map tool handlers', () => {
     const root = tmpProject();
     const out = await executeMcpToolCall({ name: 'bclaw_code_find', args: { query: '' }, cwd: root });
     assert.equal(out.response.isError, true);
+  });
+  it('bclaw_code_outline returns an indexed source outline and validates path', async () => {
+    const root = tmpProject();
+    fixture(root);
+    await refreshAll(root);
+
+    const out = await executeMcpToolCall({ name: 'bclaw_code_outline', args: { path: 'src/app/App.tsx' }, cwd: root });
+    assert.equal(out.response.isError, false);
+    const sc = out.response.structuredContent as Record<string, unknown>;
+    assert.equal(sc.index_status, 'indexed');
+    assert.equal((sc.freshness_badge as { status: string }).status, 'fresh');
+    assert.ok((sc.symbols as Array<{ name: string }>).some((symbol) => symbol.name === 'App'));
+
+    const invalid = await executeMcpToolCall({ name: 'bclaw_code_outline', args: { path: '' }, cwd: root });
+    assert.equal(invalid.response.isError, true);
   });
 
   it('bclaw_code_brief returns suggested_files_to_read + freshness_badge', async () => {

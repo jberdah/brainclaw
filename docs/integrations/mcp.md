@@ -47,7 +47,7 @@ Every tool has one of three tiers in its `annotations.tier` field:
 - **standard** — Day-to-day coordination tools: plans, claims, messaging, sequences, dispatch, review, memory. Returned by default alongside facades.
 - **advanced** — Specialized governance, audit, registry, and power tools.
 
-By default, `tools/list` returns **facade + standard** tools (46 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
+By default, `tools/list` returns **facade + standard** tools (47 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
 
 Published tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 
@@ -111,6 +111,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_code_status` | discovery | Code Map freshness badge + index stats (store presence, files/nodes/edges) |
 | `bclaw_code_find` | discovery | Search the Code Map symbol index by name (function/class/component/hook/type) |
 | `bclaw_code_brief` | discovery | Ranked reading list + related decisions/traps before editing a symbol or path |
+| `bclaw_code_outline` | discovery | Source-ordered symbols of one indexed file (span, exported, confidence) — no reparse |
 | `bclaw_code_refresh` | discovery | Rebuild the Code Map index (`scope: changed \| all`) |
 
 See [code map](../code-map.md) for the full Code Map reference (CLI, freshness model, supported languages).

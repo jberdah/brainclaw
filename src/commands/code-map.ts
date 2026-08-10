@@ -1,12 +1,12 @@
 /**
  * `brainclaw code-map <subcommand>` — CLI surface over the Code Map backend
  * (spec §9). Mirrors plan-resource.ts: a switch over the subcommand delegating
- * to a JsonlBackend (status | refresh | find | brief). The backend owns all
+ * to a JsonlBackend (status | refresh | find | brief | outline). The backend owns
  * query logic; this file only adapts it to argv + stdout (text or --json), and
  * every output carries the freshness_badge.
  */
 import { JsonlBackend } from '../core/code-map/backend.js';
-import type { CodeBrief, CodeFindResult, CodeRefreshResult, CodeStatus } from '../core/code-map/backend.js';
+import type { CodeBrief, CodeFindResult, CodeOutlineResult, CodeRefreshResult, CodeStatus } from '../core/code-map/backend.js';
 import type { FreshnessBadge } from '../core/code-map/types.js';
 
 interface CodeMapOptions {
@@ -19,7 +19,7 @@ interface CodeMapOptions {
   cascade?: boolean;
 }
 
-const KNOWN_SUBCOMMANDS = new Set(['status', 'refresh', 'find', 'brief']);
+const KNOWN_SUBCOMMANDS = new Set(['status', 'refresh', 'find', 'brief', 'outline']);
 
 function backend(): JsonlBackend {
   return new JsonlBackend();
@@ -84,6 +84,17 @@ export async function runCodeMap(
     return;
   }
 
+  if (normalized === 'outline') {
+    const target = args.join(' ').trim();
+    if (!target) {
+      console.error('Error: code-map outline requires <file>.');
+      console.error('  Usage: brainclaw code-map outline <file>');
+      process.exit(1);
+    }
+    const result = await be.outline({ path: target, limit: options.limit, cwd });
+    printOutline(result, options);
+    return;
+  }
   console.error(`Error: unknown code-map subcommand "${subcommand}".`);
   console.error(`  Available: ${[...KNOWN_SUBCOMMANDS].join(', ')}`);
   process.exit(1);
@@ -170,5 +181,34 @@ function printBrief(result: CodeBrief, options: CodeMapOptions): void {
     for (const mem of result.related_memory) {
       console.log(`    ${mem.id} (${mem.kind}): ${mem.text.slice(0, 80)}`);
     }
+  }
+}
+
+function printOutline(result: CodeOutlineResult, options: CodeMapOptions): void {
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`Code Map outline: "${result.path}"`);
+  console.log(`  Index:    ${result.index_status}`);
+  console.log(`  ${badgeLine(result.freshness_badge)}`);
+  if (!result.file_indexed) {
+    console.log('  Symbols:  (file not indexed)');
+    return;
+  }
+  console.log(`  Parse:    ${result.parse_status}`);
+  if (result.symbols.length === 0) {
+    console.log('  Symbols:  (none)');
+  } else {
+    for (const symbol of result.symbols) {
+      const subtype = symbol.subtype ? ` ${symbol.subtype}` : '';
+      const span = symbol.span ? `${symbol.span.start_line}:${symbol.span.start_col}` : 'unknown';
+      const exported = symbol.exported ? ' export' : '';
+      console.log(`  [${span}] ${symbol.kind}${subtype} ${symbol.name}${exported} confidence=${symbol.confidence}`);
+    }
+  }
+  if (result.truncated) console.log(`  … ${result.symbol_count - result.symbols.length} more indexed symbol(s)`);
+  if (result.diagnostics.length > 0) {
+    console.log(`  Diagnostics: ${result.diagnostics.length}${result.diagnostics_truncated ? '+' : ''}`);
   }
 }
