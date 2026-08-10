@@ -369,6 +369,60 @@ export function scoreEntry(entry: SymbolIndexEntry, query: string): number {
   return score;
 }
 
+/**
+ * Number of distinct indexed files that import a symbol (or its defining file).
+ *
+ * This is deliberately a tie-breaker, not a broad popularity boost: a precise
+ * textual match must always beat a merely popular substring match. The symbol
+ * and file reverse indexes can name the same importer, so count their UNION to
+ * avoid giving named imports a double bonus over namespace/default imports.
+ */
+export function importCentrality(entry: SymbolIndexEntry, resolutionIndex: ResolutionIndex | null): number {
+  if (!resolutionIndex) return 0;
+  const importers = new Set<string>();
+  for (const dep of resolutionIndex.dependents_by_symbol[entry.node_id] ?? []) importers.add(dep.path);
+  for (const dep of resolutionIndex.dependents_by_file[entry.path] ?? []) importers.add(dep.path);
+  return importers.size;
+}
+
+/** A test-only helper is a weak orientation point when a file has real exports too. */
+function isTestHelperSymbol(name: string): boolean {
+  const normalized = normIdent(name);
+  return (
+    name.startsWith('_') ||
+    /(?:^|_)(?:test|tests|mock|stub|fixture|reset)(?:_|$)/i.test(name) ||
+    normalized.includes('fortest') ||
+    normalized.includes('fortests')
+  );
+}
+
+/**
+ * Pick one meaningful definition per file for the reading-list explanation.
+ * A path brief resolves all symbols in that file; repeatedly adding +12 for
+ * each one made the result's reason depend on index order, which could select
+ * an internal `__reset…ForTests` helper ahead of the public entry point.
+ */
+function representativeDefinitions(defining: SymbolIndexEntry[]): SymbolIndexEntry[] {
+  const byPath = new Map<string, SymbolIndexEntry>();
+  const relevance = (entry: SymbolIndexEntry): number => {
+    let score = entry.score_hint * 100; // public definitions before internals
+    if (entry.subtype === 'component' || entry.subtype === 'hook') score += 2;
+    if (isTestHelperSymbol(entry.name)) score -= 50;
+    return score;
+  };
+  for (const entry of defining) {
+    const previous = byPath.get(entry.path);
+    if (
+      !previous ||
+      relevance(entry) > relevance(previous) ||
+      (relevance(entry) === relevance(previous) && entry.name.localeCompare(previous.name) < 0)
+    ) {
+      byPath.set(entry.path, entry);
+    }
+  }
+  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
 function resolveRoot(ctx: QueryContext): string {
   if (ctx.projectRoot) return ctx.projectRoot;
   const manifest = readManifest(ctx.cwd, ctx.preferredDirName);
@@ -438,25 +492,33 @@ export function findInStore(
   const maxBytes = maxParseBytes(ctx);
 
   const candidates = gatherSymbolEntries(index, query);
-  const ranked: FindMatch[] = [];
+  const resolutionIndex = readResolutionIndex(ctx.cwd, ctx.preferredDirName);
+  const ranked: Array<{ match: FindMatch; centrality: number }> = [];
   for (const entry of candidates) {
     // §6.1 — lazy validate before serving as confident.
     const confident = validateEntry(entry, checker, acc, root, maxBytes, ctx.cwd, ctx.preferredDirName);
     if (!confident) continue;
     ranked.push({
-      node_id: entry.node_id,
-      name: entry.name,
-      path: entry.path,
-      file_id: entry.file_id,
-      kind: entry.kind,
-      subtype: entry.subtype ?? null,
-      score: scoreEntry(entry, query),
+      match: {
+        node_id: entry.node_id,
+        name: entry.name,
+        path: entry.path,
+        file_id: entry.file_id,
+        kind: entry.kind,
+        subtype: entry.subtype ?? null,
+        score: scoreEntry(entry, query),
+      },
+      centrality: importCentrality(entry, resolutionIndex),
     });
   }
   ranked.sort(
-    (a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.name.localeCompare(b.name),
+    (a, b) =>
+      b.match.score - a.match.score ||
+      b.centrality - a.centrality ||
+      a.match.path.localeCompare(b.match.path) ||
+      a.match.name.localeCompare(b.match.name),
   );
-  return { matches: ranked, base, hasIndex: true, emptyCandidates: candidates.length === 0, acc };
+  return { matches: ranked.map(({ match }) => match), base, hasIndex: true, emptyCandidates: candidates.length === 0, acc };
 }
 
 export function find(query: string, limit: number | undefined, ctx: QueryContext): FindOutput {
@@ -631,7 +693,7 @@ function rankFiles(
 
   // 1. defining files — strongest, non-graph.
   const definingDirs = new Set<string>();
-  for (const entry of defining) {
+  for (const entry of representativeDefinitions(defining)) {
     const subtypeNote = entry.subtype ? ` (${entry.subtype})` : '';
     bump(entry.path, entry.file_id, `defines matching symbol ${entry.name}${subtypeNote}`, 12, false);
     definingDirs.add(path.posix.dirname(entry.path.replace(/\\/g, '/')));
@@ -807,13 +869,17 @@ function looksLikePathTarget(target: string): boolean {
 /** Find files whose path matches the target directly (path-target briefs). */
 function filesMatchingPath(symbolsIndex: SymbolsIndex, target: string): SymbolIndexEntry[] {
   const norm = target.replace(/\\/g, '/');
-  const seenPaths = new Set<string>();
+  // Keep every symbol in the matching file. `rankFiles()` selects the one
+  // meaningful representative for the reason; deduping by path here used to
+  // retain whichever token bucket happened to be visited first (often an
+  // internal `__reset…ForTests` helper) and discarded the public entry point.
+  const seenNodeIds = new Set<string>();
   const out: SymbolIndexEntry[] = [];
   for (const bucket of Object.values(symbolsIndex.entries)) {
     for (const entry of bucket) {
       const p = entry.path.replace(/\\/g, '/');
-      if ((p === norm || p.endsWith(`/${norm}`) || p.includes(norm)) && !seenPaths.has(entry.path)) {
-        seenPaths.add(entry.path);
+      if ((p === norm || p.endsWith(`/${norm}`) || p.includes(norm)) && !seenNodeIds.has(entry.node_id)) {
+        seenNodeIds.add(entry.node_id);
         out.push(entry);
       }
     }
