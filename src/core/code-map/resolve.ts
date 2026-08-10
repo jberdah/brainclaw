@@ -71,6 +71,8 @@ export interface ResolveProjectImportsInput {
   registry: CodeLanguageRegistry;
   /** All current shards (post extraction + compaction + freshness reclass). */
   shards: FileShard[];
+  /** Project-local resolver configuration snapshot, prepared by refresh. */
+  resolverConfig?: unknown;
   cwd?: string;
   preferredDirName?: string;
   /** Test seam: shard persister (defaults to the real {@link writeShard}). */
@@ -105,6 +107,7 @@ export async function resolveProjectImports(
   const ctx: ResolveImportContext = {
     fileExists: (rel) => fileLang.has(toPosix(rel)),
     langOfFile: (rel) => fileLang.get(toPosix(rel)),
+    resolverConfig: input.resolverConfig,
   };
 
   // Target-file lookups for B: path -> shard, and a memoized importable index

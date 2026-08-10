@@ -8,7 +8,7 @@
  *    extractor_config + the active language set + (P1a) the registry's
  *    `configHashInputs()` (provider versions + every query-asset hash). Changing
  *    ignore rules, size caps, supported extensions, query budget, active langs, a
- *    provider version, OR a tags/imports `.scm` => stale_extractor.
+ *    provider version, query assets, OR local resolver config => stale_extractor.
  *    NOTE: grammar/engine hashes are deliberately NOT folded in (spec §6.2):
  *    stale_grammar (changed parse binary) is kept separable from stale_extractor.
  *  - `shardFreshnessStatus` — classify a stored shard against the current
@@ -84,11 +84,13 @@ export function computeExtractorConfigHash(
   config: ExtractorConfig,
   activeLanguages: string[],
   registryInputs?: unknown,
+  resolverConfigFingerprint?: string,
 ): string {
   const payload = {
     extractor_config: config,
     active_languages: [...activeLanguages].sort(),
     registry: registryInputs ?? null,
+    resolver_config: resolverConfigFingerprint ?? null,
   };
   return `sha256:${crypto.createHash('sha256').update(stableStringify(payload)).digest('hex')}`;
 }

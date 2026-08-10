@@ -42,6 +42,10 @@ import type {
   ResolveImportContext,
 } from '../provider.js';
 import type { ProviderVocabularyDeclaration } from '../../vocabulary.js';
+import {
+  isTypeScriptResolutionConfig,
+  typeScriptSpecifierBases,
+} from './config.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -200,9 +204,7 @@ const JS_LIKE_EXTS = new Set(['.js', '.jsx', '.mjs', '.cjs']);
  * extension, then `<candidate>/index.<ext>`. Return the FIRST that is an indexed
  * file. Bare/external specifiers (`react`, `@scope/x`) → no resolution (no edge).
  */
-function resolveTsImport(spec: string, fromPath: string, ctx: ResolveImportContext): string | null {
-  if (!spec.startsWith('./') && !spec.startsWith('../')) return null; // external/bare → no edge
-  const base = path.posix.join(path.posix.dirname(fromPath), spec); // normalized project-relative
+function resolveTsCandidate(base: string, ctx: ResolveImportContext): string | null {
   const ext = path.posix.extname(base);
   const candidates: string[] = [];
   if (ext) {
@@ -219,6 +221,23 @@ function resolveTsImport(spec: string, fromPath: string, ctx: ResolveImportConte
     if (ctx.fileExists(c)) return c;
   }
   return null;
+}
+
+function resolveTsImport(spec: string, fromPath: string, ctx: ResolveImportContext): string | null {
+  if (spec.startsWith('./') || spec.startsWith('../')) {
+    return resolveTsCandidate(path.posix.join(path.posix.dirname(fromPath), spec), ctx);
+  }
+  const config = isTypeScriptResolutionConfig(ctx.resolverConfig) ? ctx.resolverConfig : undefined;
+  const candidates = typeScriptSpecifierBases(spec, config);
+  if (candidates.length === 0) return null; // external, invalid, or ambiguous config
+  const resolved = new Set<string>();
+  for (const candidate of candidates) {
+    const target = resolveTsCandidate(candidate, ctx);
+    if (target) resolved.add(target);
+  }
+  // Do not adopt TypeScript's fallback preference when config candidates produce
+  // different indexed files: Code Map is deliberately soundness-first.
+  return resolved.size === 1 ? [...resolved][0]! : null;
 }
 
 /** A sourceNode handle the runtime attaches to definition drafts. */

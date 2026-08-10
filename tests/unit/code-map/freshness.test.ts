@@ -53,6 +53,10 @@ describe('code-map freshness (unit)', () => {
       ['typescript', 'tsx', 'javascript'],
     );
     assert.notEqual(a, changed, 'changing a config field changes the hash');
+
+    const resolverA = computeExtractorConfigHash(DEFAULT_EXTRACTOR_CONFIG, ['typescript'], undefined, 'sha256:config-a');
+    const resolverB = computeExtractorConfigHash(DEFAULT_EXTRACTOR_CONFIG, ['typescript'], undefined, 'sha256:config-b');
+    assert.notEqual(resolverA, resolverB, 'changing local resolver config invalidates freshness');
   });
 
   it('shardFreshnessStatus flags stale_extractor on config hash mismatch', () => {

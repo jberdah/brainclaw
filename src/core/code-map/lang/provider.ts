@@ -129,6 +129,11 @@ export interface ImportResolutionRequest {
 export interface ResolveImportContext {
   fileExists(relPath: string): boolean;
   langOfFile(relPath: string): CodeLang | undefined;
+  /**
+   * Project-local resolver configuration snapshot. Kept opaque at this generic
+   * boundary; language providers narrow only the configuration they understand.
+   */
+  readonly resolverConfig?: unknown;
 }
 
 /** A P1c import resolution: the provider-verified target PATH + confidence (the core mints the edge/target ids). */
