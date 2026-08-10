@@ -1470,6 +1470,26 @@
         "variadic": false
       },
       {
+        "flags": "--direction <direction>",
+        "long": "--direction",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--format <format>",
+        "long": "--format",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--json",
         "long": "--json",
         "mandatory": false,
@@ -1482,6 +1502,46 @@
       {
         "flags": "--limit <n>",
         "long": "--limit",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--max-edges <n>",
+        "long": "--max-edges",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--max-nodes <n>",
+        "long": "--max-nodes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--min-confidence <n>",
+        "long": "--min-confidence",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--target-kind <kind>",
+        "long": "--target-kind",
         "mandatory": false,
         "negate": false,
         "short": null,

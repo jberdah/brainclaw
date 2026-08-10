@@ -429,6 +429,25 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
+    name: 'bclaw_code_export',
+    description: 'Export a compact, deterministic, confidence-filtered local Code Map subgraph around one symbol or file. Requires a target; defaults to one hop and hard caps nodes (100), edges (200), and depth (4), so it never exports a whole graph. JSON retains every edge kind, source, and confidence. format="mermaid" adds a projection of the same JSON nodes/edges. Read-only; never refreshes or calls an external service.',
+    annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Symbol name or source-file path around which to export a local subgraph.' },
+        targetKind: { type: 'string', enum: ['symbol', 'file'], description: 'Optional explicit target kind; otherwise a source path is detected safely.' },
+        direction: { type: 'string', enum: ['outgoing', 'incoming', 'both'], description: 'Which edge direction(s) to follow. Default: both.' },
+        depth: { type: 'number', description: 'Maximum graph distance from the root(s). Default 1; clamped to 0..4.' },
+        maxNodes: { type: 'number', description: 'Maximum nodes returned. Default 100; hard-capped at 100.' },
+        maxEdges: { type: 'number', description: 'Maximum edges returned. Default 200; hard-capped at 200.' },
+        minConfidence: { type: 'number', description: 'Persisted confidence threshold for nodes and relationships. Default/minimum 0.5.' },
+        format: { type: 'string', enum: ['json', 'mermaid'], description: 'Default json; mermaid adds a projection derived from the same bounded graph.' },
+      },
+      required: ['target'],
+    },
+  },
+  {
     name: 'bclaw_code_outline',
     description: 'Return a bounded source-ordered outline for one indexed file: symbol name, kind, subtype, span, exported flag, and persisted confidence. Read-only: it reads the existing file shard only, never parses or refreshes. `index_status` distinguishes a missing index, a file not indexed, and an indexed file with zero symbols.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },

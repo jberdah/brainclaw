@@ -50,6 +50,7 @@ export const MCP_HEADLESS_AUTO_TOOL_NAMES: string[] = [
   'bclaw_code_find',
   'bclaw_code_brief',
   'bclaw_code_impact',
+  'bclaw_code_export',
   'bclaw_code_outline',
   'bclaw_send_message',
   'bclaw_ack_message',
