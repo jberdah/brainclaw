@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { refresh } from '../../../src/core/code-map/refresh.js';
+import { readShard, readSymbolsIndex } from '../../../src/core/code-map/store.js';
 import { JsonlBackend } from '../../../src/core/code-map/backend.js';
 import {
   attachRelatedMemory,
@@ -444,5 +445,55 @@ describe('code-map related memory (spec §11)', () => {
     const out = attachRelatedMemory(items, ['src/hooks/useAuth.ts'], ['useAuth']);
     assert.equal(out.length, 1);
     assert.equal(out[0]!.id, 'm#text');
+  });
+
+  it('derives a non-persistent memory join from target imports, with evidence and freshness', async () => {
+    const root = tmpProject();
+    fixture(root);
+    await refreshAll(root);
+    const memory: RelatedMemoryItem = {
+      id: 'trp#import',
+      kind: 'trap',
+      text: 'The useAuth import must stay behind the session boundary.',
+      tags: [],
+      related_paths: [],
+      created_at: new Date().toISOString(),
+      last_confirmed_at: new Date().toISOString(),
+    };
+
+    const brief = await backend(root, () => [memory]).brief({ target: 'src/app/App.tsx', cwd: root });
+    const joined = brief.related_memory.find((item) => item.id === memory.id);
+    assert.ok(joined, 'memory text matching a target import is attached');
+    assert.deepEqual(joined.match_evidence?.matched_imports, ['useAuth']);
+    assert.ok(joined.match_evidence?.sources.includes('import_text'));
+    assert.equal(joined.match_evidence?.confidence, 0.72);
+    assert.equal(joined.memory_freshness?.status, 'fresh');
+    assert.equal(memory.match_evidence, undefined, 'the reader record is not mutated or persisted');
+    assert.equal(memory.memory_freshness, undefined, 'freshness is response-local too');
+
+    const app = brief.suggested_files_to_read.find((entry) => entry.path === 'src/app/App.tsx');
+    assert.ok(app?.related_memory_ids.includes(memory.id), 'derived evidence is attached to its target file');
+    const symbols = readSymbolsIndex(root);
+    const appSymbol = Object.values(symbols?.entries ?? {}).flat().find((entry) => entry.path === 'src/app/App.tsx');
+    assert.ok(appSymbol, 'the target shard is indexed');
+    const shard = readShard(appSymbol.file_id, root);
+    assert.ok(shard, 'the target shard remains readable after brief');
+    assert.ok(shard.nodes.every((node) => !node.related_memory_ids.includes(memory.id)), 'no symbol-memory edge is persisted');
+  });
+
+  it('matches explicit symbols but rejects generic import stop words', () => {
+    const memory: RelatedMemoryItem[] = [
+      {
+        id: 'dec#symbol', kind: 'decision', text: 'executeMcpToolCall owns transport startup.', tags: [], related_paths: [],
+        created_at: new Date().toISOString(), last_confirmed_at: new Date().toISOString(),
+      },
+      {
+        id: 'dec#generic', kind: 'decision', text: 'React rendering is unrelated.', tags: [], related_paths: [],
+      },
+    ];
+    const joined = attachRelatedMemory(memory, ['src/commands/mcp.ts'], ['executeMcpToolCall'], ['React']);
+    assert.deepEqual(joined.map((item) => item.id), ['dec#symbol']);
+    assert.deepEqual(joined[0]!.match_evidence?.matched_symbols, ['executeMcpToolCall']);
+    assert.equal(joined[0]!.match_evidence?.confidence, 0.82);
   });
 });

@@ -539,8 +539,12 @@ export function aggregateBrief(
   const seen = new Set<string>();
   const mergedDefiningPaths = new Set<string>();
   const symbolNames = new Set<string>();
+  const memorySymbolNames = new Set<string>();
+  const memoryImportNames = new Set<string>();
   for (const p of contributing) {
     for (const e of p.r.defining) symbolNames.add(e.name);
+    for (const name of p.r.memorySymbolNames) memorySymbolNames.add(name);
+    for (const name of p.r.memoryImportNames) memoryImportNames.add(name);
     for (const dp of p.r.definingPaths) mergedDefiningPaths.add(p.ref.relPath ? `${p.ref.relPath}/${dp}` : dp);
     for (const rf of p.r.confident) {
       const key = `${p.ref.cwd}::${rf.path}`; // store-scoped dedup (never project_id)
@@ -575,12 +579,14 @@ export function aggregateBrief(
   const capped = reserveSourceSlots(merged, cap, mergedDefiningPaths) as MergedBriefRow[];
 
   if (symbolNames.size === 0) symbolNames.add(target);
+  if (memorySymbolNames.size === 0) memorySymbolNames.add(target);
   const related = attachRelatedMemory(
     memoryReader({ cwd: resolved.root }),
     capped.map((f) => f.path),
-    [...symbolNames],
+    [...memorySymbolNames],
+    [...memoryImportNames],
   );
-  const baseEntries = attachMemoryIds(capped, related);
+  const baseEntries = attachMemoryIds(capped, related, mergedDefiningPaths);
   const suggested: AggregatedBriefReadEntry[] = baseEntries.map((s, i) => ({
     ...s,
     project: capped[i]!.project,

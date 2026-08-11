@@ -30,6 +30,14 @@ function coercePaths(raw: unknown): string[] {
   return [];
 }
 
+function optionalString(raw: unknown): string | undefined {
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+function optionalCount(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
+
 function toRelatedMemoryItem(kind: EntityName, item: Record<string, unknown>): RelatedMemoryItem {
   return {
     id: typeof item.id === 'string' ? item.id : '',
@@ -37,6 +45,15 @@ function toRelatedMemoryItem(kind: EntityName, item: Record<string, unknown>): R
     text: typeof item.text === 'string' ? item.text : '',
     tags: coerceTags(item.tags),
     related_paths: coercePaths(item.related_paths),
+    created_at: optionalString(item.created_at),
+    last_confirmed_at: optionalString(item.last_confirmed_at),
+    last_infirmed_at: optionalString(item.last_infirmed_at),
+    confirmation_count: optionalCount(item.confirmation_count),
+    infirmation_count: optionalCount(item.infirmation_count),
+    saved_me_count: optionalCount(item.saved_me_count),
+    misled_me_count: optionalCount(item.misled_me_count),
+    verified_at: optionalString(item.verified_at),
+    verify_cmd: optionalString(item.verify_cmd),
   };
 }
 
