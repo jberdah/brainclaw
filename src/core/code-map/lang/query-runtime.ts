@@ -257,6 +257,7 @@ export async function extractWithQueries(input: QueryRuntimeInput): Promise<Extr
     imports: [],
     exports: [],
     tests: [],
+    usages: [],
     facts,
     attributes: { parseStatus, __tree: tree },
   });
@@ -516,6 +517,7 @@ export async function extractWithQueries(input: QueryRuntimeInput): Promise<Extr
     imports,
     exports,
     tests: [],
+    usages: [],
     facts,
     attributes: { parseStatus, __tree: tree },
   };

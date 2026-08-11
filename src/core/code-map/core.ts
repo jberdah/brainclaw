@@ -37,6 +37,7 @@ function fileOnlyResult(input: ExtractInput, parseStatus: ExtractResult['parseSt
       imports: [],
       exports: [],
       tests: [],
+      usages: [],
       facts: [{ code: 'skipped_unsupported', message: `no provider for ${input.path}` }],
       attributes: { parseStatus },
     },

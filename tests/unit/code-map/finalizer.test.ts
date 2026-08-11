@@ -24,6 +24,7 @@ import type {
   ExportDraft,
   ExtractionDraft,
   ImportDraft,
+  UsageDraft,
 } from '../../../src/core/code-map/drafts.js';
 import type { ExtractInput, ExtractResult } from '../../../src/core/code-map/extractor.js';
 import type { CodeLang, NodeSubtype, Span } from '../../../src/core/code-map/types.js';
@@ -72,6 +73,7 @@ function draftOf(
     definitions?: DefinitionDraft[];
     imports?: ImportDraft[];
     exports?: ExportDraft[];
+    usages?: UsageDraft[];
   },
 ): ExtractionDraft {
   return {
@@ -79,6 +81,7 @@ function draftOf(
     definitions: parts.definitions ?? [],
     imports: parts.imports ?? [],
     exports: parts.exports ?? [],
+    usages: parts.usages ?? [],
     tests: [],
     facts: [],
     attributes: { parseStatus: 'parsed' },
@@ -248,12 +251,17 @@ const CASES: Case[] = [
   },
   {
     // default-identifier export: function symbol, then exports edge on it.
+    // P4: the identifier in `export default mainEntry` is ALSO a proven local
+    // usage — the extractor emits a top-level (file-caller) `references` draft.
     key: 'src/p1a/default-export.ts',
     lang: 'typescript',
     build: () =>
       draftOf('src/p1a/default-export.ts', {
         definitions: [def('mainEntry', 'function', sp(3, 1, 3, 30), false)],
         exports: [exp('mainEntry', sp(5, 1, 5, 19))],
+        usages: [
+          { kind: 'references', target: { kind: 'local', definitionOrdinal: 0 }, span: sp(5, 16, 5, 25) },
+        ],
       }),
   },
 
@@ -350,6 +358,12 @@ const CASES: Case[] = [
           def('Box', 'component', sp(8, 8, 10, 3), true),
         ],
         exports: [exp('Box', sp(12, 1, 12, 19))],
+        // P4: `export default Box` — top-level proven local reference to Box.
+        // Ordinal 2: the counter is SHARED across imp/def/exp builders (react=0,
+        // useToggle=1, Box=2).
+        usages: [
+          { kind: 'references', target: { kind: 'local', definitionOrdinal: 2 }, span: sp(12, 16, 12, 19) },
+        ],
       }),
   },
 ];

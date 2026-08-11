@@ -18,7 +18,7 @@
  * provider-path regression guard against the frozen `oracle-golden.json`.
  */
 import crypto from 'node:crypto';
-import type { CodeEdge, CodeLang, CodeNode } from './types.js';
+import type { CodeEdge, CodeLang, CodeNode, ReferenceCandidate } from './types.js';
 
 export interface ExtractInput {
   projectId: string;
@@ -37,6 +37,8 @@ export interface ExtractResult {
   nodes: CodeNode[];
   edges: CodeEdge[];
   diagnostics: Array<Record<string, unknown>>;
+  /** Non-enumerable P4 hand-off to refresh; omitted from the stable JSON result. */
+  referenceCandidates?: ReferenceCandidate[];
 }
 
 // The query-driven CORE entrypoint, re-exported under the historical name so all

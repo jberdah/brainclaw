@@ -59,7 +59,7 @@ function edgesArrayEqual(a: readonly CodeEdge[], b: readonly CodeEdge[]): boolea
   for (let i = 0; i < a.length; i++) {
     const x = a[i]!;
     const y = b[i]!;
-    if (x.id !== y.id || x.from !== y.from || x.to !== y.to || x.kind !== y.kind || x.confidence !== y.confidence) {
+    if (x.id !== y.id || x.from !== y.from || x.to !== y.to || x.kind !== y.kind || x.confidence !== y.confidence || x.origin !== y.origin) {
       return false;
     }
   }
@@ -133,10 +133,13 @@ export async function resolveProjectImports(
     const provider = registry.providerForLang(shard.lang);
     // Non-pass-owned edges are preserved byte-identical (same order). Filtering BOTH
     // pass-owned kinds also strips any stale A/B edge from a prior run (idempotency).
-    const kept = shard.edges.filter((e) => !PASS_OWNED_EDGE_KINDS.has(e.kind));
+    const kept = shard.edges.filter((e) => !PASS_OWNED_EDGE_KINDS.has(e.kind) && e.origin !== 'usage_import');
 
     // Fresh pass-owned set (A resolves_to + B imports_symbol). Empty when no resolver.
     const fresh: CodeEdge[] = [];
+    const seen = new Set<string>();
+    // module + imported-name → unique target proven by imports_symbol below.
+    const resolvedImportedBindings = new Map<string, CodeNode>();
     let freshSymbolCount = 0;
     if (provider?.resolveImport) {
       const seen = new Set<string>();
@@ -180,10 +183,31 @@ export async function resolveProjectImports(
             if (seen.has(symId)) continue; // dedup (duplicate names / re-imports)
             seen.add(symId);
             fresh.push({ id: symId, from: mod.id, to: target.id, kind: 'imports_symbol', confidence, source });
+            resolvedImportedBindings.set(`${r.source}\0${name}`, target);
             freshSymbolCount++;
           }
         }
       }
+    }
+
+    // P4 imported-binding usages are emitted only after the exact `imports_symbol`
+    // proof above. If a module is unresolved, ambiguous, wildcard/default, or its
+    // target no longer exports the symbol, no call/reference edge survives.
+    for (const candidate of shard.reference_candidates ?? []) {
+      const target = resolvedImportedBindings.get(`${candidate.module}\0${candidate.imported_name}`);
+      if (!target) continue;
+      const id = edgeId({ projectId, from: candidate.from, to: target.id, kind: candidate.kind });
+      if (seen.has(id)) continue;
+      seen.add(id);
+      fresh.push({
+        id,
+        from: candidate.from,
+        to: target.id,
+        kind: candidate.kind,
+        confidence: Math.min(clampConfidence(candidate.confidence), 1.0),
+        source: candidate.source,
+        origin: 'usage_import',
+      });
     }
 
     // Single deterministic order over A+B so re-runs are byte-identical (from, to, kind).

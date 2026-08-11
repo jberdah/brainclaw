@@ -25,7 +25,7 @@
  */
 import { edgeId, fileNodeId, nodeId } from './ids.js';
 import type { ExtractionDraft } from './drafts.js';
-import type { CodeEdge, CodeLang, CodeNode, NodeSubtype, Span } from './types.js';
+import type { CodeEdge, CodeLang, CodeNode, NodeSubtype, ReferenceCandidate, Span } from './types.js';
 import { EdgeSchema, NodeSchema } from './types.js';
 import type { ExtractInput, ExtractResult } from './extractor.js';
 
@@ -109,6 +109,9 @@ export function finalize(draft: ExtractionDraft, input: ExtractInput): ExtractRe
   const byName = new Map<string, string>();
   // node id -> index in `nodes`, so an export clause can flip `exported` in place.
   const nodeIndexById = new Map<string, number>();
+  // P4 resolves provider draft ordinals to final symbol ids only here, after the
+  // identity authority has minted them. This keeps providers id-free.
+  const definitionIdsByOrdinal = new Map<number, string>();
 
   const pushSymbol = (
     subtype: NodeSubtype,
@@ -163,7 +166,8 @@ export function finalize(draft: ExtractionDraft, input: ExtractInput): ExtractRe
   for (const item of items) {
     if (item.kind === 'def') {
       const d = item.ref;
-      pushSymbol(d.subtype, d.name, d.span, d.exported === true, d.confidence ?? 1.0);
+      const id = pushSymbol(d.subtype, d.name, d.span, d.exported === true, d.confidence ?? 1.0);
+      definitionIdsByOrdinal.set(d.ordinal, id);
     } else if (item.kind === 'import') {
       const im = item.ref;
       const id = moduleNodeId(projectId, path, lang, im.source, im.span);
@@ -212,6 +216,44 @@ export function finalize(draft: ExtractionDraft, input: ExtractInput): ExtractRe
     }
   }
 
+  // P4 lexical usages. Local targets are already proven by the provider's tree
+  // walk; imported bindings become candidates and are materialized only by the
+  // whole-project resolver when the target symbol is unique and importable.
+  const referenceCandidates: ReferenceCandidate[] = [];
+  for (const usage of draft.usages ?? []) {
+    const from = usage.fromDefinitionOrdinal === undefined
+      ? fileNode
+      : definitionIdsByOrdinal.get(usage.fromDefinitionOrdinal);
+    if (!from) continue;
+    const confidence = usage.confidence ?? 1.0;
+    const source = { path, line: usage.span.start_line };
+    if (usage.target.kind === 'import') {
+      // Textual hints are deliberately local-only. An imported binding gets no
+      // graph edge until `resolveProjectImports` proves its target symbol.
+      if (usage.kind === 'calls' || usage.kind === 'references') {
+        referenceCandidates.push({
+          from,
+          kind: usage.kind,
+          module: usage.target.module,
+          imported_name: usage.target.importedName,
+          confidence,
+          source,
+        });
+      }
+      continue;
+    }
+    const to = definitionIdsByOrdinal.get(usage.target.definitionOrdinal);
+    if (!to) continue;
+    edges.push({
+      id: edgeId({ projectId, from, to, kind: usage.kind }),
+      from,
+      to,
+      kind: usage.kind,
+      confidence,
+      source,
+      origin: usage.kind === 'possible_textual_match' ? 'usage_textual' : 'usage_local',
+    });
+  }
   const parseStatus =
     (draft.attributes?.parseStatus as ExtractResult['parseStatus'] | undefined) ?? 'parsed';
   const diagnostics: Array<Record<string, unknown>> = draft.facts.map((f) => ({ ...f }));
@@ -220,5 +262,16 @@ export function finalize(draft: ExtractionDraft, input: ExtractInput): ExtractRe
   for (const n of nodes) NodeSchema.parse(n);
   for (const e of edges) EdgeSchema.parse(e);
 
-  return { parseStatus, nodes, edges, diagnostics };
+  const result: ExtractResult = { parseStatus, nodes, edges, diagnostics };
+  // P1's oracle intentionally compares the enumerable JSON result. Keep the
+  // resolver hand-off available to refresh without changing that stable shape.
+  if (referenceCandidates.length > 0) {
+    Object.defineProperty(result, 'referenceCandidates', {
+      value: referenceCandidates,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return result;
 }

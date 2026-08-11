@@ -232,6 +232,7 @@ export function readResolutionIndex(cwd?: string, preferredDirName?: string): Re
   // 'toString' (a path or node id) can't resolve to an inherited prototype member.
   parsed.data.dependents_by_file = Object.assign(Object.create(null), parsed.data.dependents_by_file);
   parsed.data.dependents_by_symbol = Object.assign(Object.create(null), parsed.data.dependents_by_symbol);
+  parsed.data.usages_by_symbol = Object.assign(Object.create(null), parsed.data.usages_by_symbol);
   return parsed.data;
 }
 

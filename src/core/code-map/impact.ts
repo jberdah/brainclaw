@@ -29,6 +29,7 @@ import type {
   Span,
   SymbolIndexEntry,
   SymbolsIndex,
+  UsageIndexEntry,
 } from './types.js';
 
 /** Direct results and each optional transitive layer are independently bounded. */
@@ -50,11 +51,13 @@ export interface CodeImpactDefinition {
 
 export interface CodeImpactCause {
   /** Existing P1c edge kind; never a guessed edge. */
-  kind: 'resolves_to' | 'imports_symbol';
+  kind: 'resolves_to' | 'imports_symbol' | 'calls' | 'references';
   module?: string;
   imported: string[];
   confidence?: number;
   source_line?: number | null;
+  /** P4 caller identity for a lexical usage (absent on import-resolution causes). */
+  caller?: { node_id: string };
   /** The immediate target that this importer resolves to. */
   target: {
     kind: 'file' | 'symbol';
@@ -189,7 +192,7 @@ function asDefinition(entry: SymbolIndexEntry): CodeImpactDefinition {
   };
 }
 
-function fallbackReasons(entry: DependencyIndexEntry, kind: CodeImpactCause['kind']): DependencyReason[] {
+function fallbackReasons(entry: DependencyIndexEntry, kind: 'resolves_to' | 'imports_symbol'): DependencyReason[] {
   const indexed = entry.reasons.filter((reason) => reason.kind === kind);
   if (indexed.length > 0) return indexed;
   // Existing P1d indexes (written before P3) still have a compact aggregate.
@@ -212,6 +215,7 @@ function causeKey(cause: CodeImpactCause): string {
     cause.target.kind,
     cause.target.path,
     cause.target.node_id ?? '',
+    cause.caller?.node_id ?? '',
   ].join('\u0001');
 }
 
@@ -219,6 +223,7 @@ function compareCause(a: CodeImpactCause, b: CodeImpactCause): number {
   return a.kind.localeCompare(b.kind)
     || a.target.path.localeCompare(b.target.path)
     || (a.target.node_id ?? '').localeCompare(b.target.node_id ?? '')
+    || (a.caller?.node_id ?? '').localeCompare(b.caller?.node_id ?? '')
     || (a.module ?? '').localeCompare(b.module ?? '')
     || (a.source_line ?? -1) - (b.source_line ?? -1)
     || a.imported.join('\u0000').localeCompare(b.imported.join('\u0000'))
@@ -230,7 +235,7 @@ function addRelation(
   entry: DependencyIndexEntry,
   depth: number,
   target: CodeImpactCause['target'],
-  kind: CodeImpactCause['kind'],
+  kind: 'resolves_to' | 'imports_symbol',
 ): void {
   const current = rows.get(entry.path) ?? {
     path: entry.path,
@@ -247,6 +252,39 @@ function addRelation(
       imported: [...reason.imported],
       ...(typeof reason.confidence === 'number' ? { confidence: reason.confidence } : {}),
       ...(reason.source_line !== undefined ? { source_line: reason.source_line } : {}),
+      target,
+    };
+    const key = causeKey(cause);
+    if (!current.causeKeys.has(key)) {
+      current.causeKeys.add(key);
+      current.causes.push(cause);
+    }
+  }
+  current.causes.sort(compareCause);
+  rows.set(entry.path, current);
+}
+
+function addUsageRelation(
+  rows: Map<string, InternalDependent>,
+  entry: UsageIndexEntry,
+  depth: number,
+  target: CodeImpactCause['target'],
+): void {
+  const current: InternalDependent = rows.get(entry.path) ?? {
+    path: entry.path,
+    file_id: entry.file_id,
+    depth,
+    causes: [],
+    causeKeys: new Set<string>(),
+  };
+  current.depth = Math.min(current.depth, depth);
+  for (const reason of entry.reasons) {
+    const cause: CodeImpactCause = {
+      kind: reason.kind,
+      imported: [],
+      confidence: reason.confidence,
+      ...(reason.source_line !== undefined ? { source_line: reason.source_line } : {}),
+      caller: { node_id: reason.caller_node_id },
       target,
     };
     const key = causeKey(cause);
@@ -387,10 +425,12 @@ export function impact(
   const directRows = new Map<string, InternalDependent>();
   if (resolution) {
     for (const definition of definitionByNodeId.values()) {
+      const target = { kind: 'symbol' as const, path: definition.path, node_id: definition.node_id, name: definition.name };
       for (const dependent of resolution.dependents_by_symbol[definition.node_id] ?? []) {
-        addRelation(directRows, dependent, 1, {
-          kind: 'symbol', path: definition.path, node_id: definition.node_id, name: definition.name,
-        }, 'imports_symbol');
+        addRelation(directRows, dependent, 1, target, 'imports_symbol');
+      }
+      for (const dependent of resolution.usages_by_symbol[definition.node_id] ?? []) {
+        addUsageRelation(directRows, dependent, 1, target);
       }
     }
     for (const definitionPath of definitionPaths) {

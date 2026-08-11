@@ -13,7 +13,7 @@
  *
  * The `tests` lane is empty in P1a (tests_for is P2).
  */
-import type { NodeSubtype, Span } from './types.js';
+import type { NodeSubtype, Span, UsageKind } from './types.js';
 
 /**
  * File-level draft facts. The finalizer derives the file node id and the file
@@ -120,6 +120,23 @@ export interface TestDraft {
   readonly span: Span;
 }
 
+/**
+ * A provider-proven lexical usage. Local targets are finalized immediately;
+ * imported bindings remain candidates until the project resolver proves one
+ * importable target symbol. `possible_textual_match` is intentionally local-only
+ * and remains a low-confidence hint rather than a call edge.
+ */
+export interface UsageDraft {
+  readonly kind: UsageKind;
+  /** Omit for a top-level usage: the finalizer uses the file node as caller. */
+  readonly fromDefinitionOrdinal?: number;
+  readonly target:
+    | { readonly kind: 'local'; readonly definitionOrdinal: number }
+    | { readonly kind: 'import'; readonly module: string; readonly importedName: string };
+  readonly span: Span;
+  readonly confidence?: number;
+}
+
 /** A provider-emitted fact (diagnostics, heuristic notes). Opaque to the finalizer in P1a. */
 export interface ExtractionFact {
   readonly code: string;
@@ -139,6 +156,8 @@ export interface ExtractionDraft {
   readonly exports: ExportDraft[];
   /** Empty in P1a. */
   readonly tests: TestDraft[];
+  /** P4 lexical usages. Optional so historical hand-written drafts remain valid. */
+  readonly usages?: UsageDraft[];
   readonly facts: ExtractionFact[];
   /** Provider-specific scratch (e.g. parse status hint). Optional. */
   readonly attributes?: Record<string, unknown>;
