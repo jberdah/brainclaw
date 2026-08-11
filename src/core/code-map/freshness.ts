@@ -56,9 +56,108 @@ export function coarseFreshness(status: FreshnessStatus): CoarseFreshness {
   }
 }
 
-/** pln#601 — stamp/refresh a badge's `coarse` rollup from its (possibly just-adjusted) status. */
-export function withCoarse(b: FreshnessBadge): FreshnessBadge {
-  return { ...b, coarse: coarseFreshness(b.status) };
+export type SpotCheckStatus = 'not_run' | 'fresh' | 'stale' | 'partial';
+
+export interface SpotCheckDetails {
+  status: SpotCheckStatus;
+  checked_files: number;
+  stale_changed_files: string[];
+  deleted_files: string[];
+  unchecked_files: string[];
+  budget_exhausted: boolean;
+  partial_reason: string | null;
+}
+
+export interface IndexFreshnessDetails {
+  status: FreshnessStatus;
+  stale_file_count: number;
+  partial_reason: string | null;
+  git_head_changed: { index_head: string; current_head: string } | null;
+}
+
+export interface FreshnessBadgeOptions {
+  staleFileCount?: number | null;
+  partialReason?: string | null;
+  gitHeadChanged?: { index_head: string; current_head: string } | null;
+  spotCheck?: Partial<SpotCheckDetails>;
+  /** Surface-specific metadata; `index` and `spot_check` remain present regardless. */
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * Build the canonical, surface-uniform badge. `freshness` is derived solely from
+ * the index state supplied as `status`; a query's bounded spot-check is diagnostic
+ * evidence under `details.spot_check`, never a competing top-level badge.
+ */
+export function makeFreshnessBadge(
+  status: FreshnessStatus,
+  options: FreshnessBadgeOptions = {},
+): FreshnessBadge {
+  const spot = options.spotCheck ?? {};
+  return {
+    freshness: coarseFreshness(status),
+    status,
+    details: {
+      ...(options.extra ?? {}),
+      index: {
+        status,
+        stale_file_count: options.staleFileCount ?? 0,
+        partial_reason: options.partialReason ?? null,
+        git_head_changed: options.gitHeadChanged ?? null,
+      },
+      spot_check: {
+        status: spot.status ?? 'not_run',
+        checked_files: spot.checked_files ?? 0,
+        stale_changed_files: spot.stale_changed_files ?? [],
+        deleted_files: spot.deleted_files ?? [],
+        unchecked_files: spot.unchecked_files ?? [],
+        budget_exhausted: spot.budget_exhausted ?? false,
+        partial_reason: spot.partial_reason ?? null,
+      },
+    },
+  };
+}
+
+/**
+ * Compatibility normalizer for internal callers that previously constructed a
+ * `{ status, details }` badge. It preserves non-freshness metadata while always
+ * adding the two canonical detail sections.
+ */
+export function withFreshness(
+  b: Pick<FreshnessBadge, 'status'> & { details?: Record<string, unknown> },
+): FreshnessBadge {
+  const raw = b.details ?? {};
+  const index = raw.index as Record<string, unknown> | undefined;
+  const spot = raw.spot_check as Record<string, unknown> | undefined;
+  const known = new Set([
+    'index', 'spot_check', 'stale_file_count', 'partial_reason', 'git_head_changed',
+    'stale_changed_files', 'deleted_files', 'unchecked_files', 'budget',
+  ]);
+  const extra = Object.fromEntries(Object.entries(raw).filter(([key]) => !known.has(key)));
+  const stringArray = (value: unknown): string[] => Array.isArray(value) ? value.map(String).sort() : [];
+  const numberValue = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  const nullableString = (value: unknown): string | null | undefined =>
+    typeof value === 'string' ? value : value === null ? null : undefined;
+  const git = (index?.git_head_changed ?? raw.git_head_changed) as { index_head?: unknown; current_head?: unknown } | null | undefined;
+  const gitHeadChanged = git && typeof git.index_head === 'string' && typeof git.current_head === 'string'
+    ? { index_head: git.index_head, current_head: git.current_head }
+    : null;
+  return makeFreshnessBadge(b.status, {
+    staleFileCount: numberValue(index?.stale_file_count ?? raw.stale_file_count),
+    partialReason: nullableString(index?.partial_reason ?? raw.partial_reason),
+    gitHeadChanged,
+    spotCheck: {
+      status: spot?.status as SpotCheckStatus | undefined,
+      checked_files: numberValue(spot?.checked_files),
+      stale_changed_files: stringArray(spot?.stale_changed_files ?? raw.stale_changed_files),
+      deleted_files: stringArray(spot?.deleted_files ?? raw.deleted_files),
+      unchecked_files: stringArray(spot?.unchecked_files ?? raw.unchecked_files),
+      budget_exhausted: spot?.budget_exhausted === true,
+      partial_reason: nullableString(spot?.partial_reason),
+    },
+    extra,
+  });
 }
 
 /** Stable serialization: sort object keys recursively so hashing is order-independent. */
@@ -197,18 +296,22 @@ export function summarizeFreshness(
  * actionable status; only the cause detail is added.
  */
 export function applyGitHeadDrift(
-  badge: FreshnessBadge,
+  badge: Pick<FreshnessBadge, 'status'> & { details?: Record<string, unknown> },
   indexHead: string | null | undefined,
   currentHead: string | null | undefined,
 ): FreshnessBadge {
-  if (!indexHead || !currentHead || indexHead === currentHead) return withCoarse(badge);
-  const status: FreshnessStatus = badge.status === 'fresh' ? 'stale_git_head' : badge.status;
-  return {
-    status,
-    coarse: coarseFreshness(status),
-    details: {
-      ...badge.details,
-      git_head_changed: { index_head: indexHead, current_head: currentHead },
-    },
-  };
+  const normalized = withFreshness(badge);
+  const currentIndex = normalized.details.index as IndexFreshnessDetails;
+  if (!indexHead || !currentHead || indexHead === currentHead) return normalized;
+  const status: FreshnessStatus = normalized.status === 'fresh' ? 'stale_git_head' : normalized.status;
+  const extra = Object.fromEntries(
+    Object.entries(normalized.details).filter(([key]) => key !== 'index' && key !== 'spot_check'),
+  );
+  return makeFreshnessBadge(status, {
+    staleFileCount: currentIndex.stale_file_count,
+    partialReason: currentIndex.partial_reason,
+    gitHeadChanged: { index_head: indexHead, current_head: currentHead },
+    spotCheck: normalized.details.spot_check as Partial<SpotCheckDetails>,
+    extra,
+  });
 }

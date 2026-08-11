@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { hashContent } from './extractor.js';
-import { coarseFreshness } from './freshness.js';
+import { makeFreshnessBadge } from './freshness.js';
 import {
   readImportsIndex,
   readManifest,
@@ -82,6 +82,8 @@ function budgetExhausted(checker: LazyChecker): boolean {
 
 /** Reasons attached to the response badge details. */
 export interface FreshnessAccumulator {
+  /** Paths whose live state was examined during this call's bounded spot-check. */
+  checkedPaths: Set<string>;
   staleChangedPaths: Set<string>;
   missingPaths: Set<string>;
   /** Could not validate this path. Superset that includes `budgetSkippedPaths`. */
@@ -97,6 +99,7 @@ export interface FreshnessAccumulator {
 
 export function newAccumulator(): FreshnessAccumulator {
   return {
+    checkedPaths: new Set(),
     staleChangedPaths: new Set(),
     missingPaths: new Set(),
     uncheckedPaths: new Set(),
@@ -132,6 +135,7 @@ function validateEntry(
   if (cached !== undefined) return cached;
 
   const abs = path.join(projectRoot, entry.path);
+  acc.checkedPaths.add(entry.path);
   let stat: fs.Stats;
   try {
     stat = fs.statSync(abs);
@@ -219,50 +223,28 @@ export function deriveBadge(
   hadConfidentMatch: boolean,
   emptyIndex: boolean,
 ): FreshnessBadge {
-  const details: Record<string, unknown> = {};
-  if (acc.staleChangedPaths.size > 0) {
-    details.stale_changed_files = [...acc.staleChangedPaths].sort();
-  }
-  if (acc.missingPaths.size > 0) {
-    details.deleted_files = [...acc.missingPaths].sort();
-  }
-  if (acc.uncheckedPaths.size > 0) {
-    details.unchecked_files = [...acc.uncheckedPaths].sort();
-  }
-
-  let status: FreshnessStatus = base;
-  if (emptyIndex && base !== 'missing_index') {
-    // §6.1 — zero confident matches: hint refresh rather than imply absence.
-    details.hint = 'missing_index_or_refresh';
-  }
-
-  if (acc.staleChangedPaths.size > 0 || acc.missingPaths.size > 0) {
-    status = 'stale_changed_files';
-  }
-
-  // §6.1.6 — `partial` means the lazy-check budget (file count / wall clock) ran
-  // out before we could validate everything. Reserve it for that cause only:
-  // unchecked-for-other-reasons (oversized file per §6.1.4, missing shard,
-  // unreadable file) must NOT be mislabeled as budget exhaustion. When the budget
-  // truly ran out, `partial` wins the top-line status — the agent should refresh
-  // before trusting the result — and the confirmed-stale list still rides along
-  // in `details.stale_changed_files`.
-  if (budgetExhausted || acc.budgetSkippedPaths.size > 0) {
-    status = 'partial';
-    details.partial_reason = 'lazy_check_budget_exhausted';
-    details.budget = { ...LAZY_BUDGET };
-  }
-  // pln#593 #2 — distinguish INDEX freshness (manifest state) from THIS call's
-  // read-path spot-check. When the call-level status diverges from the index
-  // status (a budget-limited `partial`, or a per-file `stale_changed_files` over a
-  // `fresh` index), surface the index status so an agent does not read
-  // status()=fresh vs find()/brief()=partial as a contradiction: it's "index
-  // <index_status>, this call's spot-check <status>".
-  if (status !== base) details.index_status = base;
+  const hasStale = acc.staleChangedPaths.size > 0 || acc.missingPaths.size > 0;
+  const partial = budgetExhausted || acc.budgetSkippedPaths.size > 0;
+  const spotStatus = partial ? 'partial' : hasStale ? 'stale' : acc.checkedPaths.size > 0 ? 'fresh' : 'not_run';
+  const hint = emptyIndex && base !== 'missing_index' ? 'missing_index_or_refresh' : undefined;
   void hadConfidentMatch;
-  return { status, coarse: coarseFreshness(status), details };
-}
 
+  // `base` stays the top-level index classification. A stale or budget-limited
+  // candidate spot-check is honest evidence, but it must not turn find()/brief()
+  // into a different badge than status()/work() for the same index state.
+  return makeFreshnessBadge(base, {
+    spotCheck: {
+      status: spotStatus,
+      checked_files: acc.checkedPaths.size,
+      stale_changed_files: [...acc.staleChangedPaths].sort(),
+      deleted_files: [...acc.missingPaths].sort(),
+      unchecked_files: [...acc.uncheckedPaths].sort(),
+      budget_exhausted: partial,
+      partial_reason: partial ? 'lazy_check_budget_exhausted' : null,
+    },
+    extra: hint ? { hint } : undefined,
+  });
+}
 // --- find() (spec §12.1) ---
 
 export interface FindMatch {
@@ -529,7 +511,7 @@ export function find(query: string, limit: number | undefined, ctx: QueryContext
     return {
       query,
       matches: [],
-      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
+      freshness_badge: makeFreshnessBadge('missing_index', { extra: { hint: 'run refresh' } }),
     };
   }
   const capped = r.matches.slice(0, limit ?? DEFAULT_FIND_LIMIT);
@@ -1037,7 +1019,7 @@ export function brief(
       target,
       suggested_files_to_read: [],
       related_memory: [],
-      freshness_badge: { status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } },
+      freshness_badge: makeFreshnessBadge('missing_index', { extra: { hint: 'run refresh' } }),
     };
   }
 

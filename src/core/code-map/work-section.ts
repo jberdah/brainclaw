@@ -18,7 +18,7 @@
  *                      bclaw_work beyond that bounded wait (rule §6 rule 8).
  */
 import { readManifest } from './store.js';
-import { withCoarse } from './freshness.js';
+import { withFreshness } from './freshness.js';
 import { readCodeLock, isLockAbandoned } from './lock.js';
 import { codeMapDir, lockPath } from './paths.js';
 import { JsonlBackend } from './backend.js';
@@ -145,9 +145,9 @@ export async function codeMapWorkSection(
           return {
             enabled: true,
             matches: out.matches,
-            freshness_badge: withCoarse({
+            freshness_badge: withFreshness({
               status: 'partial',
-              details: { partial_reason: 'code_map_lock_active', lock_wait_ms: lockWaitMs },
+              details: { spot_check: { status: 'partial', partial_reason: 'code_map_lock_active' }, lock_wait_ms: lockWaitMs },
             }),
             lock_wait_ms: lockWaitMs,
           };
@@ -158,9 +158,9 @@ export async function codeMapWorkSection(
       return {
         enabled: true,
         matches: [],
-        freshness_badge: withCoarse({
+        freshness_badge: withFreshness({
           status: 'partial',
-          details: { partial_reason: 'code_map_lock_active', lock_wait_ms: lockWaitMs },
+          details: { spot_check: { status: 'partial', partial_reason: 'code_map_lock_active' }, lock_wait_ms: lockWaitMs },
         }),
         lock_wait_ms: lockWaitMs,
       };
@@ -174,7 +174,7 @@ export async function codeMapWorkSection(
       missing_index:
         'Code Map index is empty for this project. Run `brainclaw code-map refresh --all` (or bclaw_code_refresh) before relying on find/brief.',
       matches: [],
-      freshness_badge: withCoarse({ status: 'missing_index', details: {} }),
+      freshness_badge: withFreshness({ status: 'missing_index', details: {} }),
       ...(lockWaitMs !== undefined ? { lock_wait_ms: lockWaitMs } : {}),
     };
   }
@@ -183,16 +183,14 @@ export async function codeMapWorkSection(
   // lazy read-path check (§6.1) returns the true freshness badge, so stale
   // results are surfaced WITH the stale badge rather than hidden.
   if (!query) {
+    // Use the same read-only index observation as bclaw_code_status. This keeps
+    // bclaw_work aligned with status/find/brief for git-HEAD drift too, while
+    // still avoiding any lazy refresh or source parsing.
+    const status = await backend.status({ cwd: ctx.cwd, preferredDirName: ctx.preferredDirName });
     return {
       enabled: true,
       matches: [],
-      freshness_badge: withCoarse({
-        status: manifest.freshness.status,
-        details: {
-          stale_file_count: manifest.freshness.stale_file_count,
-          partial_reason: manifest.freshness.partial_reason,
-        },
-      }),
+      freshness_badge: status.freshness_badge,
       ...(lockWaitMs !== undefined ? { lock_wait_ms: lockWaitMs } : {}),
     };
   }
@@ -240,7 +238,7 @@ export function codeMapRefreshNextActions(section: CodeMapWorkSection | null): C
       },
     ];
   }
-  if (section.freshness_badge?.status?.startsWith('stale_')) {
+  if (section.freshness_badge?.freshness === 'stale') {
     return [
       {
         tool: 'bclaw_code_refresh',

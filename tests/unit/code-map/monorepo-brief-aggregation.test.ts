@@ -61,7 +61,7 @@ describe('pln#631 PR2 root-aggregated brief (traversal)', () => {
     const defEntry = brief.suggested_files_to_read.find((f) => f.path === 'applications/app_a/src/widget.ts')!;
     assert.equal(defEntry.project, 'applications/app_a', 'entry carries the owning project');
     assert.equal(brief.freshness_badge.details.traversal, 'workspace');
-    assert.ok(brief.freshness_badge.coarse, 'coarse rollup present');
+    assert.ok(brief.freshness_badge.freshness, 'coarse rollup present');
   });
 
   it('does NOT dilute an exact match with a sibling’s fuzzy token match', async () => {

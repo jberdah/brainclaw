@@ -8,6 +8,7 @@
  */
 import path from 'node:path';
 import { fileId } from './ids.js';
+import { makeFreshnessBadge } from './freshness.js';
 import {
   readManifest,
   readResolutionIndex,
@@ -371,7 +372,7 @@ export function impact(
     freshness_badge: freshness,
   });
   if (!symbolsIndex || !manifest) {
-    return empty({ status: 'missing_index', coarse: 'missing', details: { hint: 'run refresh' } });
+    return empty(makeFreshnessBadge('missing_index', { extra: { hint: 'run refresh' } }));
   }
 
   let matchKind: CodeImpactOutput['definition']['match_kind'] = 'none';

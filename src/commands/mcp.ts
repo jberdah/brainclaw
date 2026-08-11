@@ -1402,7 +1402,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const status = await be.status({ cwd, cascade: args.cascade === true });
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map: ${status.store_exists ? 'store present' : 'no store'} — freshness=${status.freshness_badge.status}` }],
+            content: [{ type: 'text', text: `Code Map: ${status.store_exists ? 'store present' : 'no store'} — freshness=${status.freshness_badge.freshness}` }],
             structuredContent: { ...status, freshness_badge: status.freshness_badge },
           }),
         };
@@ -1413,7 +1413,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const cascadeNote = result.cascade ? ` cascade=${result.cascade.children_refreshed} child(ren)+root` : '';
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map refresh [${result.scope}]: ran=${result.ran} freshness=${result.freshness_badge.status}${cascadeNote}${result.lock_status ? ` (${result.lock_status})` : ''}` }],
+            content: [{ type: 'text', text: `Code Map refresh [${result.scope}]: ran=${result.ran} freshness=${result.freshness_badge.freshness}${cascadeNote}${result.lock_status ? ` (${result.lock_status})` : ''}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };
@@ -1427,7 +1427,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const result = await be.find({ query, limit, cwd });
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map find "${result.query}": ${result.matches.length} match(es), freshness=${result.freshness_badge.status}` }],
+            content: [{ type: 'text', text: `Code Map find "${result.query}": ${result.matches.length} match(es), freshness=${result.freshness_badge.freshness}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };
@@ -1448,7 +1448,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const result = await be.exportGraph({ target, targetKind, direction, depth, maxNodes, maxEdges, minConfidence, format, cwd });
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map export "${result.target}": ${result.nodes.length} node(s), ${result.edges.length} edge(s), depth=${result.limits.max_depth}, freshness=${result.freshness_badge.status}` }],
+            content: [{ type: 'text', text: `Code Map export "${result.target}": ${result.nodes.length} node(s), ${result.edges.length} edge(s), depth=${result.limits.max_depth}, freshness=${result.freshness_badge.freshness}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };
@@ -1465,7 +1465,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const result = await be.impact({ target, depth, limit, cwd });
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map impact "${result.target}": ${result.risk.counters.direct_dependents} direct, ${result.risk.counters.transitive_dependents} transitive dependent(s), risk=${result.risk.score}, freshness=${result.freshness_badge.status}` }],
+            content: [{ type: 'text', text: `Code Map impact "${result.target}": ${result.risk.counters.direct_dependents} direct, ${result.risk.counters.transitive_dependents} transitive dependent(s), risk=${result.risk.score}, freshness=${result.freshness_badge.freshness}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };
@@ -1480,7 +1480,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const result = await be.outline({ path: outlinePath, limit, cwd });
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map outline "${result.path}": ${result.symbols.length}/${result.symbol_count} symbol(s), index=${result.index_status}, freshness=${result.freshness_badge.status}` }],
+            content: [{ type: 'text', text: `Code Map outline "${result.path}": ${result.symbols.length}/${result.symbol_count} symbol(s), index=${result.index_status}, freshness=${result.freshness_badge.freshness}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };
@@ -1494,7 +1494,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const result = await be.brief({ target, limit, cwd });
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `Code Map brief "${result.target}": ${result.suggested_files_to_read.length} file(s) to read, freshness=${result.freshness_badge.status}` }],
+          content: [{ type: 'text', text: `Code Map brief "${result.target}": ${result.suggested_files_to_read.length} file(s) to read, freshness=${result.freshness_badge.freshness}` }],
           structuredContent: { ...result, freshness_badge: result.freshness_badge },
         }),
       };
