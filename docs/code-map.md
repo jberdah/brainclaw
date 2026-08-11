@@ -136,35 +136,44 @@ call `bclaw_code_refresh` and retry.
 
 ## Freshness badge model
 
-Every Code Map response carries a freshness badge so a stale index is always
-visible rather than silently misleading. The status is one of:
+Every Code Map response has one top-level `freshness` field:
+`fresh`, `stale`, `partial`, or `missing`. It is the synthetic index signal that
+an agent uses to decide whether to refresh, and it has the same meaning on
+`bclaw_work`, `bclaw_code_status`, `bclaw_code_find`, and `bclaw_code_brief`.
 
-| Status | Meaning | Fix |
-|---|---|---|
-| `fresh` | Index matches the working tree, the extractor config, and the parser binaries. | — |
-| `stale_changed_files` | One or more indexed files have changed on disk since they were parsed. | `refresh --changed` |
-| `stale_extractor` | The extractor configuration (ignore rules, size caps, supported extensions, query budget, or active language set) changed since these shards were produced. | `refresh --changed` (heals on the cheap path) |
-| `stale_grammar` | A Tree-sitter grammar (or the engine glue) binary changed since these shards were produced. | `refresh --changed` (heals on the cheap path) |
-| `partial` | The index could not be fully read/built this pass (e.g. the project lock was held by a live writer). | retry |
-| `missing_index` | No index exists yet for this project. | `refresh --all` |
+```json
+{
+  "freshness": "fresh",
+  "details": {
+    "index": {
+      "status": "fresh",
+      "stale_file_count": 0,
+      "partial_reason": null,
+      "git_head_changed": null
+    },
+    "spot_check": {
+      "status": "stale",
+      "checked_files": 1,
+      "stale_changed_files": ["src/example.ts"],
+      "deleted_files": [],
+      "unchecked_files": [],
+      "budget_exhausted": false,
+      "partial_reason": null
+    }
+  }
+}
+```
 
-Staleness reasons are kept separate on purpose: a content change
-(`stale_changed_files`) is independent from a config change (`stale_extractor`)
-which is independent from a parser-binary change (`stale_grammar`). The badge
-surfaces the dominant reason; `--json` output and the manifest carry the per-file
-counts.
+`details.index` is the index diagnosis: its detailed `status` may be
+`stale_changed_files`, `stale_extractor`, `stale_grammar`, or
+`stale_git_head`. `details.spot_check` is a bounded, read-only observation of
+the candidates touched by `find` or `brief`; it is `not_run` on `status` and on
+a work section with no query. A stale or partial spot-check never silently
+changes the shared top-level signal. It gives the agent precise evidence for an
+explicit `bclaw_code_refresh(scope="changed")`, then a retry.
 
-**Index freshness vs this call's spot-check.** `bclaw_code_status` reports the
-*index* freshness (the manifest state). `bclaw_code_find` / `bclaw_code_brief`
-additionally run a bounded, per-query *spot-check* of the files they actually
-touch — so a single call can read `stale_changed_files` (a file it looked at
-changed on disk) or `partial` (the spot-check hit its budget) even while the index
-itself is `fresh`. When the call-level status diverges from the index, the badge
-carries an `index_status` detail so the two are not confused, e.g.
-`{ status: "partial", details: { index_status: "fresh", partial_reason:
-"lazy_check_budget_exhausted" } }` reads as *"index fresh, this call's spot-check
-incomplete (budget)"* — not a contradiction with a `fresh` `status()`.
-
+No read command parses files or refreshes the index. `bclaw_work` can suggest
+that explicit refresh, but never performs it lazily.
 ## Lifecycle — pull-based, no daemon
 
 Code Map never runs in the background and never auto-reindexes. The model is lazy

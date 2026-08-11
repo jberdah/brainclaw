@@ -437,7 +437,7 @@ describe('codeMapWorkSection (bclaw_work integration, spec §10)', () => {
     });
     assert.ok(section);
     assert.equal(section!.freshness_badge.status, 'partial');
-    assert.equal((section!.freshness_badge.details as Record<string, unknown>).partial_reason, 'code_map_lock_active');
+    assert.equal((section!.freshness_badge.details.spot_check as { partial_reason: string }).partial_reason, 'code_map_lock_active');
     assert.ok(typeof section!.lock_wait_ms === 'number');
     assert.ok(section!.lock_wait_ms! <= WORK_SECTION_MAX_WAIT_MS);
   });
@@ -478,7 +478,7 @@ describe('codeMapRefreshNextActions (bclaw_work onboarding nudge, pln#588)', () 
   const base = (over: Partial<CodeMapWorkSection>): CodeMapWorkSection => ({
     enabled: true,
     matches: [],
-    freshness_badge: { status: 'fresh', details: {} },
+    freshness_badge: { freshness: 'fresh', status: 'fresh', details: {} },
     ...over,
   });
 
@@ -488,7 +488,7 @@ describe('codeMapRefreshNextActions (bclaw_work onboarding nudge, pln#588)', () 
 
   it('missing_index -> bclaw_code_refresh scope=all', () => {
     const out = codeMapRefreshNextActions(
-      base({ missing_index: 'empty', freshness_badge: { status: 'missing_index', details: {} } }),
+      base({ missing_index: 'empty', freshness_badge: { freshness: 'missing', status: 'missing_index', details: {} } }),
     );
     assert.equal(out.length, 1);
     assert.equal(out[0]!.tool, 'bclaw_code_refresh');
@@ -496,24 +496,24 @@ describe('codeMapRefreshNextActions (bclaw_work onboarding nudge, pln#588)', () 
   });
 
   it('stale_changed_files -> bclaw_code_refresh scope=changed', () => {
-    const out = codeMapRefreshNextActions(base({ freshness_badge: { status: 'stale_changed_files', details: {} } }));
+    const out = codeMapRefreshNextActions(base({ freshness_badge: { freshness: 'stale', status: 'stale_changed_files', details: {} } }));
     assert.equal(out.length, 1);
     assert.equal(out[0]!.tool, 'bclaw_code_refresh');
     assert.equal((out[0]!.args as { scope?: string }).scope, 'changed');
   });
 
   it('stale_git_head -> bclaw_code_refresh scope=changed (HEAD drift nudges refresh)', () => {
-    const out = codeMapRefreshNextActions(base({ freshness_badge: { status: 'stale_git_head', details: {} } }));
+    const out = codeMapRefreshNextActions(base({ freshness_badge: { freshness: 'stale', status: 'stale_git_head', details: {} } }));
     assert.equal(out.length, 1);
     assert.equal(out[0]!.tool, 'bclaw_code_refresh');
     assert.equal((out[0]!.args as { scope?: string }).scope, 'changed');
   });
 
   it('fresh -> no nudge (do not nag a usable index)', () => {
-    assert.deepEqual(codeMapRefreshNextActions(base({ freshness_badge: { status: 'fresh', details: {} } })), []);
+    assert.deepEqual(codeMapRefreshNextActions(base({ freshness_badge: { freshness: 'fresh', status: 'fresh', details: {} } })), []);
   });
 
   it('partial (transient lock) -> no nudge', () => {
-    assert.deepEqual(codeMapRefreshNextActions(base({ freshness_badge: { status: 'partial', details: {} } })), []);
+    assert.deepEqual(codeMapRefreshNextActions(base({ freshness_badge: { freshness: 'partial', status: 'partial', details: {} } })), []);
   });
 });

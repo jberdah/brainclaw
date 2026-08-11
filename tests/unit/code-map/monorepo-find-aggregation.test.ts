@@ -78,7 +78,7 @@ describe('pln#631 root-aggregated find (traversal)', () => {
     assert.equal(alpha.freshness_badge.details.traversal, 'workspace');
     assert.equal(alpha.freshness_badge.details.projects_total, 3, 'root + 2 children');
     assert.equal(alpha.freshness_badge.details.projects_indexed, 3);
-    assert.ok(alpha.freshness_badge.coarse, 'coarse rollup present');
+    assert.ok(alpha.freshness_badge.freshness, 'coarse rollup present');
   });
 
   it('a same-named symbol in two packages is NOT merged (distinct project_id,node_id)', async () => {
@@ -130,7 +130,7 @@ describe('pln#631 root-aggregated find (traversal)', () => {
     const res = await be.find({ query: 'orbitAlpha', cwd: root, traversal: 'auto' });
     assert.ok(res.matches.some((m) => m.name === 'orbitAlpha'), 'indexed child still surfaces');
     assert.notEqual(res.freshness_badge.status, 'missing_index', 'aggregate is NOT missing when some stores are indexed');
-    assert.notEqual(res.freshness_badge.coarse, 'missing');
+    assert.notEqual(res.freshness_badge.freshness, 'missing');
     assert.deepEqual(res.freshness_badge.details.unindexed_projects, ['core_services/app_b'], 'the unindexed child is reported');
   });
 
@@ -183,7 +183,7 @@ describe('pln#631 root-aggregated find (traversal)', () => {
     // Query with an injected reader returning a DIFFERENT current HEAD.
     const be2 = new JsonlBackend({ gitHeadReader: () => 'NEWSHA111' });
     const res = await be2.find({ query: 'craterBeta', cwd: root, traversal: 'auto' });
-    assert.equal(res.freshness_badge.coarse, 'stale', 'a lagging child drags the coarse rollup to stale');
+    assert.equal(res.freshness_badge.freshness, 'stale', 'a lagging child drags the coarse rollup to stale');
     assert.equal(
       (res.freshness_badge.details.per_project as Record<string, string>)['core_services/app_b'],
       'stale_git_head',

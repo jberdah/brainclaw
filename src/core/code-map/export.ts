@@ -3,7 +3,7 @@
  * model; it never takes a second, potentially different graph traversal.
  */
 import path from 'node:path';
-import { withCoarse } from './freshness.js';
+import { withFreshness } from './freshness.js';
 import { listShards, readManifest } from './store.js';
 import type { QueryContext } from './query.js';
 import type { CodeEdge, CodeNode, FreshnessBadge, Span } from './types.js';
@@ -202,12 +202,12 @@ export function exportSubgraph(targetInput: string, options: CodeGraphExportOpti
     min_confidence: clampConfidence(options?.minConfidence),
   };
   const manifest = readManifest(ctx.cwd, ctx.preferredDirName);
-  const missing = withCoarse({ status: 'missing_index', details: { hint: 'run refresh' } });
+  const missing = withFreshness({ status: 'missing_index', details: { hint: 'run refresh' } });
   if (!manifest || manifest.freshness.status === 'missing_index' || !target) return emptyOutput(target, targetKind, limits, missing, format);
 
   const targetPath = targetKind === 'file' ? normalizeFileTarget(target, manifest.project_root) : null;
   if (targetKind === 'file' && !targetPath) {
-    return emptyOutput(target, targetKind, limits, withCoarse({
+    return emptyOutput(target, targetKind, limits, withFreshness({
       status: manifest.freshness.status, details: { invalid_target: 'file path must be inside the indexed project' },
     }), format);
   }
@@ -263,7 +263,7 @@ export function exportSubgraph(targetInput: string, options: CodeGraphExportOpti
     nodes: [...selected].map((id) => nodes.get(id)).filter((node): node is CodeNode => node !== undefined).sort(compareNodes).map(graphNode),
     edges: [...selectedEdges.values()].sort(compareEdges).map(graphEdge),
     limits, truncated: { roots: rootsTruncated, nodes: nodesTruncated, edges: edgesTruncated, depth: depthTruncated },
-    freshness_badge: withCoarse({ status: manifest.freshness.status,
+    freshness_badge: withFreshness({ status: manifest.freshness.status,
       details: { stale_file_count: manifest.freshness.stale_file_count, partial_reason: manifest.freshness.partial_reason } }),
   };
   return format === 'mermaid' ? { ...graph, format, mermaid: toMermaid(graph) } : { ...graph, format };

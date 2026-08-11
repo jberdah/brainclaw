@@ -104,13 +104,13 @@ describe('code-map freshness (unit)', () => {
       'stale_git_head',
       'distinct reason — NOT stale_changed_files (no confirmed per-file drift)',
     );
-    assert.deepEqual(out.details.git_head_changed, { index_head: 'aaa', current_head: 'bbb' });
+    assert.deepEqual((out.details.index as { git_head_changed: unknown }).git_head_changed, { index_head: 'aaa', current_head: 'bbb' });
   });
 
   it('applyGitHeadDrift is a no-op when heads match', () => {
     const out = applyGitHeadDrift({ status: 'fresh', details: { keep: 1 } }, 'aaa', 'aaa');
     assert.equal(out.status, 'fresh');
-    assert.equal(out.details.git_head_changed, undefined);
+    assert.equal((out.details.index as { git_head_changed: unknown }).git_head_changed, null);
     assert.equal(out.details.keep, 1);
   });
 
@@ -123,8 +123,8 @@ describe('code-map freshness (unit)', () => {
   it('applyGitHeadDrift keeps a non-fresh status but records the cause', () => {
     const out = applyGitHeadDrift({ status: 'partial', details: { partial_reason: 'x' } }, 'aaa', 'bbb');
     assert.equal(out.status, 'partial', 'partial already signals refresh — not overwritten');
-    assert.deepEqual(out.details.git_head_changed, { index_head: 'aaa', current_head: 'bbb' });
-    assert.equal(out.details.partial_reason, 'x');
+    assert.deepEqual((out.details.index as { git_head_changed: unknown }).git_head_changed, { index_head: 'aaa', current_head: 'bbb' });
+    assert.equal((out.details.index as { partial_reason: unknown }).partial_reason, 'x');
   });
 
   it('applyGitHeadDrift does not escalate missing_index', () => {
@@ -251,8 +251,8 @@ describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
     assert.equal(status.freshness_badge.status, 'stale_git_head');
     // distinct from stale_changed_files: no confirmed per-file drift, so the count
     // stays 0 and is no longer internally contradictory (review finding #1).
-    assert.equal(status.freshness_badge.details.stale_file_count, 0);
-    assert.deepEqual(status.freshness_badge.details.git_head_changed, {
+    assert.equal((status.freshness_badge.details.index as { stale_file_count: number }).stale_file_count, 0);
+    assert.deepEqual((status.freshness_badge.details.index as { git_head_changed: unknown }).git_head_changed, {
       index_head: 'indexcommit',
       current_head: 'currentcommit',
     });
@@ -269,7 +269,7 @@ describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
     const backend = new JsonlBackend({ gitHeadReader: () => 'samecommit' });
     const status = await backend.status({ cwd: root });
     assert.equal(status.freshness_badge.status, 'fresh');
-    assert.equal(status.freshness_badge.details.git_head_changed, undefined);
+    assert.equal((status.freshness_badge.details.index as { git_head_changed: unknown }).git_head_changed, null);
   });
 
   it('status stays fresh for a non-git project (reader returns null)', async () => {
@@ -290,7 +290,7 @@ describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
     const res = await backend.find({ query: 'add', cwd: root });
     assert.ok(res.matches.length > 0, 'still returns the validated match');
     assert.equal(res.freshness_badge.status, 'stale_git_head');
-    assert.deepEqual(res.freshness_badge.details.git_head_changed, {
+    assert.deepEqual((res.freshness_badge.details.index as { git_head_changed: unknown }).git_head_changed, {
       index_head: 'idx',
       current_head: 'cur',
     });
@@ -305,7 +305,7 @@ describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
     const backend = new JsonlBackend({ gitHeadReader: () => 'cur' });
     const res = await backend.brief({ target: 'add', cwd: root });
     assert.equal(res.freshness_badge.status, 'stale_git_head');
-    assert.deepEqual(res.freshness_badge.details.git_head_changed, {
+    assert.deepEqual((res.freshness_badge.details.index as { git_head_changed: unknown }).git_head_changed, {
       index_head: 'idx',
       current_head: 'cur',
     });
@@ -344,7 +344,7 @@ describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
       'real `git rev-parse HEAD` detects the HEAD move',
     );
     assert.equal(
-      (drifted.freshness_badge.details.git_head_changed as { index_head: string }).index_head,
+      ((drifted.freshness_badge.details.index as { git_head_changed: { index_head: string } }).git_head_changed).index_head,
       indexHead,
     );
   });

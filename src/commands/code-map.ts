@@ -44,10 +44,7 @@ function badgeLine(badge: FreshnessBadge): string {
   const detail = detailKeys.length
     ? ` (${detailKeys.map((k) => `${k}=${JSON.stringify((badge.details as Record<string, unknown>)[k])}`).join(', ')})`
     : '';
-  // pln#601 — lead with the coarse rollup (uniform across all read surfaces), then
-  // the precise status + details. `coarse` may be absent on legacy/hand-built badges.
-  const coarse = badge.coarse ? `${badge.coarse} · ` : '';
-  return `Freshness: ${coarse}${badge.status}${detail}`;
+  return `Freshness: ${badge.freshness}${detail}`;
 }
 
 export async function runCodeMap(

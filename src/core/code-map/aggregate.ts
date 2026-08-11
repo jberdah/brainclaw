@@ -26,7 +26,7 @@ import path from 'node:path';
 import { loadConfig } from '../config.js';
 import { listNestedProjects } from './cascade.js';
 import { readManifest, readImportsIndex } from './store.js';
-import { coarseFreshness, applyGitHeadDrift } from './freshness.js';
+import { makeFreshnessBadge, applyGitHeadDrift, type SpotCheckDetails } from './freshness.js';
 import {
   findInStore,
   briefInStore,
@@ -263,23 +263,12 @@ interface PerStoreBadge {
 function mergeBadges(perStore: PerStoreBadge[]): FreshnessBadge {
   const total = perStore.length;
   const indexed = perStore.filter((p) => p.hasIndex);
-  const unindexed = perStore
-    .filter((p) => !p.hasIndex)
-    .map((p) => p.ref.relPath || '.')
-    .sort();
+  const unindexed = perStore.filter((p) => !p.hasIndex).map((p) => p.ref.relPath || '.').sort();
 
   if (indexed.length === 0) {
-    return {
-      status: 'missing_index',
-      coarse: 'missing',
-      details: {
-        traversal: 'workspace',
-        projects_indexed: 0,
-        projects_total: total,
-        unindexed_projects: unindexed,
-        hint: 'run refresh --cascade',
-      },
-    };
+    return makeFreshnessBadge('missing_index', {
+      extra: { traversal: 'workspace', projects_indexed: 0, projects_total: total, unindexed_projects: unindexed, hint: 'run refresh --cascade' },
+    });
   }
 
   let worst: FreshnessStatus = indexed[0]!.badge.status;
@@ -295,30 +284,37 @@ function mergeBadges(perStore: PerStoreBadge[]): FreshnessBadge {
   };
   if (unindexed.length) details.unindexed_projects = unindexed;
 
-  // Merge the per-store detail path-sets, prefixing each with its store's
-  // workspace-relative dir so a bare `src/index.ts` isn't ambiguous across packages.
-  const prefixMerge = (key: string): string[] => {
+  const prefixMerge = (key: keyof SpotCheckDetails): string[] => {
     const out: string[] = [];
     for (const p of indexed) {
-      const arr = p.badge.details?.[key];
+      const spot = p.badge.details.spot_check as Partial<SpotCheckDetails> | undefined;
+      const arr = spot?.[key];
       if (Array.isArray(arr)) {
         for (const f of arr) out.push(p.ref.relPath ? `${p.ref.relPath}/${String(f)}` : String(f));
       }
     }
     return out.sort();
   };
-  for (const key of ['stale_changed_files', 'deleted_files', 'unchecked_files']) {
-    const merged = prefixMerge(key);
-    if (merged.length) details[key] = merged;
-  }
-  const partialStore = indexed.find((p) => p.badge.status === 'partial');
-  if (partialStore) {
-    details.partial_reason = partialStore.badge.details?.partial_reason ?? 'lazy_check_budget_exhausted';
-  }
-
-  return { status: worst, coarse: coarseFreshness(worst), details };
+  const spotChecks = indexed.map((p) => p.badge.details.spot_check as Partial<SpotCheckDetails> | undefined);
+  const spotStatus = spotChecks.some((spot) => spot?.status === 'partial')
+    ? 'partial'
+    : spotChecks.some((spot) => spot?.status === 'stale')
+      ? 'stale'
+      : spotChecks.some((spot) => spot?.status === 'fresh') ? 'fresh' : 'not_run';
+  const partialSpot = spotChecks.find((spot) => spot?.status === 'partial');
+  return makeFreshnessBadge(worst, {
+    spotCheck: {
+      status: spotStatus,
+      checked_files: spotChecks.reduce((sum, spot) => sum + (spot?.checked_files ?? 0), 0),
+      stale_changed_files: prefixMerge('stale_changed_files'),
+      deleted_files: prefixMerge('deleted_files'),
+      unchecked_files: prefixMerge('unchecked_files'),
+      budget_exhausted: spotChecks.some((spot) => spot?.budget_exhausted === true),
+      partial_reason: partialSpot?.partial_reason ?? null,
+    },
+    extra: details,
+  });
 }
-
 /**
  * Aggregated find across a resolved multi-project workspace. Shares ONE lazy budget
  * across stores; dedupes on (project_id, node_id); rewrites paths workspace-relative;

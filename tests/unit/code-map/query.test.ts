@@ -213,7 +213,7 @@ describe('code-map P1d brief graph signals (resolution surfaced)', () => {
 });
 
 describe('code-map lazy read-path freshness (spec §6.1)', () => {
-  it('detects a modified file (mtime/size + hash) -> stale_changed_files badge', async () => {
+  it('records a modified candidate in spot_check without changing the index freshness', async () => {
     const root = tmpProject();
     fixture(root);
     await refreshAll(root);
@@ -230,10 +230,10 @@ export default App;
     );
 
     const res = await be.find({ query: 'App', cwd: root });
-    assert.equal(res.freshness_badge.status, 'stale_changed_files', 'modification detected lazily');
-    const details = res.freshness_badge.details as Record<string, unknown>;
+    assert.equal(res.freshness_badge.freshness, 'fresh', 'top-line remains the index state');
+    const details = res.freshness_badge.details as Record<string, Record<string, unknown>>;
     assert.ok(
-      (details.stale_changed_files as string[] | undefined)?.includes('src/app/App.tsx'),
+      (details.spot_check.stale_changed_files as string[] | undefined)?.includes('src/app/App.tsx'),
       'stale file named in badge',
     );
     // the stale shard is not served as a confident match.
@@ -250,10 +250,10 @@ export default App;
 
     const res = await be.find({ query: 'App', cwd: root });
     assert.ok(!res.matches.some((m) => m.path === 'src/app/App.tsx'), 'deleted file excluded');
-    assert.equal(res.freshness_badge.status, 'stale_changed_files');
-    const details = res.freshness_badge.details as Record<string, unknown>;
+    assert.equal(res.freshness_badge.freshness, 'fresh');
+    const details = res.freshness_badge.details as Record<string, Record<string, unknown>>;
     assert.ok(
-      (details.deleted_files as string[] | undefined)?.includes('src/app/App.tsx'),
+      (details.spot_check.deleted_files as string[] | undefined)?.includes('src/app/App.tsx'),
       'deletion flagged in badge',
     );
   });
@@ -273,7 +273,7 @@ export default App;
     fs.writeFileSync(p, mutated, 'utf-8');
 
     const res = await be.find({ query: 'App', cwd: root });
-    assert.equal(res.freshness_badge.status, 'stale_changed_files', 'hash catches same-size edit');
+    assert.equal(res.freshness_badge.freshness, 'fresh', 'top-line remains the index state');
     assert.ok(!res.matches.some((m) => m.path === 'src/app/App.tsx'), 'stale shard excluded');
   });
 
@@ -325,20 +325,20 @@ export default App;
     );
 
     const res = await be.find({ query: 'Big', cwd: root });
-    const details = res.freshness_badge.details as Record<string, unknown>;
+    const details = res.freshness_badge.details as Record<string, Record<string, unknown>>;
     assert.notEqual(
-      details.partial_reason,
+      details.spot_check.partial_reason,
       'lazy_check_budget_exhausted',
       'oversized-unchecked must not be mislabeled as budget exhaustion',
     );
-    assert.notEqual(res.freshness_badge.status, 'partial', 'oversized alone does not force partial');
+    assert.equal(res.freshness_badge.freshness, 'fresh', 'oversized candidate does not change the index signal');
     assert.ok(
-      (details.unchecked_files as string[] | undefined)?.includes('src/big/Big.tsx'),
+      (details.spot_check.unchecked_files as string[] | undefined)?.includes('src/big/Big.tsx'),
       'oversized file still disclosed as unchecked',
     );
   });
 
-  it('exhausting the 32-file lazy budget yields a partial badge', async () => {
+  it('records a partial spot-check when the 32-file lazy budget is exhausted', async () => {
     const root = tmpProject();
     // generate 40 component files that all match the token "Widget", then touch
     // them all on disk so every shard trips the cheap gate and must be hashed.
@@ -365,10 +365,10 @@ export const WidgetThing${i} = () => <div>w${i}</div>;
 
     // a token bucket containing all 40 entries: lowercase "widget" sub-token.
     const res = await be.find({ query: 'Widget', cwd: root, limit: 100 });
-    assert.equal(res.freshness_badge.status, 'partial', 'budget exhaustion -> partial');
-    const details = res.freshness_badge.details as Record<string, unknown>;
-    assert.equal(details.partial_reason, 'lazy_check_budget_exhausted');
-    assert.ok((details.unchecked_files as string[] | undefined)?.length, 'unchecked files listed');
+    assert.equal(res.freshness_badge.freshness, 'fresh', 'budget exhaustion stays in spot_check');
+    const details = res.freshness_badge.details as Record<string, Record<string, unknown>>;
+    assert.equal(details.spot_check.partial_reason, 'lazy_check_budget_exhausted');
+    assert.ok((details.spot_check.unchecked_files as string[] | undefined)?.length, 'unchecked files listed');
   });
 });
 

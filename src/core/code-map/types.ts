@@ -462,22 +462,27 @@ export const CodeLockSchema = z.object({
 export type CodeLock = z.infer<typeof CodeLockSchema>;
 
 /**
- * spec §9 (pln#601) — the COARSE, surface-uniform rollup of the detailed 7-value
- * {@link FreshnessStatus}. find/brief/status/work each expose their own precise
- * status, but an agent wants one consistent top-line signal to decide "trust this
- * or refresh first" without memorizing which `stale_*` variant applies. `coarse`
- * collapses the detail: every `stale_*` → `stale`, `missing_index` → `missing`,
- * `partial`/`fresh` unchanged. Derived (never independently authored) via
- * `coarseFreshness()` so it can never contradict `status`.
+ * The one agent-facing freshness signal. Detailed index causes and per-call
+ * spot-check observations intentionally live under `FreshnessBadge.details`.
  */
 export const CoarseFreshnessSchema = z.enum(['fresh', 'stale', 'partial', 'missing']);
 export type CoarseFreshness = z.infer<typeof CoarseFreshnessSchema>;
 
 /** Freshness badge attached to every agent-facing read response (spec §9). */
 export const FreshnessBadgeSchema = z.object({
+  /**
+   * Stable top-line signal shared by work/status/find/brief. It MUST NOT be
+   * changed by a query's bounded spot-check: that observation belongs in
+   * `details.spot_check`, so an agent never sees incompatible badges for the
+   * same index state.
+   */
+  freshness: CoarseFreshnessSchema,
+  /**
+   * Detailed index classification retained for API compatibility. It describes
+   * the index only (never a query spot-check); new consumers branch on
+   * `freshness` and inspect `details` for the reason.
+   */
   status: FreshnessStatusSchema,
-  /** pln#601 — coarse rollup of `status`, uniform across all read surfaces. */
-  coarse: CoarseFreshnessSchema.optional(),
   details: z.record(z.string(), z.unknown()).default({}),
 });
 export type FreshnessBadge = z.infer<typeof FreshnessBadgeSchema>;

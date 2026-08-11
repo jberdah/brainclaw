@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { readManifest, readShard, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
-import { applyGitHeadDrift, withCoarse } from './freshness.js';
+import { applyGitHeadDrift, withFreshness } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
 import { impact as runImpact, type CodeImpactOutput } from './impact.js';
 import { exportSubgraph, type CodeGraphExportOutput, type CodeGraphExportOptions } from './export.js';
@@ -240,9 +240,9 @@ export interface CodeQueryBackend {
 }
 
 function badge(status: FreshnessStatus, details: Record<string, unknown> = {}): FreshnessBadge {
-  // pln#601 — stamp the coarse rollup at construction so every backend-built badge
-  // (status, missing_index fallbacks, find/brief base) carries it uniformly.
-  return withCoarse({ status, details });
+  // pln#601 — build the uniform freshness envelope for every backend surface
+  // It always includes index and spot-check details.
+  return withFreshness({ status, details });
 }
 /**
  * Convert a user path into the POSIX project-relative identity used by shards.
