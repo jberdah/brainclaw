@@ -11,6 +11,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { getLifecycleStats, type MemoryLifecycleEntity } from '../memory-lifecycle.js';
 import { hashContent } from './extractor.js';
 import { makeFreshnessBadge } from './freshness.js';
 import {
@@ -529,6 +530,28 @@ export interface RelatedMemoryItem {
   tags: string[];
   related_paths: string[];
   /**
+   * Lifecycle and verification metadata copied from the memory record by the
+   * reader. They are deliberately optional: the injectable test seam and
+   * legacy records predate lifecycle tracking.
+   */
+  created_at?: string;
+  last_confirmed_at?: string;
+  last_infirmed_at?: string;
+  confirmation_count?: number;
+  infirmation_count?: number;
+  saved_me_count?: number;
+  misled_me_count?: number;
+  verified_at?: string;
+  verify_cmd?: string;
+  /**
+   * Read-time evidence only (pln#601 amendment). This is never written into a
+   * symbol node, shard, or memory record: source locations in symbol ids move
+   * under refactors, while this response-local join remains safe to recompute.
+   */
+  match_evidence?: RelatedMemoryMatchEvidence;
+  /** A compact, explicit freshness signal for this memory item itself. */
+  memory_freshness?: RelatedMemoryFreshness;
+  /**
    * Renseigne quand `code_brief` a RACCOURCI le texte (pln#598 etape 3).
    *
    * Declare ici plutot que laisse implicite : un champ present a l'execution mais absent
@@ -538,6 +561,45 @@ export interface RelatedMemoryItem {
   text_truncated?: boolean;
   /** Appel EXACT rendant le texte integral. Absent quand rien n'a ete tronque. */
   full_text_via?: { tool: string; args: Record<string, unknown> };
+}
+
+export type RelatedMemoryMatchSource =
+  | 'related_path'
+  | 'related_path_basename'
+  | 'path_mention'
+  | 'path_basename_mention'
+  | 'symbol_tag'
+  | 'symbol_text'
+  | 'import_text';
+
+/** Evidence for the response-local memory → target-file-symbol join. */
+export interface RelatedMemoryMatchEvidence {
+  sources: RelatedMemoryMatchSource[];
+  /** Target-file definitions mentioned literally in the memory text. */
+  matched_symbols: string[];
+  /** Named imports of the target file mentioned literally in the memory text. */
+  matched_imports: string[];
+  /** Calibrated, inspectable strength of the strongest evidence, in (0, 1]. */
+  confidence: number;
+}
+
+export type RelatedMemoryFreshnessStatus =
+  | 'fresh'
+  | 'aging'
+  | 'stale'
+  | 'infirmed'
+  | 'never_confirmed'
+  | 'unverified'
+  | 'unknown';
+
+/** Freshness of the recalled memory, separate from Code Map index freshness. */
+export interface RelatedMemoryFreshness {
+  status: RelatedMemoryFreshnessStatus;
+  /** Lifecycle/verification timestamp used to determine the status, if known. */
+  as_of: string | null;
+  age_days: number | null;
+  /** Kept visible for perishable facts that require empirical re-verification. */
+  verified_at: string | null;
 }
 
 /**
@@ -556,6 +618,96 @@ interface ScoredMemory {
   score: number;
 }
 
+const MEMORY_JOIN_MIN_IDENTIFIER_LENGTH = 4;
+const MEMORY_JOIN_STOP_WORDS = new Set([
+  'default', 'module', 'index', 'main', 'test', 'tests', 'spec', 'react', 'node',
+]);
+
+function stableNames(names: string[]): string[] {
+  const byNormalized = new Map<string, string>();
+  for (const raw of names) {
+    const name = raw.trim();
+    const normalized = normIdent(name);
+    if (!normalized || byNormalized.has(normalized)) continue;
+    byNormalized.set(normalized, name);
+  }
+  return [...byNormalized.values()].sort((a, b) => a.localeCompare(b));
+}
+
+/** Avoid joining a prose memory to generic import noise such as `default` or `React`. */
+function memoryJoinTerms(names: string[]): string[] {
+  return stableNames(names).filter((name) => {
+    const normalized = normIdent(name);
+    return normalized.length >= MEMORY_JOIN_MIN_IDENTIFIER_LENGTH
+      && !MEMORY_JOIN_STOP_WORDS.has(normalized)
+      && !isTestHelperSymbol(name);
+  });
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Identifier-aware, case-insensitive text match. The surrounding guards keep
+ * `Auth` from matching `author`, while still matching `ENTITY_REGISTRY` in a
+ * prose trap written as `entity_registry`.
+ */
+function textMentionsIdentifier(text: string, identifier: string): boolean {
+  const escaped = escapeRegExp(identifier);
+  return new RegExp(`(^|[^A-Za-z0-9_$])${escaped}(?=$|[^A-Za-z0-9_$])`, 'i').test(text);
+}
+
+function isLifecycleMemoryKind(kind: string): kind is MemoryLifecycleEntity {
+  return kind === 'decision' || kind === 'constraint' || kind === 'trap';
+}
+
+function validDate(value: string | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Make memory age explicit on the brief response. `verify_cmd` marks a
+ * perishable fact, so its empirical verification wins over the gentler
+ * lifecycle curve: missing verification is `unverified`, and one older than
+ * 30 days is `stale` (the same threshold used by memory anti-staleness).
+ */
+function describeMemoryFreshness(item: RelatedMemoryItem): RelatedMemoryFreshness {
+  const verifiedAt = item.verified_at ?? null;
+  const verificationMs = validDate(item.verified_at);
+  const nowMs = Date.now();
+  if (item.verify_cmd) {
+    if (verificationMs === null) {
+      return { status: 'unverified', as_of: item.created_at ?? null, age_days: null, verified_at: verifiedAt };
+    }
+    const ageDays = Math.max(0, Math.floor((nowMs - verificationMs) / 86_400_000));
+    if (ageDays > 30) return { status: 'stale', as_of: item.verified_at!, age_days: ageDays, verified_at: verifiedAt };
+  }
+
+  if (!isLifecycleMemoryKind(item.kind) || validDate(item.created_at) === null) {
+    return { status: 'unknown', as_of: item.created_at ?? null, age_days: null, verified_at: verifiedAt };
+  }
+  const stats = getLifecycleStats({
+    entity: item.kind,
+    created_at: item.created_at!,
+    last_confirmed_at: item.last_confirmed_at,
+    last_infirmed_at: item.last_infirmed_at,
+    confirmation_count: item.confirmation_count,
+    infirmation_count: item.infirmation_count,
+    saved_me_count: item.saved_me_count,
+    misled_me_count: item.misled_me_count,
+    nowMs,
+  });
+  return {
+    status: stats.classification,
+    as_of: stats.anchor_at,
+    age_days: stats.age_days,
+    verified_at: verifiedAt,
+  };
+}
+
 /**
  * Match memory items to a set of candidate file paths + the query symbol name
  * by (spec §11): related_paths, tags, or a literal file-path mention in the
@@ -565,33 +717,84 @@ export function attachRelatedMemory(
   items: RelatedMemoryItem[],
   paths: string[],
   symbolNames: string[],
+  importNames: string[] = [],
 ): RelatedMemoryItem[] {
   const pathSet = new Set(paths.map((p) => p.replace(/\\/g, '/')));
   const baseNames = new Set(paths.map((p) => path.basename(p)));
   const symLower = new Set(symbolNames.map((s) => s.toLowerCase()));
+  const symbolTerms = memoryJoinTerms(symbolNames);
+  const importTerms = memoryJoinTerms(importNames);
 
   const scored: ScoredMemory[] = [];
   for (const item of items) {
     let score = 0;
+    const sources = new Set<RelatedMemoryMatchSource>();
     // related_paths — strongest signal.
     for (const rp of item.related_paths ?? []) {
       const norm = rp.replace(/\\/g, '/');
-      if (pathSet.has(norm)) score += 5;
-      else if (baseNames.has(path.basename(norm))) score += 3;
+      if (pathSet.has(norm)) {
+        score += 5;
+        sources.add('related_path');
+      } else if (baseNames.has(path.basename(norm))) {
+        score += 3;
+        sources.add('related_path_basename');
+      }
     }
     // literal file-path mention in the memory text.
     const text = item.text ?? '';
     for (const p of pathSet) {
-      if (text.includes(p)) score += 2;
+      if (text.includes(p)) {
+        score += 2;
+        sources.add('path_mention');
+      }
     }
     for (const bn of baseNames) {
-      if (text.includes(bn)) score += 1;
+      if (text.includes(bn)) {
+        score += 1;
+        sources.add('path_basename_mention');
+      }
     }
     // tags matching a symbol name (e.g. tag "App" / "useAuth").
     for (const tag of item.tags ?? []) {
-      if (symLower.has(tag.toLowerCase())) score += 2;
+      if (symLower.has(tag.toLowerCase())) {
+        score += 2;
+        sources.add('symbol_tag');
+      }
     }
-    if (score > 0) scored.push({ item, score });
+    // pln#601 amendment — response-local join from MEMORY TEXT to the names
+    // defined/imported by the brief target. We only admit identifier-shaped,
+    // non-test-helper terms and retain the exact terms as inspectable evidence.
+    const matchedSymbols = symbolTerms.filter((term) => textMentionsIdentifier(text, term));
+    const matchedImports = importTerms.filter((term) => textMentionsIdentifier(text, term));
+    if (matchedSymbols.length > 0) {
+      score += 4 * matchedSymbols.length;
+      sources.add('symbol_text');
+    }
+    if (matchedImports.length > 0) {
+      score += 3 * matchedImports.length;
+      sources.add('import_text');
+    }
+    if (score > 0) {
+      let confidence = 0.6;
+      if (sources.has('related_path')) confidence = 1;
+      else if (sources.has('path_mention')) confidence = 0.95;
+      else if (sources.has('related_path_basename')) confidence = 0.85;
+      else if (sources.has('symbol_text')) confidence = 0.82;
+      else if (sources.has('import_text')) confidence = 0.72;
+      else if (sources.has('symbol_tag')) confidence = 0.65;
+      const evidence: RelatedMemoryMatchEvidence = {
+        sources: [...sources].sort(),
+        matched_symbols: matchedSymbols,
+        matched_imports: matchedImports,
+        confidence,
+      };
+      // Clone: these response annotations must never mutate the records returned
+      // by the memory reader or be persisted into Code Map shards.
+      scored.push({
+        item: { ...item, match_evidence: evidence, memory_freshness: describeMemoryFreshness(item) },
+        score,
+      });
+    }
   }
   scored.sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id));
   return scored.slice(0, RELATED_MEMORY_CAP).map((s) => s.item);
@@ -836,6 +1039,34 @@ function reverseDeps(
   return [...byPath.values()];
 }
 
+/** Terms used for the ephemeral memory-text join for one target file set. */
+interface BriefMemoryTerms {
+  symbolNames: string[];
+  importNames: string[];
+}
+
+function targetMemoryTerms(
+  definingPaths: Set<string>,
+  definingFileIds: Iterable<string>,
+  nodeIndex: Map<string, SymbolIndexEntry>,
+  cwd: string | undefined,
+  preferredDirName: string | undefined,
+): BriefMemoryTerms {
+  const symbols = [...nodeIndex.values()]
+    .filter((entry) => definingPaths.has(entry.path))
+    .map((entry) => entry.name);
+  const imports = new Set<string>();
+  for (const fileId of new Set(definingFileIds)) {
+    const shard = readShard(fileId, cwd, preferredDirName);
+    if (!shard) continue;
+    for (const node of shard.nodes) {
+      if (node.kind !== 'module') continue;
+      for (const imported of node.imported_names) imports.add(imported);
+    }
+  }
+  return { symbolNames: stableNames(symbols), importNames: stableNames([...imports]) };
+}
+
 /**
  * Heuristic: does the brief target denote a file PATH rather than a bare symbol
  * name? A path separator or a supported source extension marks a path target —
@@ -877,6 +1108,9 @@ export interface StoreBriefResult {
   /** Defining symbol entries for the target in this store. */
   defining: SymbolIndexEntry[];
   definingPaths: Set<string>;
+  /** Response-local memory join terms derived from the target files' index data. */
+  memorySymbolNames: string[];
+  memoryImportNames: string[];
   /** How the target resolved here — an aggregation prefers exact/path over fuzzy. */
   matchKind: BriefMatchKind;
   /** Confident ranked reading list (NOT capped). */
@@ -907,6 +1141,8 @@ export function briefInStore(
     return {
       defining: [],
       definingPaths: new Set(),
+      memorySymbolNames: [],
+      memoryImportNames: [],
       matchKind: 'none',
       confident: [],
       base: 'missing_index',
@@ -961,6 +1197,9 @@ export function briefInStore(
     if (ok) confidentDefiningFileIds.set(e.path, e.file_id);
   }
   const nodeIndex = buildNodeIdIndex(symbolsIndex);
+  const memoryTerms = targetMemoryTerms(
+    definingPaths, defining.map((entry) => entry.file_id), nodeIndex, ctx.cwd, ctx.preferredDirName,
+  );
   const fwd = forwardDeps(confidentDefiningFileIds, nodeIndex, ctx.cwd, ctx.preferredDirName);
   const rev = reverseDeps(resolutionIndex, definingPaths, definingByNodeId);
 
@@ -978,7 +1217,18 @@ export function briefInStore(
     confident.push(rf);
   }
 
-  return { defining, definingPaths, matchKind, confident, base, hasIndex: true, emptyRanked: ranked.length === 0, acc };
+  return {
+    defining,
+    definingPaths,
+    memorySymbolNames: memoryTerms.symbolNames,
+    memoryImportNames: memoryTerms.importNames,
+    matchKind,
+    confident,
+    base,
+    hasIndex: true,
+    emptyRanked: ranked.length === 0,
+    acc,
+  };
 }
 
 /**
@@ -988,7 +1238,9 @@ export function briefInStore(
 export function attachMemoryIds(
   capped: Array<{ path: string; reason: string; score: number }>,
   related: RelatedMemoryItem[],
+  targetPaths: ReadonlySet<string> = new Set(),
 ): BriefReadEntry[] {
+  const normalizedTargetPaths = new Set([...targetPaths].map((p) => p.replace(/\\/g, '/')));
   return capped.map((f) => {
     const ids = related
       .filter((m) => {
@@ -998,7 +1250,9 @@ export function attachMemoryIds(
           (rp) => rp.replace(/\\/g, '/') === fileNorm || path.basename(rp) === base2,
         );
         const inText = (m.text ?? '').includes(fileNorm) || (m.text ?? '').includes(base2);
-        return inPaths || inText;
+        const symbolTextMatch = (m.match_evidence?.matched_symbols.length ?? 0) > 0
+          || (m.match_evidence?.matched_imports.length ?? 0) > 0;
+        return inPaths || inText || (normalizedTargetPaths.has(fileNorm) && symbolTextMatch);
       })
       .map((m) => m.id);
     return { path: f.path, reason: f.reason, score: f.score, related_memory_ids: ids };
@@ -1029,10 +1283,9 @@ export function brief(
 
   // Related memory (spec §11): match by the candidate paths + symbol names.
   const candidatePaths = capped.map((f) => f.path);
-  const symbolNames = [...new Set(r.defining.map((e) => e.name))];
-  if (symbolNames.length === 0) symbolNames.push(target);
-  const related = attachRelatedMemory(memoryReader(ctx), candidatePaths, symbolNames);
-  const suggested = attachMemoryIds(capped, related);
+  const symbolNames = r.memorySymbolNames.length > 0 ? r.memorySymbolNames : [target];
+  const related = attachRelatedMemory(memoryReader(ctx), candidatePaths, symbolNames, r.memoryImportNames);
+  const suggested = attachMemoryIds(capped, related, r.definingPaths);
 
   const badge = deriveBadge(r.base, acc, checker.exhausted, capped.length > 0, r.emptyRanked);
   return { target, suggested_files_to_read: suggested, related_memory: related, freshness_badge: badge };

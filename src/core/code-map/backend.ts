@@ -13,7 +13,7 @@ import path from 'node:path';
 import { readManifest, readShard, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift, withFreshness } from './freshness.js';
-import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
+import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext, type RelatedMemoryItem } from './query.js';
 import { impact as runImpact, type CodeImpactOutput } from './impact.js';
 import { exportSubgraph, type CodeGraphExportOutput, type CodeGraphExportOptions } from './export.js';
 import { fileId } from './ids.js';
@@ -166,13 +166,8 @@ export interface CodeBriefReadEntry {
   local?: boolean;
 }
 
-export interface CodeBriefRelatedMemory {
-  id: string;
-  kind: string;
-  text: string;
-  tags: string[];
-  related_paths: string[];
-}
+/** Keeps response-visible join evidence/freshness in sync with `code_brief`. */
+export type CodeBriefRelatedMemory = RelatedMemoryItem;
 
 export interface CodeBrief {
   target: string;
