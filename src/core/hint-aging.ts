@@ -181,7 +181,10 @@ export function ageStaleWarnings(
       const overflow = ids.length - shown.length;
       return `${ids.length} ${entity}${ids.length === 1 ? '' : 's'}: ${shown.join(', ')}${overflow > 0 ? ` +${overflow} more` : ''}`;
     });
-    aggregate = `${folded.length} stale item${folded.length === 1 ? '' : 's'} you've already been offered (${parts.join('; ')}) — bclaw_get each id to review, or bclaw_transition to retire.`;
+    // trp_dc9ca61e — do not recommend bclaw_transition for runtime_notes: they
+    // have no lifecycle and the call errors. bclaw_remove (archive by default)
+    // is their retirement path.
+    aggregate = `${folded.length} stale item${folded.length === 1 ? '' : 's'} you've already been offered (${parts.join('; ')}) — bclaw_get each id to review; retire with bclaw_transition, or bclaw_remove for runtime_notes (no lifecycle).`;
   }
 
   return { warnings: detail, aggregate, served_ids, folded_ids };

@@ -615,6 +615,47 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
     });
   });
 
+  describe('runtime_note remove contract (trp_dc9ca61e)', () => {
+    it('default remove ARCHIVES: the raw record is parked under gc-backups before the file is unlinked', async () => {
+      const fs = (await import('node:fs')).default;
+      const path = (await import('node:path')).default;
+      const created = createEntity('runtime_note', {
+        agent: 'testuser',
+        text: 'note to archive',
+      }, workspace.dir);
+
+      const result = removeEntity('runtime_note', created.id, workspace.dir);
+
+      assert.equal(result.archived, true);
+      assert.equal(result.purged, false);
+      const backupDir = path.join(workspace.dir, '.brainclaw', 'gc-backups');
+      const backups = fs.readdirSync(backupDir).filter((f: string) => f.startsWith('removed-runtime-notes-'));
+      assert.equal(backups.length, 1);
+      const parked = fs.readFileSync(path.join(backupDir, backups[0]), 'utf-8');
+      assert.ok(parked.includes(created.id), 'parked JSONL must contain the removed note');
+      assert.ok(parked.includes('"_removal_type":"bclaw_remove"'));
+    });
+
+    it('purge:true hard-deletes without parking', async () => {
+      const fs = (await import('node:fs')).default;
+      const path = (await import('node:path')).default;
+      const created = createEntity('runtime_note', {
+        agent: 'testuser',
+        text: 'note to purge',
+      }, workspace.dir);
+
+      const result = removeEntity('runtime_note', created.id, workspace.dir, true);
+
+      assert.equal(result.archived, false);
+      assert.equal(result.purged, true);
+      const backupDir = path.join(workspace.dir, '.brainclaw', 'gc-backups');
+      const backups = fs.existsSync(backupDir)
+        ? fs.readdirSync(backupDir).filter((f: string) => f.startsWith('removed-runtime-notes-'))
+        : [];
+      assert.equal(backups.length, 0);
+    });
+  });
+
   describe('transition guardrails', () => {
     it('rejects transition on stateless entity', () => {
       const created = createEntity('runtime_note', {
