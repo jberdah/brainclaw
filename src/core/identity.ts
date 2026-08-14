@@ -127,7 +127,7 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
   // Multiple parallel agents can have the same agent name/user in one repo;
   // a live different PID is a different agent instance, not our session.
   if (fs.existsSync(dir) && currentAgent) {
-    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+    const files = listCurrentSessionFiles(dir);
     const legacyPidlessCandidates: CurrentSessionState[] = [];
 
     for (const file of files) {
@@ -196,7 +196,7 @@ export function loadAllSessions(cwd?: string): CurrentSessionState[] {
   const dir = sessionsDir(cwd);
   if (!fs.existsSync(dir)) return [];
 
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  const files = listCurrentSessionFiles(dir);
   const sessions: CurrentSessionState[] = [];
   for (const file of files) {
     try {
@@ -259,7 +259,7 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
   const now = Date.now();
   let removed = 0;
 
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  const files = listCurrentSessionFiles(dir);
   for (const file of files) {
     try {
       const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
@@ -283,6 +283,17 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
 
 function sessionsDir(cwd?: string): string {
   return path.join(memoryDir(cwd), SESSIONS_DIR);
+}
+
+/**
+ * pln#670 — current_session scanners must be type-strict: session_snapshot
+ * records use the `<id>.snapshot.json` suffix and can share a directory with
+ * current_session records. Without this exclusion, gcStaleSessions would
+ * delete a stray snapshot as "unparseable" and loadCurrentSession could adopt
+ * one as a session candidate.
+ */
+function listCurrentSessionFiles(dir: string): string[] {
+  return fs.readdirSync(dir).filter(f => f.endsWith('.json') && !f.endsWith('.snapshot.json'));
 }
 
 function sessionFilePath(sessionId: string, cwd?: string): string {

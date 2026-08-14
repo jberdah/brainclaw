@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { memoryExists, resolveEntityDir } from '../core/io.js';
+import { memoryExists, resolveEntityDir, sessionSnapshotRecordPaths } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, resolveCurrentModel, resolveOrAutoRegisterAgentIdentity } from '../core/agent-registry.js';
@@ -27,12 +27,48 @@ import { maybeCreateCheckpoint } from '../core/events/checkpoint.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
 import { materializeFederationSignal } from '../core/federation-materialize.js';
 
-function sessionsDir(cwd?: string): string {
-  return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
+/**
+ * pln#670 — snapshot writes always target the canonical directory ('write' mode).
+ * The previous 'read'-mode resolution meant a fresh store (no coordination/sessions
+ * yet) landed the snapshot in the legacy dir — the current_session home — where
+ * saveCurrentSession then clobbered it (same `<session_id>.json` name, same id).
+ */
+function sessionSnapshotWriteDir(cwd?: string): string {
+  return resolveEntityDir('sessions', cwd ?? process.cwd(), 'write');
 }
 
 function sessionSnapshotPath(sessionId: string, cwd?: string): string {
-  return path.join(sessionsDir(cwd), `${sessionId}.json`);
+  return path.join(sessionSnapshotWriteDir(cwd), `${sessionId}.snapshot.json`);
+}
+
+/**
+ * pln#670 — lazy migration of pre-split snapshot records: rename `<id>.json` to
+ * `<id>.snapshot.json` in the CANONICAL sessions directory only. The legacy
+ * directory is never scanned — it is the current_session home. Only files that
+ * validate as session_snapshot are touched; anything else is left in place.
+ */
+export function migrateLegacySnapshotNames(cwd?: string): number {
+  const dir = sessionSnapshotWriteDir(cwd);
+  if (!fs.existsSync(dir)) return 0;
+  let renamed = 0;
+  for (const file of fs.readdirSync(dir)) {
+    if (!file.endsWith('.json') || file.endsWith('.snapshot.json')) continue;
+    const from = path.join(dir, file);
+    try {
+      // Discriminate on the RAW file — the migration loader zod-strips unknown
+      // keys, so a current_session record parses as a clean snapshot after it.
+      // `last_seen_at` only exists on current_session: never rename those.
+      const raw = JSON.parse(fs.readFileSync(from, 'utf-8')) as { last_seen_at?: unknown };
+      if (typeof raw.last_seen_at === 'string') continue;
+      SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', from).document);
+      const to = path.join(dir, `${file.slice(0, -'.json'.length)}.snapshot.json`);
+      if (!fs.existsSync(to)) {
+        fs.renameSync(from, to);
+        renamed++;
+      }
+    } catch { /* not a session_snapshot — leave it alone */ }
+  }
+  return renamed;
 }
 
 export interface SessionStartOptions {
@@ -219,7 +255,7 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
   };
 
   // Persist snapshot
-  const dir = sessionsDir(options.cwd);
+  const dir = sessionSnapshotWriteDir(options.cwd);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   saveVersionedJsonFile('session_snapshot', sessionSnapshotPath(snapshot.session_id, options.cwd), SessionSnapshotSchema.parse(snapshot));
   // Resolve git branch and worktree for session tracking
@@ -281,6 +317,14 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
       }
       if (lines.length > 0) inventoryAdvisory = lines;
     } catch { /* non-fatal — inventory scan failure should not block session start */ }
+
+    // pln#670 — lazy rename of pre-split snapshot records to the type-suffixed
+    // name. Session-start full maintenance is the natural sweep point (no daemon,
+    // feedback_lazy_reconcile_pattern); dual-read keeps unrenamed records readable
+    // in the meantime.
+    try {
+      migrateLegacySnapshotNames(options.cwd);
+    } catch { /* non-fatal — name migration must never block session start */ }
 
     // pln#564 step B — cap the runtime-note tree on session start (no LLM gate,
     // unlike the compaction-phase archiveSessionNotes). Keeps the newest N
@@ -436,11 +480,22 @@ function isPidAlive(pid: number): boolean {
 }
 
 export function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot | undefined {
-  const p = sessionSnapshotPath(sessionId, cwd);
-  if (!fs.existsSync(p)) return undefined;
-  try {
-    return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', p).document);
-  } catch {
-    return undefined;
+  // pln#670 — probe the type-suffixed name first, then the pre-split `<id>.json`
+  // layouts. SessionSnapshotSchema is non-strict, so a current_session record for
+  // the same id would parse too (zod strips unknown keys) — the negative
+  // discriminant is `last_seen_at`, which only current_session carries.
+  for (const p of sessionSnapshotRecordPaths(sessionId, cwd)) {
+    if (!fs.existsSync(p)) continue;
+    try {
+      // Discriminate on the RAW file: the migration loader zod-strips unknown
+      // keys, so a current_session record would come back looking like a clean
+      // snapshot. `last_seen_at` only exists on current_session.
+      const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as { last_seen_at?: unknown };
+      if (typeof raw.last_seen_at === 'string') continue;
+      return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', p).document);
+    } catch {
+      continue;
+    }
   }
+  return undefined;
 }
