@@ -173,6 +173,57 @@ describe('session record namespace separation (pln#670)', () => {
     assert.equal(loadSessionSnapshot('sess_alias', workspace.dir)?.session_id, 'sess_alias');
   });
 
+  it('never overwrites, adopts, or clears a snapshot through a suffix-colliding current-session id (codex round 2)', () => {
+    const snapshotPath = path.join(legacySessionsDir(), 'sess_protected.snapshot.json');
+    writeSnapshotFixture(snapshotPath, 'sess_protected');
+    const original = fs.readFileSync(snapshotPath, 'utf-8');
+    const now = new Date().toISOString();
+
+    // `sess_protected.snapshot` would construct the same filename. A write
+    // must reject that current-session id rather than clobbering the snapshot.
+    assert.throws(() => saveCurrentSession({
+      schema_version: 2,
+      session_id: 'sess_protected.snapshot',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+    }, workspace.dir), /reserved for session_snapshot/);
+    assert.equal(fs.readFileSync(snapshotPath, 'utf-8'), original, 'current-session write must not overwrite a snapshot');
+
+    // The colliding lookup must not adopt the DIFFERENT snapshot identity
+    // (`sess_protected.snapshot` probes sess_protected's snapshot file).
+    assert.equal(loadSessionSnapshot('sess_protected.snapshot', workspace.dir), undefined);
+
+    // Nor may a clear request use the constructed path to delete it.
+    clearCurrentSession(workspace.dir, 'sess_protected.snapshot');
+    assert.equal(fs.readFileSync(snapshotPath, 'utf-8'), original, 'current-session clear must not delete a snapshot');
+  });
+
+  it('preserves pre-split snapshots parked as plain <id>.json while current-session writes and GC inspect the legacy directory (codex round 2)', () => {
+    // Artifact of the original 'read'-mode write bug: a genuine snapshot
+    // stored as sess_legacy_guard.json INSIDE the current_session directory.
+    const snapshotPath = path.join(legacySessionsDir(), 'sess_legacy_guard.json');
+    writeSnapshotFixture(snapshotPath, 'sess_legacy_guard');
+    const original = fs.readFileSync(snapshotPath, 'utf-8');
+    const now = new Date().toISOString();
+
+    assert.throws(() => saveCurrentSession({
+      schema_version: 2,
+      session_id: 'sess_legacy_guard',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+    }, workspace.dir), /Refusing to overwrite non-current_session/);
+    assert.equal(fs.readFileSync(snapshotPath, 'utf-8'), original, 'current-session write must preserve a pre-split snapshot');
+
+    assert.equal(gcStaleSessions(workspace.dir, '4h'), 0);
+    assert.equal(fs.readFileSync(snapshotPath, 'utf-8'), original, 'GC must preserve a pre-split snapshot');
+  });
+
   it('treats last_seen_at PRESENCE (any value) as the current_session discriminant (codex P1)', () => {
     // last_seen_at: null passes SessionSnapshotSchema after zod strips unknown
     // keys — the sweep must not rename it, the loader must not adopt it.

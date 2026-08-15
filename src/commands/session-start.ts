@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { memoryExists, resolveEntityDir, sessionSnapshotRecordPaths } from '../core/io.js';
+import { isSessionSnapshotRecordFilename, memoryExists, resolveEntityDir, sessionSnapshotRecordPaths } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, resolveCurrentModel, resolveOrAutoRegisterAgentIdentity } from '../core/agent-registry.js';
@@ -55,8 +55,7 @@ export function migrateLegacySnapshotNames(cwd?: string): number {
     // Case-insensitive suffix checks (codex review P1): Windows filesystems
     // match names case-insensitively — an upper-cased `.SNAPSHOT.json` is the
     // same record a lower-case probe reads, and must not be re-suffixed.
-    const lower = file.toLowerCase();
-    if (!lower.endsWith('.json') || lower.endsWith('.snapshot.json')) continue;
+    if (!file.toLowerCase().endsWith('.json') || isSessionSnapshotRecordFilename(file)) continue;
     const from = path.join(dir, file);
     try {
       // Discriminate on the RAW file — the migration loader zod-strips unknown
@@ -499,7 +498,12 @@ export function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSna
       // carrying `last_seen_at: null` must be rejected too.
       const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as Record<string, unknown>;
       if (Object.hasOwn(raw, 'last_seen_at')) continue;
-      return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', p).document);
+      const snapshot = SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', p).document);
+      // The filename is not a type-safe identity boundary by itself (codex
+      // review): querying `sess_x.snapshot` also constructs `sess_x.snapshot.json`
+      // — the snapshot of sess_x. Only return a payload that names the caller's id.
+      if (snapshot.session_id !== sessionId) continue;
+      return snapshot;
     } catch {
       continue;
     }

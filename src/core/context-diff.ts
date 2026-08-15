@@ -108,7 +108,11 @@ function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot |
       // snapshot (richer: context_target, git_sha) still wins when both exist.
       // Contrast with session-start's loadSessionSnapshot, which must stay
       // strict — its consumers treat the record as a genuine snapshot.
-      return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', snapshotPath).document);
+      const snapshot = SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', snapshotPath).document);
+      // A suffix-bearing lookup can construct another snapshot's path (codex
+      // review). Its started_at is useful only when the stored identity matches.
+      if (snapshot.session_id !== sessionId) continue;
+      return snapshot;
     } catch {
       // An unparseable record in one layout must not mask a good one in the other.
       continue;

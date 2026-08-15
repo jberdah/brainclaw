@@ -145,6 +145,18 @@ export function entityRecordPaths(subdir: string, id: string, cwd?: string, pref
   return entityRecordDirs(subdir, cwd ?? process.cwd(), preferredDirName).map((d) => path.join(d, `${id}.json`));
 }
 
+export const SESSION_SNAPSHOT_FILENAME_SUFFIX = '.snapshot.json';
+
+/**
+ * Filesystem type discriminator for session snapshots (codex review, pln#670).
+ * Case-fold before the suffix comparison because default Windows filesystems
+ * are case-insensitive: `X.SNAPSHOT.json` IS the path a lower-case probe
+ * resolves, and every suffix decision must agree on its type.
+ */
+export function isSessionSnapshotRecordFilename(filename: string): boolean {
+  return filename.toLowerCase().endsWith(SESSION_SNAPSHOT_FILENAME_SUFFIX);
+}
+
 /**
  * EVERY path a session_snapshot record for `sessionId` can occupy, canonical first.
  *
