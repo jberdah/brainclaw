@@ -88,6 +88,29 @@ export function runtimeNotePath(note: RuntimeNote, cwd?: string): string {
     : path.join(hostAgentDir(visibility, hostId, note.agent, cwd), `${note.id}.json`);
 }
 
+/**
+ * Park one runtime note's raw record under `.brainclaw/gc-backups/` — the same
+ * park-don't-delete net the retention sweeps use (trp_dc9ca61e). Daily-bucketed
+ * JSONL so removals do not explode into one file per note. Returns the backup
+ * path, or undefined when the source record cannot be read.
+ */
+export function parkRuntimeNoteBackup(note: RuntimeNote, cwd?: string): string | undefined {
+  try {
+    const sourcePath = runtimeNotePath(note, cwd);
+    const content = fs.readFileSync(sourcePath, 'utf-8');
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    parsed._removed_at = new Date().toISOString();
+    parsed._removal_type = 'bclaw_remove';
+    const day = new Date().toISOString().slice(0, 10);
+    const backupPath = path.join(cwd ?? process.cwd(), '.brainclaw', 'gc-backups', `removed-runtime-notes-${day}.jsonl`);
+    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+    fs.appendFileSync(backupPath, JSON.stringify(parsed) + '\n', 'utf-8');
+    return backupPath;
+  } catch {
+    return undefined;
+  }
+}
+
 export function deleteRuntimeNote(note: RuntimeNote, cwd?: string): boolean {
   return mutate({ cwd }, () => {
     const filepath = runtimeNotePath(note, cwd);

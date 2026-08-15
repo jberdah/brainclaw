@@ -52,6 +52,7 @@ import { isObserverMode } from './observer-mode.js';
 import {
   deleteRuntimeNote,
   listRuntimeNotes,
+  parkRuntimeNoteBackup,
   saveRuntimeNote,
 } from './runtime.js';
 import {
@@ -1061,9 +1062,21 @@ export function removeEntity(
       const notes = listRuntimeNotes(undefined, cwd);
       const note = notes.find((n) => n.id === id);
       if (!note) throw new EntityNotFoundError(name, id);
+      // trp_dc9ca61e — the tool contract says "archives by default", but this
+      // path hard-deleted regardless of `purge` (runtime_note has no lifecycle,
+      // so there was no soft state to land in). Default remove now parks the
+      // raw record under gc-backups — the same net the retention sweeps use —
+      // and fails CLOSED when the park is impossible: silently downgrading an
+      // archive into a hard-delete is the defect being fixed.
+      if (!purge) {
+        const backupPath = parkRuntimeNoteBackup(note, cwd);
+        if (!backupPath) {
+          throw new Error(`runtime_note '${id}' could not be archived to gc-backups; pass purge:true to hard-delete`);
+        }
+      }
       const ok = deleteRuntimeNote(note, cwd);
       if (!ok) throw new EntityNotFoundError(name, id);
-      return { entity: name, id, archived: false, purged: true };
+      return { entity: name, id, archived: !purge, purged: purge };
     }
     case 'candidate': {
       // Remove = archive to rejected. `purge` would delete the file; not exposed yet.
