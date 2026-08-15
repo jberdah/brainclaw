@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { startSession, loadSessionSnapshot, migrateLegacySnapshotNames } from '../../src/commands/session-start.js';
-import { loadCurrentSession, loadAllSessions, saveCurrentSession, gcStaleSessions } from '../../src/core/identity.js';
+import { loadCurrentSession, loadAllSessions, saveCurrentSession, gcStaleSessions, loadSessionById, clearCurrentSession } from '../../src/core/identity.js';
 import { sessionSnapshotRecordPaths } from '../../src/core/io.js';
 import { saveVersionedJsonFile } from '../../src/core/migration.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../../src/core/schema.js';
@@ -146,6 +146,64 @@ describe('session record namespace separation (pln#670)', () => {
     assert.ok(!fs.existsSync(path.join(canonicalSessionsDir(), 'sess_impostor.snapshot.json')));
     // Renamed records stay readable through the primary probe.
     assert.equal(loadSessionSnapshot('sess_old_a', workspace.dir)?.session_id, 'sess_old_a');
+  });
+
+  it('rejects the ".snapshot" session-id alias everywhere it could collide with a snapshot record (codex P1)', () => {
+    // A current_session id of "sess_alias.snapshot" would produce
+    // "sess_alias.snapshot.json" — the snapshot filename of session sess_alias.
+    const snapshotFile = path.join(legacySessionsDir(), 'sess_alias.snapshot.json');
+    writeSnapshotFixture(snapshotFile, 'sess_alias');
+
+    const now = new Date().toISOString();
+    assert.throws(() => saveCurrentSession({
+      schema_version: 2,
+      session_id: 'sess_alias.snapshot',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+      pid: process.pid,
+    }, workspace.dir), /reserved/);
+
+    // clearCurrentSession with the alias id must be a no-op, never an unlink of the snapshot.
+    clearCurrentSession(workspace.dir, 'sess_alias.snapshot');
+    assert.ok(fs.existsSync(snapshotFile), 'snapshot record must survive the alias clear');
+    assert.equal(loadSessionById('sess_alias.snapshot', workspace.dir), undefined);
+    assert.equal(loadSessionSnapshot('sess_alias', workspace.dir)?.session_id, 'sess_alias');
+  });
+
+  it('treats last_seen_at PRESENCE (any value) as the current_session discriminant (codex P1)', () => {
+    // last_seen_at: null passes SessionSnapshotSchema after zod strips unknown
+    // keys — the sweep must not rename it, the loader must not adopt it.
+    const now = new Date().toISOString();
+    fs.mkdirSync(canonicalSessionsDir(), { recursive: true });
+    fs.writeFileSync(
+      path.join(canonicalSessionsDir(), 'sess_nullseen.json'),
+      JSON.stringify({ schema_version: 2, session_id: 'sess_nullseen', agent: 'x', started_at: now, last_seen_at: null }),
+    );
+
+    const renamed = migrateLegacySnapshotNames(workspace.dir);
+
+    assert.equal(renamed, 0);
+    assert.ok(fs.existsSync(path.join(canonicalSessionsDir(), 'sess_nullseen.json')), 'record must stay in place');
+    assert.ok(!fs.existsSync(path.join(canonicalSessionsDir(), 'sess_nullseen.snapshot.json')));
+    assert.equal(loadSessionSnapshot('sess_nullseen', workspace.dir), undefined);
+  });
+
+  it('snapshot-suffix filtering is case-insensitive: gc spares and the sweep never re-suffixes .SNAPSHOT.json (codex P1)', () => {
+    // Windows filesystems match names case-insensitively: X.SNAPSHOT.json IS
+    // the path a lower-case probe resolves. Exclusion must not depend on case.
+    writeSnapshotFixture(path.join(legacySessionsDir(), 'sess_case.SNAPSHOT.json'), 'sess_case');
+    writeSnapshotFixture(path.join(canonicalSessionsDir(), 'sess_case2.SNAPSHOT.json'), 'sess_case2');
+
+    const removed = gcStaleSessions(workspace.dir, '4h');
+    assert.equal(removed, 0, 'gc must not collect the upper-cased snapshot');
+    assert.ok(fs.existsSync(path.join(legacySessionsDir(), 'sess_case.SNAPSHOT.json')));
+
+    const renamed = migrateLegacySnapshotNames(workspace.dir);
+    assert.equal(renamed, 0, 'sweep must not re-suffix an already-suffixed snapshot');
+    assert.ok(!fs.existsSync(path.join(canonicalSessionsDir(), 'sess_case2.SNAPSHOT.snapshot.json')));
   });
 
   it('sessionSnapshotRecordPaths probes the suffixed name before every legacy layout', () => {

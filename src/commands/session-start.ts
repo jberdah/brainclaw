@@ -52,14 +52,20 @@ export function migrateLegacySnapshotNames(cwd?: string): number {
   if (!fs.existsSync(dir)) return 0;
   let renamed = 0;
   for (const file of fs.readdirSync(dir)) {
-    if (!file.endsWith('.json') || file.endsWith('.snapshot.json')) continue;
+    // Case-insensitive suffix checks (codex review P1): Windows filesystems
+    // match names case-insensitively — an upper-cased `.SNAPSHOT.json` is the
+    // same record a lower-case probe reads, and must not be re-suffixed.
+    const lower = file.toLowerCase();
+    if (!lower.endsWith('.json') || lower.endsWith('.snapshot.json')) continue;
     const from = path.join(dir, file);
     try {
       // Discriminate on the RAW file — the migration loader zod-strips unknown
       // keys, so a current_session record parses as a clean snapshot after it.
-      // `last_seen_at` only exists on current_session: never rename those.
-      const raw = JSON.parse(fs.readFileSync(from, 'utf-8')) as { last_seen_at?: unknown };
-      if (typeof raw.last_seen_at === 'string') continue;
+      // Key PRESENCE, not value type (codex review P1): the invariant is
+      // "never touch a record CARRYING last_seen_at", and `last_seen_at: null`
+      // must be rejected too.
+      const raw = JSON.parse(fs.readFileSync(from, 'utf-8')) as Record<string, unknown>;
+      if (Object.hasOwn(raw, 'last_seen_at')) continue;
       SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', from).document);
       const to = path.join(dir, `${file.slice(0, -'.json'.length)}.snapshot.json`);
       if (!fs.existsSync(to)) {
@@ -489,9 +495,10 @@ export function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSna
     try {
       // Discriminate on the RAW file: the migration loader zod-strips unknown
       // keys, so a current_session record would come back looking like a clean
-      // snapshot. `last_seen_at` only exists on current_session.
-      const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as { last_seen_at?: unknown };
-      if (typeof raw.last_seen_at === 'string') continue;
+      // snapshot. Key PRESENCE, not value type (codex review P1) — a record
+      // carrying `last_seen_at: null` must be rejected too.
+      const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as Record<string, unknown>;
+      if (Object.hasOwn(raw, 'last_seen_at')) continue;
       return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', p).document);
     } catch {
       continue;

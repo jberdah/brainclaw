@@ -176,7 +176,13 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
  * Load a specific session by ID.
  */
 export function loadSessionById(sessionId: string, cwd?: string): CurrentSessionState | undefined {
-  const filepath = sessionFilePath(sessionId, cwd);
+  let filepath: string;
+  try {
+    filepath = sessionFilePath(sessionId, cwd);
+  } catch {
+    // Reserved '.snapshot' alias id — such a current_session record can never exist.
+    return undefined;
+  }
   if (!fs.existsSync(filepath)) return undefined;
   try {
     const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
@@ -229,9 +235,10 @@ export function saveCurrentSession(session: CurrentSessionState, cwd?: string): 
  */
 export function clearCurrentSession(cwd?: string, sessionId?: string): void {
   if (sessionId) {
-    // Remove specific session file
-    const filepath = sessionFilePath(sessionId, cwd);
-    try { fs.unlinkSync(filepath); } catch { /* ignore */ }
+    // Remove specific session file. The path derivation lives INSIDE the try:
+    // a reserved '.snapshot' alias id throws there, and must never fall through
+    // to unlink a session_snapshot record (codex review P1).
+    try { fs.unlinkSync(sessionFilePath(sessionId, cwd)); } catch { /* ignore */ }
     return;
   }
 
@@ -293,10 +300,24 @@ function sessionsDir(cwd?: string): string {
  * one as a session candidate.
  */
 function listCurrentSessionFiles(dir: string): string[] {
-  return fs.readdirSync(dir).filter(f => f.endsWith('.json') && !f.endsWith('.snapshot.json'));
+  // Case-insensitive on purpose (codex review P1): Windows filesystems match
+  // names case-insensitively, so `X.SNAPSHOT.json` IS the snapshot path a
+  // lower-case probe resolves — excluding only the exact-case suffix would let
+  // gcStaleSessions delete it as an unparseable current_session.
+  return fs.readdirSync(dir).filter(f => {
+    const lower = f.toLowerCase();
+    return lower.endsWith('.json') && !lower.endsWith('.snapshot.json');
+  });
 }
 
 function sessionFilePath(sessionId: string, cwd?: string): string {
+  // pln#670 review fix (codex P1): a session id ending in ".snapshot" would
+  // produce `<base>.snapshot.json` — the snapshot filename of session <base>
+  // in a shared directory. Refuse the alias instead of silently colliding
+  // across record types; readers treat the throw as "no such record".
+  if (/\.snapshot$/i.test(sessionId)) {
+    throw new Error(`session id '${sessionId}' is reserved: the '.snapshot' suffix collides with session_snapshot records`);
+  }
   return path.join(sessionsDir(cwd), `${sessionId}.json`);
 }
 
