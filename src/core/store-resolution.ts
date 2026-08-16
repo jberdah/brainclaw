@@ -4,7 +4,12 @@ import path from 'node:path';
 import { loadActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
 import { loadCurrentSession, loadSessionById, resolveExplicitSessionId } from './identity.js';
-import { MEMORY_DIR } from './io.js';
+import { findOutermostBrainclawRoot, MEMORY_DIR } from './io.js';
+
+// pln#648 — the walk moved to io.ts (leaf) so identity.ts can anchor session
+// records on it without importing this module (which imports identity.ts).
+// Re-exported here to keep the existing API surface.
+export { findOutermostBrainclawRoot } from './io.js';
 import { summarizeWorkspaceProjects } from './workspace-projects.js';
 
 export type StoreRole = 'service' | 'repo' | 'workspace' | 'user' | 'unknown';
@@ -550,27 +555,6 @@ export function resolveProjectRef(
   }
 
   return undefined;
-}
-
-/**
- * Walk UP from a directory and return the outermost .brainclaw/ root found.
- * This bypasses resolveEffectiveCwd / active project to find the true workspace root.
- */
-export function findOutermostBrainclawRoot(startDir: string): string | undefined {
-  let dir = path.resolve(startDir);
-  const root = path.parse(dir).root;
-  const home = os.homedir();
-  let outermost: string | undefined;
-
-  while (dir !== root && dir !== home) {
-    if (fs.existsSync(path.join(dir, MEMORY_DIR, 'config.yaml'))) {
-      outermost = dir;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return outermost;
 }
 
 /**
