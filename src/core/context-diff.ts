@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { readAuditLog } from './audit.js';
 import { listCandidates } from './candidates.js';
-import { entityRecordPaths } from './io.js';
+import { sessionSnapshotRecordPaths } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import { buildNotificationSummary, hasEventCursor, readUnseenEvents, seedCursorToEnd, type MemoryEvent } from './event-log.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from './schema.js';
@@ -96,10 +96,23 @@ export function resolveContextDiffSince(options: Pick<BuildContextDiffOptions, '
  * Uses the shared primitive rather than a fourth hand-rolled pair of paths (io.ts).
  */
 function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot | undefined {
-  for (const snapshotPath of entityRecordPaths('sessions', sessionId, cwd ?? process.cwd())) {
+  // pln#670 — snapshots carry a type-suffixed name (`<id>.snapshot.json`);
+  // the helper also probes the pre-split `<id>.json` layouts.
+  for (const snapshotPath of sessionSnapshotRecordPaths(sessionId, cwd ?? process.cwd())) {
     if (!fs.existsSync(snapshotPath)) continue;
     try {
-      return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', snapshotPath).document);
+      // Deliberately NOT type-strict (pln#649 + pln#670): this reader answers
+      // "when did session X start" to anchor the diff window, and a
+      // current_session record for the same id is an equally authoritative
+      // source of `started_at`. The suffixed probes come first, so a real
+      // snapshot (richer: context_target, git_sha) still wins when both exist.
+      // Contrast with session-start's loadSessionSnapshot, which must stay
+      // strict — its consumers treat the record as a genuine snapshot.
+      const snapshot = SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', snapshotPath).document);
+      // A suffix-bearing lookup can construct another snapshot's path (codex
+      // review). Its started_at is useful only when the stored identity matches.
+      if (snapshot.session_id !== sessionId) continue;
+      return snapshot;
     } catch {
       // An unparseable record in one layout must not mask a good one in the other.
       continue;

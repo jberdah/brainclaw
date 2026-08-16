@@ -6,7 +6,7 @@ import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
-import { memoryDir } from './io.js';
+import { isSessionSnapshotRecordFilename, memoryDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 
@@ -127,7 +127,7 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
   // Multiple parallel agents can have the same agent name/user in one repo;
   // a live different PID is a different agent instance, not our session.
   if (fs.existsSync(dir) && currentAgent) {
-    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+    const files = listCurrentSessionFiles(dir);
     const legacyPidlessCandidates: CurrentSessionState[] = [];
 
     for (const file of files) {
@@ -176,14 +176,23 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
  * Load a specific session by ID.
  */
 export function loadSessionById(sessionId: string, cwd?: string): CurrentSessionState | undefined {
-  const filepath = sessionFilePath(sessionId, cwd);
+  let filepath: string;
+  try {
+    filepath = sessionFilePath(sessionId, cwd);
+  } catch {
+    // Reserved '.snapshot' alias id — such a current_session record can never exist.
+    return undefined;
+  }
   if (!fs.existsSync(filepath)) return undefined;
   try {
     const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
-    return {
+    const session = {
       ...CurrentSessionStateSchema.parse(migration.document),
       schema_version: migration.metadata.currentVersion,
     };
+    // The filename is only an index, never an identity (codex review): do not
+    // adopt a record whose payload names a different session.
+    return session.session_id === sessionId ? session : undefined;
   } catch {
     return undefined;
   }
@@ -196,7 +205,7 @@ export function loadAllSessions(cwd?: string): CurrentSessionState[] {
   const dir = sessionsDir(cwd);
   if (!fs.existsSync(dir)) return [];
 
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  const files = listCurrentSessionFiles(dir);
   const sessions: CurrentSessionState[] = [];
   for (const file of files) {
     try {
@@ -220,7 +229,15 @@ export function saveCurrentSession(session: CurrentSessionState, cwd?: string): 
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  // sessionFilePath throws on a '.snapshot' alias id — a write must never
+  // construct a snapshot filename (codex review P1).
   const filepath = sessionFilePath(session.session_id, cwd);
+  // A plain legacy `<id>.json` can still hold a pre-split snapshot (the old
+  // 'read'-mode write bug parked snapshots in this directory). Only overwrite
+  // a record that PROVES it is this exact current_session entry (codex review).
+  if (fs.existsSync(filepath) && !loadSessionById(session.session_id, cwd)) {
+    throw new Error(`Refusing to overwrite non-current_session record at '${filepath}'`);
+  }
   saveVersionedJsonFile('current_session', filepath, CurrentSessionStateSchema.parse(session));
 }
 
@@ -229,9 +246,16 @@ export function saveCurrentSession(session: CurrentSessionState, cwd?: string): 
  */
 export function clearCurrentSession(cwd?: string, sessionId?: string): void {
   if (sessionId) {
-    // Remove specific session file
-    const filepath = sessionFilePath(sessionId, cwd);
-    try { fs.unlinkSync(filepath); } catch { /* ignore */ }
+    // Remove specific session file. A filename is never enough authority to
+    // delete a record (codex review P1): the '.snapshot' alias id throws in
+    // sessionFilePath (caught → no-op), and an existing file is only unlinked
+    // when loadSessionById PROVES it is this exact current_session record —
+    // never a pre-split snapshot parked under a plain `<id>.json`.
+    try {
+      if (loadSessionById(sessionId, cwd)) {
+        fs.unlinkSync(sessionFilePath(sessionId, cwd));
+      }
+    } catch { /* ignore */ }
     return;
   }
 
@@ -259,21 +283,28 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
   const now = Date.now();
   let removed = 0;
 
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  const files = listCurrentSessionFiles(dir);
   for (const file of files) {
+    const filepath = path.join(dir, file);
     try {
-      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
+      // POSITIVE proof before deletion (codex review): a bare `<id>.json` in
+      // this directory can still be a pre-split snapshot (old 'read'-mode
+      // write bug). Only a record carrying the current_session discriminant
+      // may be collected; anything unidentifiable is preserved, never deleted.
+      const raw = JSON.parse(fs.readFileSync(filepath, 'utf-8')) as { last_seen_at?: unknown };
+      if (typeof raw.last_seen_at !== 'string') continue;
+      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
       const session = {
         ...CurrentSessionStateSchema.parse(migration.document),
         schema_version: migration.metadata.currentVersion,
       };
       if (now - Date.parse(session.last_seen_at) > ttlMs) {
-        fs.unlinkSync(path.join(dir, file));
+        fs.unlinkSync(filepath);
         removed++;
       }
     } catch {
-      // Remove unparseable files too
-      try { fs.unlinkSync(path.join(dir, file)); removed++; } catch { /* ignore */ }
+      // An unidentifiable record is not proven stale current_session state —
+      // preserving it beats risking the deletion of a legacy snapshot.
     }
   }
   return removed;
@@ -285,7 +316,34 @@ function sessionsDir(cwd?: string): string {
   return path.join(memoryDir(cwd), SESSIONS_DIR);
 }
 
+/**
+ * pln#670 — current_session scanners must be type-strict: session_snapshot
+ * records use the `<id>.snapshot.json` suffix and can share a directory with
+ * current_session records. Without this exclusion, gcStaleSessions would
+ * delete a stray snapshot as "unparseable" and loadCurrentSession could adopt
+ * one as a session candidate.
+ */
+function listCurrentSessionFiles(dir: string): string[] {
+  // Case-insensitive on purpose (codex review P1): Windows filesystems match
+  // names case-insensitively, so `X.SNAPSHOT.json` IS the snapshot path a
+  // lower-case probe resolves — excluding only the exact-case suffix would let
+  // gcStaleSessions delete it as an unparseable current_session.
+  return fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith('.json') && !isSessionSnapshotRecordFilename(f));
+}
+
+/** True when `<sessionId>.json` cannot collide with a session_snapshot filename. */
+function isCurrentSessionFilename(sessionId: string): boolean {
+  return !isSessionSnapshotRecordFilename(`${sessionId}.json`);
+}
+
 function sessionFilePath(sessionId: string, cwd?: string): string {
+  // pln#670 review fix (codex P1): a session id ending in ".snapshot" would
+  // produce `<base>.snapshot.json` — the snapshot filename of session <base>
+  // in a shared directory. Refuse the alias instead of silently colliding
+  // across record types; readers treat the throw as "no such record".
+  if (!isCurrentSessionFilename(sessionId)) {
+    throw new Error(`session id '${sessionId}' is reserved for session_snapshot records — the '.snapshot' suffix would collide across record types`);
+  }
   return path.join(sessionsDir(cwd), `${sessionId}.json`);
 }
 

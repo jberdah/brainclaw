@@ -145,6 +145,36 @@ export function entityRecordPaths(subdir: string, id: string, cwd?: string, pref
   return entityRecordDirs(subdir, cwd ?? process.cwd(), preferredDirName).map((d) => path.join(d, `${id}.json`));
 }
 
+export const SESSION_SNAPSHOT_FILENAME_SUFFIX = '.snapshot.json';
+
+/**
+ * Filesystem type discriminator for session snapshots (codex review, pln#670).
+ * Case-fold before the suffix comparison because default Windows filesystems
+ * are case-insensitive: `X.SNAPSHOT.json` IS the path a lower-case probe
+ * resolves, and every suffix decision must agree on its type.
+ */
+export function isSessionSnapshotRecordFilename(filename: string): boolean {
+  return filename.toLowerCase().endsWith(SESSION_SNAPSHOT_FILENAME_SUFFIX);
+}
+
+/**
+ * EVERY path a session_snapshot record for `sessionId` can occupy, canonical first.
+ *
+ * session_snapshot and current_session are two different record types that share
+ * the `sessions` directory family AND the same session_id — only the filename keeps
+ * them apart (pln#670). Snapshots are written as `<id>.snapshot.json` so a
+ * current_session `<id>.json` for the same session can never clobber them, whatever
+ * directory each resolver picks. The plain `<id>.json` probes cover records written
+ * before the split; readers must schema-validate every candidate.
+ */
+export function sessionSnapshotRecordPaths(sessionId: string, cwd?: string, preferredDirName?: string): string[] {
+  const dirs = entityRecordDirs('sessions', cwd ?? process.cwd(), preferredDirName);
+  return [
+    ...dirs.map((d) => path.join(d, `${sessionId}.snapshot.json`)),
+    ...dirs.map((d) => path.join(d, `${sessionId}.json`)),
+  ];
+}
+
 export function memoryDir(cwd: string = process.cwd(), preferredDirName?: string): string {
   return path.join(cwd, preferredDirName ?? MEMORY_DIR);
 }
