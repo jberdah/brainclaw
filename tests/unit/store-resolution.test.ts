@@ -715,12 +715,22 @@ describe('core/store-resolution — monorepo root switchability (DGX Finding 1)'
   const SESSION_ENV_KEYS = [
     'BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID',
     'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID', 'BRAINCLAW_AGENT_NAME',
+    // pln#648 review: without a boundary, the session-anchor walk climbs the
+    // shared %TEMP% ancestry — a transient .brainclaw/config.yaml left there by
+    // ANOTHER batch re-anchors every fixture and flips these pins (the
+    // non-reproducible batch failure, root-caused by the reviewer).
+    'BRAINCLAW_STORE_BOUNDARY',
   ];
   function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
     const saved: Record<string, string | undefined> = {};
     for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
     try {
       for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      // Pin the walk to the fixture root: disk state outside the fixture must
+      // never influence these tests.
+      if (!vars.BRAINCLAW_STORE_BOUNDARY && vars.BRAINCLAW_CWD) {
+        process.env.BRAINCLAW_STORE_BOUNDARY = vars.BRAINCLAW_CWD;
+      }
       return fn();
     } finally {
       for (const k of SESSION_ENV_KEYS) {
@@ -790,12 +800,22 @@ describe('core/store-resolution — session found under a previously-resolved st
   const SESSION_ENV_KEYS = [
     'BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID',
     'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID', 'BRAINCLAW_AGENT_NAME',
+    // pln#648 review: without a boundary, the session-anchor walk climbs the
+    // shared %TEMP% ancestry — a transient .brainclaw/config.yaml left there by
+    // ANOTHER batch re-anchors every fixture and flips these pins (the
+    // non-reproducible batch failure, root-caused by the reviewer).
+    'BRAINCLAW_STORE_BOUNDARY',
   ];
   function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
     const saved: Record<string, string | undefined> = {};
     for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
     try {
       for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      // Pin the walk to the fixture root: disk state outside the fixture must
+      // never influence these tests.
+      if (!vars.BRAINCLAW_STORE_BOUNDARY && vars.BRAINCLAW_CWD) {
+        process.env.BRAINCLAW_STORE_BOUNDARY = vars.BRAINCLAW_CWD;
+      }
       return fn();
     } finally {
       for (const k of SESSION_ENV_KEYS) {
@@ -913,12 +933,22 @@ describe('core/store-resolution — added probes require strong session identity
   const SESSION_ENV_KEYS = [
     'BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID',
     'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID', 'BRAINCLAW_AGENT_NAME',
+    // pln#648 review: without a boundary, the session-anchor walk climbs the
+    // shared %TEMP% ancestry — a transient .brainclaw/config.yaml left there by
+    // ANOTHER batch re-anchors every fixture and flips these pins (the
+    // non-reproducible batch failure, root-caused by the reviewer).
+    'BRAINCLAW_STORE_BOUNDARY',
   ];
   function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
     const saved: Record<string, string | undefined> = {};
     for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
     try {
       for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      // Pin the walk to the fixture root: disk state outside the fixture must
+      // never influence these tests.
+      if (!vars.BRAINCLAW_STORE_BOUNDARY && vars.BRAINCLAW_CWD) {
+        process.env.BRAINCLAW_STORE_BOUNDARY = vars.BRAINCLAW_CWD;
+      }
       return fn();
     } finally {
       for (const k of SESSION_ENV_KEYS) {

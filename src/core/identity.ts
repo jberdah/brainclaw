@@ -6,7 +6,7 @@ import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
-import { findOutermostBrainclawRoot, isSessionSnapshotRecordFilename, memoryDir } from './io.js';
+import { findSessionAnchorRoot, isSessionSnapshotRecordFilename, memoryDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 
@@ -130,6 +130,7 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
   // record can transiently exist in both locations, and a duplicate must not
   // inflate the candidate count.
   if (currentAgent) {
+    const currentHostId = resolveCurrentHostId();
     const legacyPidlessCandidates = new Map<string, CurrentSessionState>();
 
     for (const dir of sessionsDirs(cwd)) {
@@ -146,7 +147,19 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
             return session;
           }
 
-          if (session.pid === undefined && !legacyPidlessCandidates.has(session.session_id)) {
+          // Legacy pidless adoption, HOST-GUARDED (pln#648 anchoring follow-up):
+          // anchoring parks every session of the workspace at one directory, so
+          // the historical weak adoption — agent name + user only — would now
+          // see records it never saw before, including another instance's
+          // stale intent (the exact hijack the P1-1/P1-2 review pins forbid on
+          // the resolver's added probes). A pidless record is only adoptable
+          // when it was written by THIS host; foreign-instance records need
+          // strong identity (named id or pid) everywhere.
+          if (
+            session.pid === undefined
+            && (!session.host_id || session.host_id === currentHostId)
+            && !legacyPidlessCandidates.has(session.session_id)
+          ) {
             legacyPidlessCandidates.set(session.session_id, session);
           }
         } catch {
@@ -256,8 +269,11 @@ export function saveCurrentSession(session: CurrentSessionState, cwd?: string): 
   // pln#648 relocation: a pre-anchor copy of the SAME session under the
   // effective cwd would linger until TTL decay — remove it once the anchored
   // write has landed, on positive proof only. Best effort: the read-chain and
-  // the GC cover any leftover.
-  const legacyDir = path.join(memoryDir(cwd), SESSIONS_DIR);
+  // the GC cover any leftover. legacySessionsDir normalizes exactly like the
+  // anchor (codex review P1): a relative cwd must never make the SAME
+  // directory compare unequal — the unlink below would delete the record
+  // this function just wrote.
+  const legacyDir = legacySessionsDir(cwd);
   if (legacyDir !== dir) {
     try {
       const legacyPath = sessionFilePathIn(legacyDir, session.session_id);
@@ -358,13 +374,23 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
  * probe of the same workspace derives the SAME directory.
  */
 function sessionAnchorCwd(cwd?: string): string {
-  const base = cwd ?? process.cwd();
-  return findOutermostBrainclawRoot(base) ?? base;
+  // path.resolve BEFORE anchoring (codex review P1): the anchor and the legacy
+  // location below are compared for equality — a relative cwd ('.') must not
+  // make the SAME directory look like two, or the relocation would unlink the
+  // record it just wrote. Role-aware walk: the nearest declared workspace wins,
+  // so sibling workspaces under a parent store stay isolated (review P1 #2).
+  const base = path.resolve(cwd ?? process.cwd());
+  return findSessionAnchorRoot(base) ?? base;
 }
 
 /** The write + primary read location for current_session records. */
 function sessionsDir(cwd?: string): string {
   return path.join(memoryDir(sessionAnchorCwd(cwd)), SESSIONS_DIR);
+}
+
+/** The pre-anchor legacy location, NORMALIZED the same way as the anchor. */
+function legacySessionsDir(cwd?: string): string {
+  return path.join(memoryDir(path.resolve(cwd ?? process.cwd())), SESSIONS_DIR);
 }
 
 /**
@@ -377,7 +403,7 @@ function sessionsDir(cwd?: string): string {
  */
 function sessionsDirs(cwd?: string): string[] {
   const anchored = sessionsDir(cwd);
-  const legacy = path.join(memoryDir(cwd), SESSIONS_DIR);
+  const legacy = legacySessionsDir(cwd);
   return anchored === legacy ? [anchored] : [anchored, legacy];
 }
 

@@ -149,6 +149,48 @@ describe('session records anchor at the workspace root (pln#648)', () => {
     assert.equal(findOutermostBrainclawRoot(web), web);
   });
 
+  it('a relative cwd never makes the relocation delete its own record (codex round 1)', () => {
+    // Pre-fix: sessionsDirs compared a resolved anchor against a RAW-cwd legacy
+    // path — with cwd='.', the SAME directory compared unequal and the
+    // relocation unlinked the file saveCurrentSession had just written.
+    const previousCwd = process.cwd();
+    process.env.BRAINCLAW_STORE_BOUNDARY = web;
+    process.chdir(web);
+    try {
+      saveCurrentSession(sessionRecord('sess_relative'), '.');
+      assert.ok(fs.existsSync(sessionsFile(web, 'sess_relative')), 'the record must survive its own relocation pass');
+      assert.equal(loadSessionById('sess_relative', '.')?.session_id, 'sess_relative');
+      assert.equal(loadCurrentSession('.')?.session_id, 'sess_relative');
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('sibling DECLARED workspaces under a parent store stay isolated (codex round 1)', () => {
+    // Pre-fix: the outermost walk ignored `store_type: workspace`, so two
+    // sibling workspaces under a common parent store both anchored to the
+    // parent — and each could see (and the resolver adopt) the other's session.
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-anchor-siblings-'));
+    const outer = makeStore(base, 'outer', 'prj_outer_repo');
+    const left = makeStore(path.join(base, 'left'), 'left', 'prj_left', true);
+    const service = makeStore(path.join(base, 'left', 'service'), 'service', 'prj_left_service');
+    const right = makeStore(path.join(base, 'right'), 'right', 'prj_right', true);
+    process.env.BRAINCLAW_STORE_BOUNDARY = outer;
+    for (const store of [outer, left, service, right]) {
+      registerAgentIdentity({ agentName: AGENT, kind: 'agent', cwd: store });
+    }
+    try {
+      saveCurrentSession(sessionRecord('sess_left_only'), service);
+
+      assert.ok(fs.existsSync(sessionsFile(left, 'sess_left_only')), 'the NEAREST declared workspace is the anchor');
+      assert.ok(!fs.existsSync(sessionsFile(outer, 'sess_left_only')), 'the parent store must not receive the record');
+      assert.equal(loadCurrentSession(right), undefined, 'a sibling workspace must never see the session');
+      assert.equal(loadCurrentSession(service)?.session_id, 'sess_left_only');
+    } finally {
+      try { fs.rmSync(base, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  });
+
   it('single-project stores are unchanged: the anchor of an isolated store is itself', () => {
     const solo = makeStore(fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-anchor-solo-')), 'solo', 'prj_solo_anchor');
     process.env.BRAINCLAW_STORE_BOUNDARY = solo;
