@@ -6,7 +6,7 @@ import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
-import { isSessionSnapshotRecordFilename, memoryDir } from './io.js';
+import { findSessionAnchorRoot, isSessionSnapshotRecordFilename, memoryDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 
@@ -111,7 +111,6 @@ export function resolveEventSessionId(event: { session_id?: string; metadata?: R
  * Checks sessions/ directory first, falls back to legacy .current-session.
  */
 export function loadCurrentSession(cwd?: string): CurrentSessionState | undefined {
-  const dir = sessionsDir(cwd);
   const currentUser = resolveCurrentUser();
   const currentAgent = resolveCurrentAgentName();
   const explicitSessionId = resolveExplicitSessionId();
@@ -123,35 +122,54 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
     return explicit && isSessionAlive(explicit, ttlMs, now) ? explicit : undefined;
   }
 
-  // 1. Look in sessions/ directory for the session owned by this process.
-  // Multiple parallel agents can have the same agent name/user in one repo;
-  // a live different PID is a different agent instance, not our session.
-  if (fs.existsSync(dir) && currentAgent) {
-    const files = listCurrentSessionFiles(dir);
-    const legacyPidlessCandidates: CurrentSessionState[] = [];
+  // 1. Look in the sessions read-chain (workspace anchor first, then the
+  // pre-anchor legacy location — pln#648) for the session owned by this
+  // process. Multiple parallel agents can have the same agent name/user in
+  // one repo; a live different PID is a different agent instance, not our
+  // session. Pidless legacy candidates are deduped by id: during relocation a
+  // record can transiently exist in both locations, and a duplicate must not
+  // inflate the candidate count.
+  if (currentAgent) {
+    const currentHostId = resolveCurrentHostId();
+    const legacyPidlessCandidates = new Map<string, CurrentSessionState>();
 
-    for (const file of files) {
-      try {
-        const session = loadSessionFile(path.join(dir, file));
-        // Strict match: agent name must match, user must match (when both are known)
-        if (session.agent !== currentAgent) continue;
-        const userMatch = !session.user || !currentUser || session.user === currentUser;
-        if (!userMatch || !isSessionAlive(session, ttlMs, now)) continue;
+    for (const dir of sessionsDirs(cwd)) {
+      if (!fs.existsSync(dir)) continue;
+      for (const file of listCurrentSessionFiles(dir)) {
+        try {
+          const session = loadSessionFile(path.join(dir, file));
+          // Strict match: agent name must match, user must match (when both are known)
+          if (session.agent !== currentAgent) continue;
+          const userMatch = !session.user || !currentUser || session.user === currentUser;
+          if (!userMatch || !isSessionAlive(session, ttlMs, now)) continue;
 
-        if (session.pid === process.pid) {
-          return session;
+          if (session.pid === process.pid) {
+            return session;
+          }
+
+          // Legacy pidless adoption, HOST-GUARDED (pln#648 anchoring follow-up):
+          // anchoring parks every session of the workspace at one directory, so
+          // the historical weak adoption — agent name + user only — would now
+          // see records it never saw before, including another instance's
+          // stale intent (the exact hijack the P1-1/P1-2 review pins forbid on
+          // the resolver's added probes). A pidless record is only adoptable
+          // when it was written by THIS host; foreign-instance records need
+          // strong identity (named id or pid) everywhere.
+          if (
+            session.pid === undefined
+            && (!session.host_id || session.host_id === currentHostId)
+            && !legacyPidlessCandidates.has(session.session_id)
+          ) {
+            legacyPidlessCandidates.set(session.session_id, session);
+          }
+        } catch {
+          // skip invalid session files
         }
-
-        if (session.pid === undefined) {
-          legacyPidlessCandidates.push(session);
-        }
-      } catch {
-        // skip invalid session files
       }
     }
 
-    if (legacyPidlessCandidates.length === 1) {
-      return legacyPidlessCandidates[0];
+    if (legacyPidlessCandidates.size === 1) {
+      return [...legacyPidlessCandidates.values()][0];
     }
   }
 
@@ -176,46 +194,52 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
  * Load a specific session by ID.
  */
 export function loadSessionById(sessionId: string, cwd?: string): CurrentSessionState | undefined {
-  let filepath: string;
-  try {
-    filepath = sessionFilePath(sessionId, cwd);
-  } catch {
-    // Reserved '.snapshot' alias id — such a current_session record can never exist.
-    return undefined;
+  // Reserved '.snapshot' alias id — such a current_session record can never exist.
+  if (!isCurrentSessionFilename(sessionId)) return undefined;
+  // pln#648 read-chain: anchor first, then the pre-anchor legacy location. A
+  // bad record in one location must not mask a good one in the other.
+  for (const dir of sessionsDirs(cwd)) {
+    const filepath = sessionFilePathIn(dir, sessionId);
+    if (!fs.existsSync(filepath)) continue;
+    try {
+      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
+      const session = {
+        ...CurrentSessionStateSchema.parse(migration.document),
+        schema_version: migration.metadata.currentVersion,
+      };
+      // The filename is only an index, never an identity (codex review): do not
+      // adopt a record whose payload names a different session.
+      if (session.session_id === sessionId) return session;
+    } catch {
+      // fall through to the next location
+    }
   }
-  if (!fs.existsSync(filepath)) return undefined;
-  try {
-    const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
-    const session = {
-      ...CurrentSessionStateSchema.parse(migration.document),
-      schema_version: migration.metadata.currentVersion,
-    };
-    // The filename is only an index, never an identity (codex review): do not
-    // adopt a record whose payload names a different session.
-    return session.session_id === sessionId ? session : undefined;
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 /**
  * Load ALL sessions (active + stale) from the sessions/ directory.
  */
 export function loadAllSessions(cwd?: string): CurrentSessionState[] {
-  const dir = sessionsDir(cwd);
-  if (!fs.existsSync(dir)) return [];
-
-  const files = listCurrentSessionFiles(dir);
+  // pln#648 read-chain: anchored records win over a transient pre-anchor copy
+  // of the same session (dedup by id, anchor scanned first).
+  const seen = new Set<string>();
   const sessions: CurrentSessionState[] = [];
-  for (const file of files) {
-    try {
-      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
-      sessions.push({
-        ...CurrentSessionStateSchema.parse(migration.document),
-        schema_version: migration.metadata.currentVersion,
-      });
-    } catch {
-      // skip invalid
+  for (const dir of sessionsDirs(cwd)) {
+    if (!fs.existsSync(dir)) continue;
+    for (const file of listCurrentSessionFiles(dir)) {
+      try {
+        const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
+        const session = {
+          ...CurrentSessionStateSchema.parse(migration.document),
+          schema_version: migration.metadata.currentVersion,
+        };
+        if (seen.has(session.session_id)) continue;
+        seen.add(session.session_id);
+        sessions.push(session);
+      } catch {
+        // skip invalid
+      }
     }
   }
   return sessions.sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at));
@@ -232,38 +256,64 @@ export function saveCurrentSession(session: CurrentSessionState, cwd?: string): 
   // sessionFilePath throws on a '.snapshot' alias id — a write must never
   // construct a snapshot filename (codex review P1).
   const filepath = sessionFilePath(session.session_id, cwd);
-  // A plain legacy `<id>.json` can still hold a pre-split snapshot (the old
-  // 'read'-mode write bug parked snapshots in this directory). Only overwrite
-  // a record that PROVES it is this exact current_session entry (codex review).
-  if (fs.existsSync(filepath) && !loadSessionById(session.session_id, cwd)) {
+  // A plain `<id>.json` can still hold a pre-split snapshot (the old
+  // 'read'-mode write bug parked snapshots in session directories). Only
+  // overwrite THIS path when its record proves to be this exact
+  // current_session entry (codex review, made path-local by pln#648: the
+  // proof must be about the file being replaced, not about any location).
+  if (fs.existsSync(filepath) && !isProvenCurrentSessionAt(filepath, session.session_id)) {
     throw new Error(`Refusing to overwrite non-current_session record at '${filepath}'`);
   }
   saveVersionedJsonFile('current_session', filepath, CurrentSessionStateSchema.parse(session));
+
+  // pln#648 relocation: a pre-anchor copy of the SAME session under the
+  // effective cwd would linger until TTL decay — remove it once the anchored
+  // write has landed, on positive proof only. Best effort: the read-chain and
+  // the GC cover any leftover. legacySessionsDir normalizes exactly like the
+  // anchor (codex review P1): a relative cwd must never make the SAME
+  // directory compare unequal — the unlink below would delete the record
+  // this function just wrote.
+  const legacyDir = legacySessionsDir(cwd);
+  if (legacyDir !== dir) {
+    try {
+      const legacyPath = sessionFilePathIn(legacyDir, session.session_id);
+      if (fs.existsSync(legacyPath) && isProvenCurrentSessionAt(legacyPath, session.session_id)) {
+        fs.unlinkSync(legacyPath);
+      }
+    } catch { /* best effort */ }
+  }
 }
 
 /**
  * Clear a session. If sessionId is provided, only clear that specific session.
  */
 export function clearCurrentSession(cwd?: string, sessionId?: string): void {
+  // A filename is never enough authority to delete a record (codex review P1):
+  // the '.snapshot' alias id throws in sessionFilePathIn (caught → no-op), and
+  // a file is only unlinked when it PROVES to be this exact current_session
+  // record — never a pre-split snapshot parked under a plain `<id>.json`.
+  // pln#648: the record can live at the anchor OR at the pre-anchor legacy
+  // location — clear wherever it proves.
+  const unlinkProven = (id: string): void => {
+    for (const dir of sessionsDirs(cwd)) {
+      try {
+        const filepath = sessionFilePathIn(dir, id);
+        if (fs.existsSync(filepath) && isProvenCurrentSessionAt(filepath, id)) {
+          fs.unlinkSync(filepath);
+        }
+      } catch { /* ignore */ }
+    }
+  };
+
   if (sessionId) {
-    // Remove specific session file. A filename is never enough authority to
-    // delete a record (codex review P1): the '.snapshot' alias id throws in
-    // sessionFilePath (caught → no-op), and an existing file is only unlinked
-    // when loadSessionById PROVES it is this exact current_session record —
-    // never a pre-split snapshot parked under a plain `<id>.json`.
-    try {
-      if (loadSessionById(sessionId, cwd)) {
-        fs.unlinkSync(sessionFilePath(sessionId, cwd));
-      }
-    } catch { /* ignore */ }
+    unlinkProven(sessionId);
     return;
   }
 
   // Clear the session for the current agent+user
   const session = loadCurrentSession(cwd);
   if (session) {
-    const filepath = sessionFilePath(session.session_id, cwd);
-    try { fs.unlinkSync(filepath); } catch { /* ignore */ }
+    unlinkProven(session.session_id);
   }
 
   // Also clean legacy file
@@ -276,35 +326,37 @@ export function clearCurrentSession(cwd?: string, sessionId?: string): void {
  * Returns the number of sessions removed.
  */
 export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
-  const dir = sessionsDir(cwd);
-  if (!fs.existsSync(dir)) return 0;
-
   const ttlMs = parseDurationToMs(ttlOverride ?? loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
   const now = Date.now();
   let removed = 0;
 
-  const files = listCurrentSessionFiles(dir);
-  for (const file of files) {
-    const filepath = path.join(dir, file);
-    try {
-      // POSITIVE proof before deletion (codex review): a bare `<id>.json` in
-      // this directory can still be a pre-split snapshot (old 'read'-mode
-      // write bug). Only a record carrying the current_session discriminant
-      // may be collected; anything unidentifiable is preserved, never deleted.
-      const raw = JSON.parse(fs.readFileSync(filepath, 'utf-8')) as { last_seen_at?: unknown };
-      if (typeof raw.last_seen_at !== 'string') continue;
-      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
-      const session = {
-        ...CurrentSessionStateSchema.parse(migration.document),
-        schema_version: migration.metadata.currentVersion,
-      };
-      if (now - Date.parse(session.last_seen_at) > ttlMs) {
-        fs.unlinkSync(filepath);
-        removed++;
+  // pln#648: sweep the whole read-chain — pre-anchor legacy records are
+  // exactly what this GC must decay.
+  for (const dir of sessionsDirs(cwd)) {
+    if (!fs.existsSync(dir)) continue;
+
+    for (const file of listCurrentSessionFiles(dir)) {
+      const filepath = path.join(dir, file);
+      try {
+        // POSITIVE proof before deletion (codex review): a bare `<id>.json` in
+        // this directory can still be a pre-split snapshot (old 'read'-mode
+        // write bug). Only a record carrying the current_session discriminant
+        // may be collected; anything unidentifiable is preserved, never deleted.
+        const raw = JSON.parse(fs.readFileSync(filepath, 'utf-8')) as { last_seen_at?: unknown };
+        if (typeof raw.last_seen_at !== 'string') continue;
+        const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
+        const session = {
+          ...CurrentSessionStateSchema.parse(migration.document),
+          schema_version: migration.metadata.currentVersion,
+        };
+        if (now - Date.parse(session.last_seen_at) > ttlMs) {
+          fs.unlinkSync(filepath);
+          removed++;
+        }
+      } catch {
+        // An unidentifiable record is not proven stale current_session state —
+        // preserving it beats risking the deletion of a legacy snapshot.
       }
-    } catch {
-      // An unidentifiable record is not proven stale current_session state —
-      // preserving it beats risking the deletion of a legacy snapshot.
     }
   }
   return removed;
@@ -312,8 +364,61 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
 
 // --- Internal helpers ---
 
+/**
+ * pln#648 (a) — the session record must live at a STABLE, workspace-unique
+ * location. Anchored on the effective cwd, the record landed under the store
+ * of the project being LEFT at session-start, and every switch moved the
+ * truth out of the resolver's reach (the reproduced P0: status said api,
+ * writes went to web). The anchor is the outermost .brainclaw/ above cwd —
+ * a pure filesystem answer, independent of active-project state, so every
+ * probe of the same workspace derives the SAME directory.
+ */
+function sessionAnchorCwd(cwd?: string): string {
+  // path.resolve BEFORE anchoring (codex review P1): the anchor and the legacy
+  // location below are compared for equality — a relative cwd ('.') must not
+  // make the SAME directory look like two, or the relocation would unlink the
+  // record it just wrote. Role-aware walk: the nearest declared workspace wins,
+  // so sibling workspaces under a parent store stay isolated (review P1 #2).
+  const base = path.resolve(cwd ?? process.cwd());
+  return findSessionAnchorRoot(base) ?? base;
+}
+
+/** The write + primary read location for current_session records. */
 function sessionsDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), SESSIONS_DIR);
+  return path.join(memoryDir(sessionAnchorCwd(cwd)), SESSIONS_DIR);
+}
+
+/** The pre-anchor legacy location, NORMALIZED the same way as the anchor. */
+function legacySessionsDir(cwd?: string): string {
+  return path.join(memoryDir(path.resolve(cwd ?? process.cwd())), SESSIONS_DIR);
+}
+
+/**
+ * Read-chain (pln#648 migration): anchor first, then the pre-anchor location
+ * under the effective cwd where existing records still live. Sessions expire
+ * within the implicit TTL (4h), so the legacy probe decays naturally — no
+ * rewrite migration; saveCurrentSession relocates its own record on the next
+ * heartbeat and the GC sweeps both. Deduped when both resolve to the same
+ * directory (single-project stores — the common case).
+ */
+function sessionsDirs(cwd?: string): string[] {
+  const anchored = sessionsDir(cwd);
+  const legacy = legacySessionsDir(cwd);
+  return anchored === legacy ? [anchored] : [anchored, legacy];
+}
+
+/**
+ * Positive proof that the file at `filepath` is THE current_session record for
+ * `sessionId` (pln#670 discipline: a filename is never authority to delete or
+ * overwrite — a plain `<id>.json` can be a pre-split snapshot).
+ */
+function isProvenCurrentSessionAt(filepath: string, sessionId: string): boolean {
+  try {
+    const raw = JSON.parse(fs.readFileSync(filepath, 'utf-8')) as { last_seen_at?: unknown; session_id?: unknown };
+    return typeof raw.last_seen_at === 'string' && raw.session_id === sessionId;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -336,7 +441,7 @@ function isCurrentSessionFilename(sessionId: string): boolean {
   return !isSessionSnapshotRecordFilename(`${sessionId}.json`);
 }
 
-function sessionFilePath(sessionId: string, cwd?: string): string {
+function sessionFilePathIn(dir: string, sessionId: string): string {
   // pln#670 review fix (codex P1): a session id ending in ".snapshot" would
   // produce `<base>.snapshot.json` — the snapshot filename of session <base>
   // in a shared directory. Refuse the alias instead of silently colliding
@@ -344,7 +449,11 @@ function sessionFilePath(sessionId: string, cwd?: string): string {
   if (!isCurrentSessionFilename(sessionId)) {
     throw new Error(`session id '${sessionId}' is reserved for session_snapshot records — the '.snapshot' suffix would collide across record types`);
   }
-  return path.join(sessionsDir(cwd), `${sessionId}.json`);
+  return path.join(dir, `${sessionId}.json`);
+}
+
+function sessionFilePath(sessionId: string, cwd?: string): string {
+  return sessionFilePathIn(sessionsDir(cwd), sessionId);
 }
 
 function resolveCurrentUser(): string | undefined {

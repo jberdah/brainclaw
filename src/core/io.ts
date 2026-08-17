@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { withLock, cleanStaleLocks } from './lock.js';
 
@@ -177,6 +178,81 @@ export function sessionSnapshotRecordPaths(sessionId: string, cwd?: string, pref
 
 export function memoryDir(cwd: string = process.cwd(), preferredDirName?: string): string {
   return path.join(cwd, preferredDirName ?? MEMORY_DIR);
+}
+
+/**
+ * Walk UP from a directory and return the outermost .brainclaw/ root found.
+ * Bypasses resolveEffectiveCwd / active project entirely — the answer depends
+ * only on the filesystem, which is what makes it safe for identity-level state
+ * that must NOT follow the active project (pln#648: a session record anchored
+ * on the effective cwd moved with every switch, out of the resolver's reach).
+ *
+ * Lives HERE, in a leaf module: identity.ts needs it, and store-resolution.ts
+ * imports identity.ts — the import cycle that blocked pln#648's first attempt.
+ * store-resolution re-exports it for its existing callers.
+ *
+ * Stops at the filesystem root, at $HOME (a user-level store is never a
+ * workspace root), and never climbs ABOVE BRAINCLAW_STORE_BOUNDARY when set —
+ * the containment contract tests and agent shells rely on (a leaked parent
+ * store must not widen the walk into the host machine).
+ */
+export function findOutermostBrainclawRoot(startDir: string): string | undefined {
+  let dir = path.resolve(startDir);
+  const root = path.parse(dir).root;
+  const home = os.homedir();
+  const boundaryRaw = process.env.BRAINCLAW_STORE_BOUNDARY?.trim();
+  const boundary = boundaryRaw ? path.resolve(boundaryRaw) : undefined;
+  let outermost: string | undefined;
+
+  while (dir !== root && dir !== home) {
+    if (fs.existsSync(path.join(dir, MEMORY_DIR, 'config.yaml'))) {
+      outermost = dir;
+    }
+    if (boundary && dir === boundary) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return outermost;
+}
+
+/**
+ * The workspace anchor for identity-level state (pln#648 review P1): walking
+ * UP, the NEAREST store declaring `store_type: workspace` wins; only when no
+ * workspace is declared does the outermost store answer. Without the role
+ * check, two sibling declared workspaces under a common parent store would
+ * anchor to that parent and see each other's sessions — breaking exactly the
+ * isolation `resolveWorkspaceRoot` (chain-based, role-aware) guarantees.
+ * The role is read from the raw YAML — the same convention the store-chain
+ * walk uses (`store_type` is not part of the typed Config surface) — so this
+ * stays a leaf-module fs answer with no config.ts dependency.
+ * Same stops as the outermost walk: filesystem root, $HOME, and never above
+ * BRAINCLAW_STORE_BOUNDARY.
+ */
+export function findSessionAnchorRoot(startDir: string): string | undefined {
+  let dir = path.resolve(startDir);
+  const root = path.parse(dir).root;
+  const home = os.homedir();
+  const boundaryRaw = process.env.BRAINCLAW_STORE_BOUNDARY?.trim();
+  const boundary = boundaryRaw ? path.resolve(boundaryRaw) : undefined;
+  let outermost: string | undefined;
+
+  while (dir !== root && dir !== home) {
+    const configPath = path.join(dir, MEMORY_DIR, 'config.yaml');
+    if (fs.existsSync(configPath)) {
+      outermost = dir;
+      try {
+        if (/^store_type:\s*workspace\b/m.test(fs.readFileSync(configPath, 'utf-8'))) {
+          return dir;
+        }
+      } catch { /* unreadable config — treat as a plain store */ }
+    }
+    if (boundary && dir === boundary) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return outermost;
 }
 
 export function memoryPath(filename: string, cwd?: string, preferredDirName?: string): string {
