@@ -190,6 +190,37 @@ export function assertSafeSessionId(sessionId: string): void {
   }
 }
 
+/**
+ * Normalize an agent name into ONE filesystem path segment (pln#673).
+ *
+ * The agent name arrives from the environment (BRAINCLAW_AGENT_NAME, read by
+ * resolveCurrentAgentName) and became a DIRECTORY name unvalidated: proved on
+ * disk on 2026-08-18 that `'../../../../outside/PWNED'` made saveRuntimeNote
+ * create the directory and write the note ENTIRELY OUTSIDE the store.
+ *
+ * This is deliberately the SAME normalization the inbox has always used
+ * (`agentInboxDir`, messaging.ts) rather than a new convention: lower-case,
+ * then every character outside [a-z0-9_-] becomes `_`. Separators and dots
+ * cannot survive it, so no traversal can. It is IDENTITY for every agent name
+ * brainclaw produces (claude-code, codex, github-copilot, …) — verified
+ * against the real store — which is why writes can adopt it without moving
+ * existing data. Readers still probe the raw name as a fallback (see
+ * runtime.ts) so a non-canonical legacy directory never becomes invisible.
+ *
+ * Alias resolution is deliberately NOT applied here: mapping `copilot` to
+ * `github-copilot` would relocate notes, which is a product decision, not a
+ * path-safety one.
+ */
+const AGENT_SEGMENT_UNSAFE_RE = /[^a-z0-9_-]/g;
+const WIN32_RESERVED_BASENAME_FOR_SEGMENT_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+export function sanitizeAgentPathSegment(agent: string): string {
+  const normalized = agent.trim().toLowerCase().replace(AGENT_SEGMENT_UNSAFE_RE, '_');
+  if (normalized.length === 0) return 'unknown-agent';
+  // A Win32 device name is not a usable directory either (mkdir CON fails).
+  return WIN32_RESERVED_BASENAME_FOR_SEGMENT_RE.test(normalized) ? `${normalized}_` : normalized;
+}
+
 export const SESSION_SNAPSHOT_FILENAME_SUFFIX = '.snapshot.json';
 
 /**

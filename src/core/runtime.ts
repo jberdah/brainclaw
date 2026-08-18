@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
-import { resolveEntityDir } from './io.js';
+import { resolveEntityDir, sanitizeAgentPathSegment } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
@@ -32,7 +32,22 @@ function privateRuntimeDir(cwd?: string, mode: 'read' | 'write' = 'read'): strin
 }
 
 function sharedAgentDir(agent: string, cwd?: string, mode: 'read' | 'write' = 'read'): string {
-  return path.join(sharedRuntimeDir(cwd, mode), agent);
+  // pln#673 — the agent name is env-controlled and becomes a path segment:
+  // normalize it so a traversal cannot be expressed at all.
+  return path.join(sharedRuntimeDir(cwd, mode), sanitizeAgentPathSegment(agent));
+}
+
+/**
+ * Both directories an agent's notes can occupy, canonical first (pln#673).
+ * Writes always use the normalized segment; reads also probe the RAW name so
+ * notes written before the normalization stay visible — the dual-read pattern
+ * pln#648/pln#670 already use for relocated records. Deduped when the name is
+ * already canonical, which is the case for every agent brainclaw produces.
+ */
+function agentDirCandidates(baseDir: string, agent: string): string[] {
+  const canonical = path.join(baseDir, sanitizeAgentPathSegment(agent));
+  const raw = path.join(baseDir, agent);
+  return canonical === raw ? [canonical] : [canonical, raw];
 }
 
 function hostRootDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, cwd?: string, mode: 'read' | 'write' = 'read'): string {
@@ -41,7 +56,9 @@ function hostRootDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'
 }
 
 function hostAgentDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, agent: string, cwd?: string, mode: 'read' | 'write' = 'read'): string {
-  return path.join(hostRootDir(visibility, hostId, cwd, mode), agent);
+  // pln#673 — same normalization as the shared tree; the host segment was
+  // already sanitized (sanitizeHostId), the agent segment was not.
+  return path.join(hostRootDir(visibility, hostId, cwd, mode), sanitizeAgentPathSegment(agent));
 }
 
 export function ensureRuntimeDir(agent: string, cwd?: string, visibility: MemoryVisibility = 'shared', hostId?: string): void {
@@ -83,9 +100,16 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
 export function runtimeNotePath(note: RuntimeNote, cwd?: string): string {
   const visibility = note.visibility ?? 'shared';
   const hostId = sanitizeHostId(note.host_id ?? resolveCurrentHostId());
-  return visibility === 'shared'
-    ? path.join(sharedAgentDir(note.agent, cwd), `${note.id}.json`)
-    : path.join(hostAgentDir(visibility, hostId, note.agent, cwd), `${note.id}.json`);
+  // pln#673 — the canonical (normalized) location, plus the RAW-name fallback
+  // for notes written before the normalization: this function answers "where is
+  // THIS note", and a record must not become invisible (nor undeletable)
+  // because its directory predates the fix. Canonical first; the raw candidate
+  // only wins when it actually holds the file.
+  const base = visibility === 'shared'
+    ? sharedRuntimeDir(cwd)
+    : hostRootDir(visibility, hostId, cwd);
+  const candidates = agentDirCandidates(base, note.agent).map((dir) => path.join(dir, `${note.id}.json`));
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]!;
 }
 
 /**
@@ -159,12 +183,17 @@ export function listSharedJournaledRuntimeNotes(cwd?: string): RuntimeNote[] {
 function readAgentNotes(dir: string, agent?: string): RuntimeNote[] {
   if (!fs.existsSync(dir)) return [];
 
-  const agents = agent
-    ? [agent]
-    : fs.readdirSync(dir).filter((entry) => fs.statSync(path.join(dir, entry)).isDirectory());
+  // pln#673 — a filtered read probes BOTH the normalized directory and the raw
+  // name (a pre-normalization directory must stay readable); an unfiltered read
+  // enumerates whatever is on disk, which covers both by construction. The
+  // candidates are absolute, so the join below must not prepend `dir` again.
+  const agentDirectories = agent
+    ? agentDirCandidates(dir, agent)
+    : fs.readdirSync(dir)
+      .filter((entry) => fs.statSync(path.join(dir, entry)).isDirectory())
+      .map((entry) => path.join(dir, entry));
   const notes: RuntimeNote[] = [];
-  for (const a of agents) {
-    const agentDirectory = path.join(dir, a);
+  for (const agentDirectory of agentDirectories) {
     if (!fs.existsSync(agentDirectory)) continue;
     const files = fs.readdirSync(agentDirectory).filter((file) => file.endsWith('.json'));
     for (const file of files) {
