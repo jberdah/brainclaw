@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -201,10 +202,12 @@ export function assertSafeSessionId(sessionId: string): void {
  * This is deliberately the SAME normalization the inbox has always used
  * (`agentInboxDir`, messaging.ts) rather than a new convention: lower-case,
  * then every character outside [a-z0-9_-] becomes `_`. Separators and dots
- * cannot survive it, so no traversal can. It is IDENTITY for every agent name
- * brainclaw produces (claude-code, codex, github-copilot, …) — verified
- * against the real store — which is why writes can adopt it without moving
- * existing data. Readers still probe the raw name as a fallback (see
+ * cannot survive it, so no traversal can. When that replacement (or a length
+ * cap) would collapse distinct raw names, a stable hash suffix keeps their
+ * runtime directories separate. It remains IDENTITY for every normal agent
+ * name brainclaw produces (claude-code, codex, github-copilot, …) — verified
+ * against the real store — so existing normal directories do not move.
+ * Readers still probe a contained raw legacy name as a fallback (see
  * runtime.ts) so a non-canonical legacy directory never becomes invisible.
  *
  * Alias resolution is deliberately NOT applied here: mapping `copilot` to
@@ -213,12 +216,23 @@ export function assertSafeSessionId(sessionId: string): void {
  */
 const AGENT_SEGMENT_UNSAFE_RE = /[^a-z0-9_-]/g;
 const WIN32_RESERVED_BASENAME_FOR_SEGMENT_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+// 128 leaves ample room for the record id and works below the 255-byte
+// component limit even when an agent name contains non-BMP characters (which
+// normalize to ASCII underscores). The hash makes truncation collision-safe.
+const MAX_AGENT_PATH_SEGMENT_LENGTH = 128;
 
 export function sanitizeAgentPathSegment(agent: string): string {
-  const normalized = agent.trim().toLowerCase().replace(AGENT_SEGMENT_UNSAFE_RE, '_');
+  const source = agent.trim().toLowerCase();
+  let normalized = source.replace(AGENT_SEGMENT_UNSAFE_RE, '_');
   if (normalized.length === 0) return 'unknown-agent';
   // A Win32 device name is not a usable directory either (mkdir CON fails).
-  return WIN32_RESERVED_BASENAME_FOR_SEGMENT_RE.test(normalized) ? `${normalized}_` : normalized;
+  if (WIN32_RESERVED_BASENAME_FOR_SEGMENT_RE.test(normalized)) normalized = `${normalized}_`;
+  // A replacement would otherwise merge distinct identities (`a.b` and `a_b`)
+  // into one runtime directory. Preserve safe canonical names exactly, but add
+  // a deterministic discriminator to every lossy or length-capped segment.
+  if (source === normalized && normalized.length <= MAX_AGENT_PATH_SEGMENT_LENGTH) return normalized;
+  const suffix = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+  return `${normalized.slice(0, MAX_AGENT_PATH_SEGMENT_LENGTH - suffix.length - 1)}_${suffix}`;
 }
 
 export const SESSION_SNAPSHOT_FILENAME_SUFFIX = '.snapshot.json';

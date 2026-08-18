@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { deleteRuntimeNote, listRuntimeNotes, runtimeNotePath, saveRuntimeNote } from '../../src/core/runtime.js';
+import { deleteRuntimeNote, listRuntimeNotes, listSharedJournaledRuntimeNotes, runtimeNotePath, saveRuntimeNote } from '../../src/core/runtime.js';
 import { sanitizeAgentPathSegment } from '../../src/core/io.js';
+import { saveVersionedJsonFile } from '../../src/core/migration.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { RuntimeNote } from '../../src/core/schema.js';
 
@@ -22,7 +23,7 @@ describe('agent name as a path segment (pln#673)', () => {
   let workspace: TestWorkspace;
   let outside: string;
 
-  const note = (id: string, agent: string, visibility: 'shared' | 'machine' = 'shared'): RuntimeNote => ({
+  const note = (id: string, agent: string, visibility: Exclude<RuntimeNote['visibility'], undefined> = 'shared'): RuntimeNote => ({
     id,
     agent,
     text: 'probe',
@@ -116,6 +117,61 @@ describe('agent name as a path segment (pln#673)', () => {
     assert.ok(!fs.existsSync(path.join(legacyDir, 'rtn_legacy.json')));
   });
 
+  it('keeps contained raw legacy directories readable in all visibility trees', () => {
+    const restoreHost = workspace.setHostId('Legacy Host');
+    const raw = 'Legacy.Agent';
+    try {
+      for (const visibility of ['shared', 'machine', 'private'] as const) {
+        const root = visibility === 'shared'
+          ? path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime')
+          : path.join(workspace.dir, '.brainclaw', 'coordination', `runtime-${visibility === 'machine' ? 'hosts' : 'private'}`, 'legacy-host');
+        const legacyDir = path.join(root, raw);
+        const legacyNote = note(`rtn_legacy_${visibility}`, raw, visibility);
+        fs.mkdirSync(legacyDir, { recursive: true });
+        saveVersionedJsonFile('runtime_note', path.join(legacyDir, `${legacyNote.id}.json`), legacyNote);
+
+        assert.ok(listRuntimeNotes({ agent: raw, visibility }, workspace.dir).some((entry) => entry.id === legacyNote.id));
+        assert.equal(runtimeNotePath(legacyNote, workspace.dir), path.join(legacyDir, `${legacyNote.id}.json`));
+        if (visibility === 'shared') {
+          assert.ok(listSharedJournaledRuntimeNotes(workspace.dir).some((entry) => entry.id === legacyNote.id));
+        }
+
+        // Updating a legacy note migrates that id instead of making duplicate
+        // raw + canonical records that would make a one-shot delete incomplete.
+        const updated = { ...legacyNote, text: 'updated' };
+        saveRuntimeNote(updated, workspace.dir);
+        const canonicalPath = path.join(root, sanitizeAgentPathSegment(raw), `${legacyNote.id}.json`);
+        assert.ok(fs.existsSync(canonicalPath));
+        assert.ok(!fs.existsSync(path.join(legacyDir, `${legacyNote.id}.json`)));
+        assert.deepEqual(listRuntimeNotes({ agent: raw, visibility }, workspace.dir).filter((entry) => entry.id === legacyNote.id).map((entry) => entry.text), ['updated']);
+        if (visibility === 'shared') {
+          assert.equal(listSharedJournaledRuntimeNotes(workspace.dir).filter((entry) => entry.id === legacyNote.id).length, 1);
+        }
+        assert.equal(deleteRuntimeNote(updated, workspace.dir), true);
+      }
+    } finally {
+      restoreHost();
+    }
+  });
+
+  it('never lets the raw legacy-read fallback escape the runtime root', () => {
+    // Give the canonical runtime tree content so read resolution selects it.
+    saveRuntimeNote(note('rtn_anchor', 'codex'), workspace.dir);
+    const runtimeRoot = path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime');
+    const escapingAgent = path.relative(runtimeRoot, outside);
+    const escapedNote = note('rtn_escape', escapingAgent);
+    const outsideRecord = path.join(outside, 'rtn_escape.json');
+    saveVersionedJsonFile('runtime_note', outsideRecord, escapedNote);
+
+    // Before the containment guard, the raw fallback listed and deleted this
+    // record outside the store. It must now use only its canonical in-store path.
+    const canonicalPath = path.join(runtimeRoot, sanitizeAgentPathSegment(escapingAgent), 'rtn_escape.json');
+    assert.equal(runtimeNotePath(escapedNote, workspace.dir), canonicalPath);
+    assert.ok(!listRuntimeNotes({ agent: escapingAgent }, workspace.dir).some((entry) => entry.id === escapedNote.id));
+    assert.equal(deleteRuntimeNote(escapedNote, workspace.dir), false);
+    assert.ok(fs.existsSync(outsideRecord), 'the external file must not be touched');
+  });
+
   it('a new note lands in the normalized directory and round-trips', () => {
     const agent = 'Weird Agent/Name';
     saveRuntimeNote(note('rtn_new', agent), workspace.dir);
@@ -125,10 +181,22 @@ describe('agent name as a path segment (pln#673)', () => {
     assert.ok(listRuntimeNotes({ agent }, workspace.dir).some((n) => n.id === 'rtn_new'), 'and readable back by the same name');
   });
 
+  it('keeps two names that need the same replacement in separate directories', () => {
+    const dotted = 'a.b';
+    const underscored = 'a_b';
+    assert.notEqual(sanitizeAgentPathSegment(dotted), sanitizeAgentPathSegment(underscored));
+
+    saveRuntimeNote(note('rtn_dotted', dotted), workspace.dir);
+    saveRuntimeNote(note('rtn_underscored', underscored), workspace.dir);
+
+    assert.deepEqual(listRuntimeNotes({ agent: dotted }, workspace.dir).map((entry) => entry.id), ['rtn_dotted']);
+    assert.deepEqual(listRuntimeNotes({ agent: underscored }, workspace.dir).map((entry) => entry.id), ['rtn_underscored']);
+  });
+
   it('the normalizer refuses to produce an empty or Win32-device directory name', () => {
     assert.equal(sanitizeAgentPathSegment(''), 'unknown-agent');
     assert.equal(sanitizeAgentPathSegment('   '), 'unknown-agent');
-    assert.equal(sanitizeAgentPathSegment('///'), '___');
+    assert.match(sanitizeAgentPathSegment('///'), /^____[0-9a-f]{16}$/);
     // `mkdir CON` fails on Windows: the device name must not survive.
     for (const device of ['CON', 'con', 'NUL', 'com1', 'LPT9']) {
       const segment = sanitizeAgentPathSegment(device);
@@ -136,6 +204,10 @@ describe('agent name as a path segment (pln#673)', () => {
     }
     // A name that merely contains a device word is untouched.
     assert.equal(sanitizeAgentPathSegment('console'), 'console');
+
+    const oversized = sanitizeAgentPathSegment('a'.repeat(300));
+    assert.ok(oversized.length <= 128, 'a path segment must remain below platform component limits');
+    assert.match(oversized, /^[a-z0-9_-]+$/);
   });
 
   it('machine-visibility notes are normalized too (both trees, not just the shared one)', () => {

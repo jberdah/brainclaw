@@ -38,6 +38,32 @@ function sharedAgentDir(agent: string, cwd?: string, mode: 'read' | 'write' = 'r
 }
 
 /**
+ * Return a pre-normalization directory only when it is provably one direct
+ * child of `baseDir`. Compatibility reads must not reintroduce the traversal
+ * the normalized write path closes: the agent name is still env-controlled.
+ *
+ * Dots inside a segment are retained for existing names such as
+ * `Legacy.Agent`; separators, Win32 aliases (including trailing dots/spaces),
+ * and platform-invalid components are not legacy data we can safely probe.
+ */
+const UNSAFE_LEGACY_AGENT_SEGMENT_RE = /[<>:"/\\|?*\u0000-\u001F]/;
+const WIN32_RESERVED_LEGACY_AGENT_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+function legacyAgentDir(baseDir: string, agent: string): string | undefined {
+  if (
+    agent.length === 0
+    || agent !== agent.trim()
+    || agent.endsWith('.')
+    || UNSAFE_LEGACY_AGENT_SEGMENT_RE.test(agent)
+    || WIN32_RESERVED_LEGACY_AGENT_BASENAME_RE.test(agent.split('.')[0]!)
+  ) return undefined;
+
+  const base = path.resolve(baseDir);
+  const candidate = path.resolve(path.join(base, agent));
+  return path.dirname(candidate) === base ? candidate : undefined;
+}
+
+/**
  * Both directories an agent's notes can occupy, canonical first (pln#673).
  * Writes always use the normalized segment; reads also probe the RAW name so
  * notes written before the normalization stay visible — the dual-read pattern
@@ -46,8 +72,8 @@ function sharedAgentDir(agent: string, cwd?: string, mode: 'read' | 'write' = 'r
  */
 function agentDirCandidates(baseDir: string, agent: string): string[] {
   const canonical = path.join(baseDir, sanitizeAgentPathSegment(agent));
-  const raw = path.join(baseDir, agent);
-  return canonical === raw ? [canonical] : [canonical, raw];
+  const raw = legacyAgentDir(baseDir, agent);
+  return raw && canonical !== raw ? [canonical, raw] : [canonical];
 }
 
 function hostRootDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, cwd?: string, mode: 'read' | 'write' = 'read'): string {
@@ -59,6 +85,15 @@ function hostAgentDir(visibility: Extract<MemoryVisibility, 'machine' | 'private
   // pln#673 — same normalization as the shared tree; the host segment was
   // already sanitized (sanitizeHostId), the agent segment was not.
   return path.join(hostRootDir(visibility, hostId, cwd, mode), sanitizeAgentPathSegment(agent));
+}
+
+/** A contained raw path that can be retired after an update reaches its canonical location. */
+function legacyRuntimeNotePath(note: RuntimeNote, visibility: MemoryVisibility, hostId: string, cwd?: string): string | undefined {
+  const base = visibility === 'shared'
+    ? sharedRuntimeDir(cwd, 'write')
+    : hostRootDir(visibility, hostId, cwd, 'write');
+  const legacyDir = legacyAgentDir(base, note.agent);
+  return legacyDir ? path.join(legacyDir, `${note.id}.json`) : undefined;
 }
 
 export function ensureRuntimeDir(agent: string, cwd?: string, visibility: MemoryVisibility = 'shared', hostId?: string): void {
@@ -92,6 +127,13 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
       registryFaultPoint('after_registry_journal');
     }
     saveVersionedJsonFile('runtime_note', filepath, parsed);
+    // An update to a pre-normalization record must not leave two physical
+    // copies with the same id. Retire only the verified-contained raw path,
+    // and only after the canonical write succeeds.
+    const legacyPath = legacyRuntimeNotePath(note, visibility, hostId, cwd);
+    if (legacyPath && legacyPath !== filepath && fs.existsSync(legacyPath)) {
+      fs.unlinkSync(legacyPath);
+    }
     appendEvent({ action: 'create', item_type: 'runtime_note', item_id: note.id, agent: note.agent, agent_id: note.agent_id }, cwd);
     commitMemoryChange(`runtime note: ${note.note_type ?? 'note'} (${note.agent})`, cwd);
   });
