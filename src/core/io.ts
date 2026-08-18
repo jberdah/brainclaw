@@ -165,8 +165,20 @@ export function entityRecordPaths(subdir: string, id: string, cwd?: string, pref
  */
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/**
+ * Win32 device namespace (pln#672 review P2, reproduced on a Windows host):
+ * `CON`, `NUL`, `COM1`… are not directory entries — `CON.json` opens the
+ * console device, `stat` reports a file, and the sessions directory stays
+ * empty. A record "written" there is silently lost. The reservation applies
+ * to the basename BEFORE the first dot, case-insensitively, so `con.json`
+ * and `Con.anything` are covered too. Refused on every platform: the grammar
+ * is shared, and an id must mean the same thing on all of them.
+ */
+const WIN32_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 export function isSafeSessionId(sessionId: string): boolean {
-  return SAFE_SESSION_ID_RE.test(sessionId);
+  if (!SAFE_SESSION_ID_RE.test(sessionId)) return false;
+  return !WIN32_RESERVED_BASENAME_RE.test(sessionId.split('.')[0]!);
 }
 
 /** Throwing variant for the filename builders — a traversal must be loud, never silent. */

@@ -42,11 +42,12 @@ export function resolveCurrentSessionId(
   cwd?: string,
   options: SessionResolutionOptions = {},
 ): string | undefined {
-  const value = env.BRAINCLAW_SESSION_ID?.trim()
-    || env.OPENCLAW_SESSION_ID?.trim()
-    || env.CLAUDE_SESSION_ID?.trim()
-    || env.COPILOT_SESSION_ID?.trim();
-  if (value && value.length > 0) {
+  // pln#672 review P1: ONE validated resolution for the env session id. This
+  // used to re-read the variables raw, so an unsafe value bypassed the
+  // boundary here and reached startSession's snapshot write — the traversal
+  // stayed exploitable through a second writer (reproduced by the reviewer).
+  const value = resolveExplicitSessionId(env);
+  if (value) {
     return value;
   }
 
@@ -492,8 +493,32 @@ export function resolveExplicitSessionId(env: NodeJS.ProcessEnv = process.env): 
   // disk with '../../../ESCAPED'). Refusing to run at all would be worse —
   // a stale exported variable would break every command in the shell — so
   // the boundary drops the value here and the filename builders below refuse
-  // loudly for any other caller.
+  // loudly for any other caller. The drop is NOT silent: session
+  // establishment surfaces it (see describeIgnoredSessionIdEnv).
   return named && isSafeSessionId(named) ? named : undefined;
+}
+
+/**
+ * Name the env variable whose session id was DROPPED as unsafe, if any
+ * (pln#672 review — the availability-first fallback must not silently change
+ * the agent's identity: continuing under an implicit session while the caller
+ * believes it resumed the supplied one is exactly the kind of silent
+ * divergence this project refuses).
+ *
+ * Returns the VARIABLE NAME and a non-sensitive reason only — never the raw
+ * value, which is attacker-influenced and would land in logs.
+ */
+export function describeIgnoredSessionIdEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): { variable: string; length: number } | undefined {
+  for (const variable of ['BRAINCLAW_SESSION_ID', 'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID']) {
+    const raw = env[variable]?.trim();
+    if (!raw) continue;
+    // The first variable that carries a value decides — same precedence as
+    // resolveExplicitSessionId, so the report names the one actually used.
+    return isSafeSessionId(raw) ? undefined : { variable, length: raw.length };
+  }
+  return undefined;
 }
 
 function loadSessionFile(filepath: string): CurrentSessionState {

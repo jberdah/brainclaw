@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { isSessionSnapshotRecordFilename, memoryExists, resolveEntityDir, sessionSnapshotRecordPaths } from '../core/io.js';
+import { assertSafeSessionId, isSessionSnapshotRecordFilename, memoryExists, resolveEntityDir, sessionSnapshotRecordPaths } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
-import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
+import { buildOperationalIdentity, describeIgnoredSessionIdEnv, loadAllSessions, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, resolveCurrentModel, resolveOrAutoRegisterAgentIdentity } from '../core/agent-registry.js';
 import { buildContext, renderContextPromptTemplate } from '../core/context.js';
 import { writeContextMarker } from '../core/freshness.js';
@@ -38,7 +38,38 @@ function sessionSnapshotWriteDir(cwd?: string): string {
 }
 
 function sessionSnapshotPath(sessionId: string, cwd?: string): string {
+  // pln#672 review P1 — THE SECOND WRITER. This builder was unguarded while
+  // sessionFilePathIn / sessionSnapshotRecordPaths were hardened, so an
+  // env-controlled traversal still escaped the store HERE, before the
+  // current_session write refused it (reproduced by the reviewer:
+  // `ESCAPED.snapshot.json` landed outside, and the later throw did not undo
+  // the escaped write). A guard on some builders is not a guard.
+  assertSafeSessionId(sessionId);
   return path.join(sessionSnapshotWriteDir(cwd), `${sessionId}.snapshot.json`);
+}
+
+/**
+ * pln#672 review P2 — the snapshot write needs the same positive proof the
+ * current_session write already has. On a case-insensitive filesystem
+ * `CaseSnapshot` and `casesnapshot` name the SAME file, so a second session
+ * silently overwrote the first one's snapshot. Refuse to replace a record
+ * that names a different session; identical-id rewrites (heartbeat, restart)
+ * stay allowed.
+ */
+function assertSnapshotSlotFree(filepath: string, sessionId: string): void {
+  if (!fs.existsSync(filepath)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(filepath, 'utf-8')) as { session_id?: unknown };
+    if (typeof raw.session_id === 'string' && raw.session_id !== sessionId) {
+      throw new Error(
+        `Refusing to overwrite the session_snapshot of '${raw.session_id}' at '${filepath}' with '${sessionId}' — the two ids resolve to the same filename on this filesystem`,
+      );
+    }
+  } catch (err) {
+    // A deliberate refusal propagates; an unreadable record does not block a
+    // fresh write (it is not proof that another session owns the slot).
+    if (err instanceof Error && err.message.startsWith('Refusing to overwrite')) throw err;
+  }
 }
 
 /**
@@ -126,6 +157,14 @@ export interface SessionStartResult extends SessionSnapshot {
    * regenerated.
    */
   stale_surfaces?: WarningDetail;
+  /**
+   * pln#672 — an environment variable carried a session id that cannot safely
+   * become a filename, so it was DROPPED and this session runs under an
+   * implicit id instead. Surfaced because the caller would otherwise believe
+   * it resumed the supplied identity (review decision point: keep the
+   * availability-first fallback, but never let it be silent).
+   */
+  invalid_session_id_ignored?: WarningDetail;
   /** True when the agent identity was auto-registered during this session start. */
   auto_registered?: boolean;
 }
@@ -201,6 +240,11 @@ export async function runSessionStart(options: SessionStartOptions = {}): Promis
     if (snapshot.stale_surfaces) {
       console.warn(`⚠ ${snapshot.stale_surfaces.message}`);
     }
+    // pln#672 — a dropped env session id must reach the human too: the whole
+    // point of the warning is that the session identity is NOT the one asked for.
+    if (snapshot.invalid_session_id_ignored) {
+      console.warn(`⚠ ${snapshot.invalid_session_id_ignored.message}`);
+    }
     // Fifth instance of the computed-then-dropped class, caught by the new seam
     // guard on its first run: built since the shared-checkout detection landed,
     // read by nothing. Two agents editing one checkout is precisely what a human
@@ -262,7 +306,9 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
   // Persist snapshot
   const dir = sessionSnapshotWriteDir(options.cwd);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  saveVersionedJsonFile('session_snapshot', sessionSnapshotPath(snapshot.session_id, options.cwd), SessionSnapshotSchema.parse(snapshot));
+  const snapshotPath = sessionSnapshotPath(snapshot.session_id, options.cwd);
+  assertSnapshotSlotFree(snapshotPath, snapshot.session_id);
+  saveVersionedJsonFile('session_snapshot', snapshotPath, SessionSnapshotSchema.parse(snapshot));
   // Resolve git branch and worktree for session tracking
   let currentBranch: string | undefined;
   let currentWorktreePath: string | undefined;
@@ -437,6 +483,19 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
     staleSurfaces = staleSurfaceWarning(freshness, currentVersion);
   } catch { /* non-fatal */ }
 
+  // pln#672 — report a DROPPED env session id. Never echo the raw value: it is
+  // attacker-influenced and would land straight in logs; the variable name and
+  // its length are enough to diagnose.
+  let invalidSessionIdIgnored: StructuredWarningInput | undefined;
+  const droppedSessionEnv = describeIgnoredSessionIdEnv();
+  if (droppedSessionEnv) {
+    invalidSessionIdIgnored = {
+      code: 'invalid_session_id_ignored',
+      message: `${droppedSessionEnv.variable} carries a session id that cannot be a record filename (${droppedSessionEnv.length} chars) — it was ignored and this session runs under '${snapshot.session_id}'. Unset or fix the variable to resume the intended session.`,
+      data: { variable: droppedSessionEnv.variable, length: droppedSessionEnv.length, effective_session_id: snapshot.session_id },
+    };
+  }
+
   // Materialize incoming federation signals from linked projects (Phase 0 — local)
   if (maintenanceMode === 'full') {
     try {
@@ -471,6 +530,7 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
     ...(staleClaimsReleased ? { stale_claims_released: staleClaimsReleased } : {}),
     ...(memoryPressure ? { memory_pressure: memoryPressure } : {}),
     ...(staleSurfaces ? { stale_surfaces: toWarningDetail(staleSurfaces) } : {}),
+    ...(invalidSessionIdIgnored ? { invalid_session_id_ignored: toWarningDetail(invalidSessionIdIgnored) } : {}),
     ...(autoRegistered ? { auto_registered: true } : {}),
   };
 }

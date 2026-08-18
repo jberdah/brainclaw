@@ -10,6 +10,7 @@ import {
   saveCurrentSession,
 } from '../../src/core/identity.js';
 import { isSafeSessionId, sessionSnapshotRecordPaths } from '../../src/core/io.js';
+import { startSession } from '../../src/commands/session-start.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { CurrentSessionState } from '../../src/core/schema.js';
 
@@ -149,6 +150,72 @@ describe('session id boundary validation (pln#672)', () => {
     }
     for (const ko of ['', '.', '..', '.hidden', '../x', 'a/b', 'a\\b', 'C:/x', 'x'.repeat(129), 'a b', 'é']) {
       assert.equal(isSafeSessionId(ko), false, `${JSON.stringify(ko.slice(0, 20))} must be rejected`);
+    }
+  });
+
+  it('startSession with a traversal env id writes NOTHING outside the store and runs under a safe id (codex P1)', async () => {
+    // The reviewer's reproduction: sessionSnapshotPath was unguarded, so the
+    // snapshot escaped BEFORE the current_session write refused — and the
+    // later throw did not undo the escaped write.
+    const saved = process.env.BRAINCLAW_SESSION_ID;
+    const parent = path.dirname(workspace.dir);
+    process.env.BRAINCLAW_SESSION_ID = '../../../ESCAPED';
+    try {
+      const snapshot = await startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
+
+      assert.ok(!fs.existsSync(path.join(parent, 'ESCAPED.snapshot.json')), 'no snapshot may escape the store');
+      assert.ok(!fs.existsSync(path.resolve(workspace.dir, '../../../ESCAPED.snapshot.json')), 'nor at the traversal target');
+      assert.deepEqual(jsonFilesUnder(outside), [], 'nothing outside the store at all');
+      // The session must run under a SAFE id, and say so rather than pretend.
+      assert.notEqual(snapshot.session_id, '../../../ESCAPED');
+      assert.equal(isSafeSessionId(snapshot.session_id), true);
+      assert.ok(snapshot.invalid_session_id_ignored, 'the drop must be surfaced, never silent');
+      assert.match(snapshot.invalid_session_id_ignored.message, /BRAINCLAW_SESSION_ID/);
+      assert.ok(
+        !JSON.stringify(snapshot.invalid_session_id_ignored).includes('ESCAPED'),
+        'the raw attacker-influenced value must never be echoed back',
+      );
+    } finally {
+      if (saved === undefined) delete process.env.BRAINCLAW_SESSION_ID;
+      else process.env.BRAINCLAW_SESSION_ID = saved;
+    }
+  });
+
+  it('Win32 device names are refused on every platform (codex P2)', () => {
+    // `CON.json` opens the console device: stat says "file", the directory
+    // stays empty, the record is silently lost.
+    for (const device of ['CON', 'con', 'Con', 'PRN', 'AUX', 'NUL', 'COM1', 'COM9', 'LPT1', 'CON.json', 'nul.anything']) {
+      assert.equal(isSafeSessionId(device), false, `${device} must be refused`);
+      assert.throws(() => saveCurrentSession(record(device), workspace.dir), /not a valid record identifier/);
+    }
+    // A name that merely CONTAINS a device word stays legitimate.
+    for (const ok of ['console', 'conductor', 'com10', 'lpt0', 'nullify']) {
+      assert.equal(isSafeSessionId(ok), true, `${ok} must stay accepted`);
+    }
+  });
+
+  it('a snapshot slot is never overwritten by a different session id (codex P2 — case collision)', async () => {
+    // On a case-insensitive filesystem `CaseSnapshot` and `casesnapshot` name
+    // the SAME file. Proven cross-platform by planting a snapshot that names
+    // another session at the exact path the second start would use.
+    const saved = process.env.BRAINCLAW_SESSION_ID;
+    process.env.BRAINCLAW_SESSION_ID = 'sess_collider';
+    const canonical = path.join(workspace.dir, '.brainclaw', 'coordination', 'sessions');
+    fs.mkdirSync(canonical, { recursive: true });
+    const slot = path.join(canonical, 'sess_collider.snapshot.json');
+    fs.writeFileSync(slot, JSON.stringify({
+      schema_version: 2, session_id: 'sess_first_owner', agent: 'other', started_at: new Date().toISOString(),
+    }));
+    const original = fs.readFileSync(slot, 'utf-8');
+    try {
+      await assert.rejects(
+        () => startSession({ cwd: workspace.dir, maintenanceMode: 'fast' }),
+        /Refusing to overwrite the session_snapshot/,
+      );
+      assert.equal(fs.readFileSync(slot, 'utf-8'), original, "the first session's snapshot must survive");
+    } finally {
+      if (saved === undefined) delete process.env.BRAINCLAW_SESSION_ID;
+      else process.env.BRAINCLAW_SESSION_ID = saved;
     }
   });
 
