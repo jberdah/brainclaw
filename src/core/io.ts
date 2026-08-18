@@ -146,6 +146,38 @@ export function entityRecordPaths(subdir: string, id: string, cwd?: string, pref
   return entityRecordDirs(subdir, cwd ?? process.cwd(), preferredDirName).map((d) => path.join(d, `${id}.json`));
 }
 
+/**
+ * The id grammar every session record filename is built from (pln#672).
+ *
+ * A session id arrives from the ENVIRONMENT (BRAINCLAW_SESSION_ID and the
+ * per-agent variants read by resolveExplicitSessionId) and is interpolated
+ * straight into a filename: `<id>.json` / `<id>.snapshot.json`. Unvalidated,
+ * `../../../ESCAPED` walks out of the store — reproduced on disk on
+ * 2026-08-18: saveCurrentSession wrote outside the store root, and the same
+ * path feeds loadSessionById (read) and clearCurrentSession (unlink).
+ *
+ * Allowed: a leading alphanumeric, then alphanumerics, `.`, `_`, `-`, up to
+ * 128 chars — covers brainclaw's own `sess_<hex>` and the UUID-shaped ids
+ * some agents export. Refused by construction: path separators, `..`, drive
+ * letters and absolute paths, empty ids, and any id starting with a dot.
+ * The `.snapshot` suffix stays separately refused for current_session ids
+ * (pln#670) — that is a type-collision rule, not a path-safety one.
+ */
+const SAFE_SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+export function isSafeSessionId(sessionId: string): boolean {
+  return SAFE_SESSION_ID_RE.test(sessionId);
+}
+
+/** Throwing variant for the filename builders — a traversal must be loud, never silent. */
+export function assertSafeSessionId(sessionId: string): void {
+  if (!isSafeSessionId(sessionId)) {
+    throw new Error(
+      `session id '${sessionId}' is not a valid record identifier: only [A-Za-z0-9._-] (starting with an alphanumeric, max 128 chars) may become a session filename`,
+    );
+  }
+}
+
 export const SESSION_SNAPSHOT_FILENAME_SUFFIX = '.snapshot.json';
 
 /**
@@ -169,6 +201,9 @@ export function isSessionSnapshotRecordFilename(filename: string): boolean {
  * before the split; readers must schema-validate every candidate.
  */
 export function sessionSnapshotRecordPaths(sessionId: string, cwd?: string, preferredDirName?: string): string[] {
+  // pln#672 — the id becomes a filename here too: refuse a traversal loudly
+  // rather than build a path that escapes the store.
+  assertSafeSessionId(sessionId);
   const dirs = entityRecordDirs('sessions', cwd ?? process.cwd(), preferredDirName);
   return [
     ...dirs.map((d) => path.join(d, `${sessionId}.snapshot.json`)),

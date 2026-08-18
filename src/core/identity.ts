@@ -6,7 +6,7 @@ import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
-import { findSessionAnchorRoot, isSessionSnapshotRecordFilename, memoryDir } from './io.js';
+import { assertSafeSessionId, findSessionAnchorRoot, isSafeSessionId, isSessionSnapshotRecordFilename, memoryDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 
@@ -194,8 +194,11 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
  * Load a specific session by ID.
  */
 export function loadSessionById(sessionId: string, cwd?: string): CurrentSessionState | undefined {
-  // Reserved '.snapshot' alias id — such a current_session record can never exist.
-  if (!isCurrentSessionFilename(sessionId)) return undefined;
+  // A READ answers "no such record" rather than throwing: an unsafe id
+  // (traversal — pln#672) or the reserved '.snapshot' alias (pln#670) simply
+  // cannot name a current_session record. The throwing guard stays in
+  // sessionFilePathIn for the write paths.
+  if (!isSafeSessionId(sessionId) || !isCurrentSessionFilename(sessionId)) return undefined;
   // pln#648 read-chain: anchor first, then the pre-anchor legacy location. A
   // bad record in one location must not mask a good one in the other.
   for (const dir of sessionsDirs(cwd)) {
@@ -442,6 +445,10 @@ function isCurrentSessionFilename(sessionId: string): boolean {
 }
 
 function sessionFilePathIn(dir: string, sessionId: string): string {
+  // pln#672 — PATH SAFETY first: the id is env-controlled and becomes a
+  // filename, so a traversal ('../../evil') must never build a path. This is
+  // the choke point for save / load / clear alike.
+  assertSafeSessionId(sessionId);
   // pln#670 review fix (codex P1): a session id ending in ".snapshot" would
   // produce `<base>.snapshot.json` — the snapshot filename of session <base>
   // in a shared directory. Refuse the alias instead of silently colliding
@@ -474,11 +481,19 @@ function resolveCurrentAgentName(): string | undefined {
  * resolution from a store the agent never named.
  */
 export function resolveExplicitSessionId(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.BRAINCLAW_SESSION_ID?.trim()
+  const named = env.BRAINCLAW_SESSION_ID?.trim()
     || env.OPENCLAW_SESSION_ID?.trim()
     || env.CLAUDE_SESSION_ID?.trim()
     || env.COPILOT_SESSION_ID?.trim()
     || undefined;
+  // pln#672 — this value becomes a FILENAME (`<id>.json`). An id that cannot
+  // safely do so is IGNORED, not honoured: falling back to the implicit
+  // session is safe, while using it walks out of the store (reproduced on
+  // disk with '../../../ESCAPED'). Refusing to run at all would be worse —
+  // a stale exported variable would break every command in the shell — so
+  // the boundary drops the value here and the filename builders below refuse
+  // loudly for any other caller.
+  return named && isSafeSessionId(named) ? named : undefined;
 }
 
 function loadSessionFile(filepath: string): CurrentSessionState {
