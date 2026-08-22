@@ -5,11 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
+import { LOOP_KINDS, type LoopKind } from '../../src/core/loops/types.js';
 import { prepareTurnOwnedReviewDispatch } from '../../src/core/review-loop-turn-dispatch.js';
 import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
 import {
   deriveChildIds, getReservation, launchGrant,
-  reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveTurnId,
+  reserve, commitReservation, abortReservation,
+  armLaunch, consumeLaunchGrant, revokeLaunchGrant,
+  evidenceMatchesAttempt, deriveTurnId,
 } from '../../src/core/loops/attempt-reservation.js';
 import { loadAgentRun, createAgentRun } from '../../src/core/agentruns.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
@@ -60,6 +63,88 @@ function fakeWorkerCompletes(cwd: string, w: { turnId: string; runId: string; as
   writeCompletionSignal(cwd, w.assignmentId, { turn_id: w.turnId, run_id: w.runId, nonce: w.nonce, status: 'completed', at: new Date().toISOString() });
   return { assignment_id: w.assignmentId, turn_id: w.turnId, run_id: w.runId, nonce: w.nonce, status: 'completed', summary: 'fake review', review_verdict: verdict, review_summary: 'looks good' };
 }
+
+/**
+ * Characterization harness for the kind-neutral attempt primitives. It opens a
+ * real loop (therefore using that kind's shipped default protocol) and only
+ * derives reservation inputs from the materialized loop. Dispatch/reconcile is
+ * deliberately outside this harness: the shipped end-to-end dispatcher remains
+ * review-specific, while the durable attempt state machine is already generic.
+ */
+function lifecycleHarness(cwd: string, kind: LoopKind) {
+  const slotId = `lsl_${kind}`;
+  const loop = openLoop({
+    kind,
+    title: `${kind} lifecycle characterization`,
+    created_by: 'coord',
+    slots: [{ slot_id: slotId, role: 'worker', agent: 'codex' }],
+  }, cwd);
+
+  function reserveAt(iteration: number) {
+    const turnId = deriveTurnId(loop.id, slotId, iteration);
+    return reserve({
+      turn_id: turnId,
+      loop_id: loop.id,
+      slot_id: slotId,
+      target_slot_generation: iteration,
+      loop_version_at_reserve: loop.version,
+      agent: 'codex',
+      claim_id: `clm_${kind}_${iteration}`,
+      phase: loop.current_phase,
+      iteration,
+      store_root: cwd,
+      cwd,
+      lease_deadline: FUTURE(),
+    }, cwd);
+  }
+
+  function evidenceMatches(turnId: string, nonce: string): boolean {
+    const persisted = getReservation(turnId, cwd);
+    assert.ok(persisted, `reservation ${turnId} must be readable`);
+    return evidenceMatchesAttempt(persisted, {
+      turn_id: turnId,
+      run_id: persisted.child_ids.run_id,
+      nonce,
+    });
+  }
+
+  return { loop, reserveAt, evidenceMatches };
+}
+
+describe('dec#171 / pln#676 — attempt lifecycle characterization across all loop kinds', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = ws(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  for (const kind of LOOP_KINDS) {
+    it(`${kind}: reserve/commit/abort + arm/cross/revoke + adopted replay + stale evidence`, () => {
+      const h = lifecycleHarness(cwd, kind);
+      assert.equal(h.loop.kind, kind);
+      assert.equal(getLoop(h.loop.id, cwd)?.kind, kind, 'attempt remains linked to a real persisted loop of this kind');
+
+      const crossing = h.reserveAt(0);
+      assert.equal(crossing.decision, 'prepared');
+      assert.equal(commitReservation(crossing.turn_id, cwd).decision, 'committed');
+      assert.equal(armLaunch(crossing.turn_id, { token: `${kind}-gen-1`, epoch: 1, lease_deadline: FUTURE() }, cwd).launch?.status, 'armed');
+      const won = consumeLaunchGrant(crossing.turn_id, `${kind}-gen-1`, 1, cwd);
+      assert.equal(won.reservation.launch?.status, 'crossed');
+      assert.equal(won.wonTransition, true);
+      const adopted = consumeLaunchGrant(crossing.turn_id, `${kind}-gen-1`, 1, cwd);
+      assert.equal(adopted.wonTransition, false, 'replay observes crossed but does not regain spawn authority');
+      assert.equal(h.evidenceMatches(crossing.turn_id, `${kind}-gen-1`), true);
+      assert.equal(h.evidenceMatches(crossing.turn_id, `${kind}-stale`), false, 'wrong-generation evidence stays stale');
+
+      const aborting = h.reserveAt(1);
+      assert.equal(abortReservation(aborting.turn_id, 'characterized pre-commit abort', cwd).decision, 'aborted');
+
+      const revoking = h.reserveAt(2);
+      commitReservation(revoking.turn_id, cwd);
+      armLaunch(revoking.turn_id, { token: `${kind}-gen-revoked`, epoch: 1, lease_deadline: FUTURE() }, cwd);
+      assert.equal(revokeLaunchGrant(revoking.turn_id, 1, 'characterized supersession', cwd).launch?.status, 'revoked');
+      assert.equal(h.evidenceMatches(revoking.turn_id, `${kind}-gen-revoked`), false, 'revoked evidence is no longer current');
+    });
+  }
+});
 
 describe('pln#630 §9 conformance harness — full turn-owned contract (fake executor)', () => {
   let cwd: string;
