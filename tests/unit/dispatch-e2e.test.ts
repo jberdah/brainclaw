@@ -50,7 +50,10 @@ function createTestStore(): string {
   ]) {
     fs.mkdirSync(path.join(bc, sub), { recursive: true });
   }
-  fs.writeFileSync(path.join(bc, 'config.yaml'), 'project_id: prj_e2e\n');
+  // Session anchoring treats the outermost plain store as shared state. The OS
+  // temp directory can itself hold a .brainclaw store from another test run, so
+  // declare each per-test fixture as its own workspace before creating sessions.
+  fs.writeFileSync(path.join(bc, 'config.yaml'), 'project_id: prj_e2e\nstore_type: workspace\n');
   return dir;
 }
 

@@ -5,6 +5,13 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.2] — 2026-08-22
+
+### Fixed
+
+- **Hermes now receives the full Brainclaw workflow surface it is instructed to use.** Its machine-level MCP configuration had retained an obsolete seven-tool allow-list, so the generated skill could prescribe session, claim, inbox, step, dispatch, Loop Engine, and Code Map operations that Hermes could not discover. The managed list is now a core-owned curated policy, covered against the published catalog and safely migrated only when the exact legacy list is present; custom user lists stay untouched.
+- **Loop Engine documentation now describes the engine as a whole.** The operational reference leads with all five shipped protocols — review, ideation, implementation, research, and debugging — their persistent state, artifacts, phases, slots, and operator-input flow, instead of making the review-and-fix loop appear to be the product's only workflow.
+
 ## [1.26.1] — 2026-08-18
 
 The patch that came out of a question about red CI runs. Chasing them led to the SARIF behind seven CodeQL alerts, and the alerts' own title turned out to be a false positive hiding two real, on-disk-proven defects: an environment variable could make brainclaw write, read and delete files **outside the store**. Same release closes the P0 that had been open since 2026-08-03 — a session that silently wrote into the wrong project.
