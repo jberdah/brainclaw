@@ -11,6 +11,7 @@ import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant,
 } from '../../src/core/loops/attempt-reservation.js';
 import { loadAgentRun, listAgentRuns } from '../../src/core/agentruns.js';
+import { saveClaim } from '../../src/core/claims.js';
 import { acquireLock } from '../../src/core/loops/lock.js';
 import { memoryDir } from '../../src/core/io.js';
 
@@ -31,6 +32,15 @@ function openReviewLoop(cwd: string): string {
   const loop = openLoop({
     kind: 'review', title: 't', created_by: 'coordinator', mode: 'symmetric',
     slots: [{ slot_id: SLOT, role: 'reviewer', agent: 'claude-code' }],
+  }, cwd);
+  saveClaim({
+    schema_version: 2,
+    id: 'clm_coord',
+    agent: 'claude-code',
+    scope: `review-loop:${loop.id}`,
+    description: 'review turn',
+    created_at: new Date().toISOString(),
+    status: 'active',
   }, cwd);
   return loop.id;
 }

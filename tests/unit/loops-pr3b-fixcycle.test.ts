@@ -12,8 +12,9 @@ import {
   revokeLaunchGrant, launchGrant,
 } from '../../src/core/loops/attempt-reservation.js';
 import { prepareTurnOwnedReviewDispatch as prepareViaDispatch } from '../../src/core/review-loop-turn-dispatch.js';
-import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
+import { createAgentRun, loadAgentRun, transitionAgentRun } from '../../src/core/agentruns.js';
 import { reconcileAgentRun } from '../../src/core/agentrun-reconciler.js';
+import { listEntities } from '../../src/core/entity-operations.js';
 import { saveClaim, loadClaim } from '../../src/core/claims.js';
 import { saveAssignment } from '../../src/core/assignments.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
@@ -48,6 +49,15 @@ function openSymmetricReview(cwd: string, maxIter = 3): { loopId: string; versio
     phases: [{ name: 'findings' }],
     stop_condition: { kind: 'any', conditions: [{ kind: 'reviewer_green' }, { kind: 'max_iterations', n: maxIter }] },
     slots: [{ slot_id: 'lsl_r', role: 'reviewer', agent: AGENT, status: 'assigned' }],
+  }, cwd);
+  saveClaim({
+    schema_version: 2,
+    id: 'clm_x',
+    agent: AGENT,
+    scope: `review-loop:${loop.id}`,
+    description: 'turn',
+    created_at: nowISO(),
+    status: 'active',
   }, cwd);
   return { loopId: loop.id, version: loop.version };
 }
@@ -292,11 +302,46 @@ describe('pln#630 PR3b — fix-cycle re-dispatch is exactly-once (fence denies t
     // but WITHIN the dispatch lease, must REVOKE the grant (F2) + cancel the run — NOT leave it armed.
     reconcileAgentRun(run_id, cwd, { nowMs: Date.now() + 15 * 60_000, actor: 'reconciler' });
     assert.equal(launchGrant(turnId, cwd)?.status, 'revoked', 'wired reconciler revoked the expired armed grant (F2)');
-    assert.equal(loadAgentRun(run_id, cwd)?.status, 'cancelled', 'run cancelled reserved_never_launched');
+    assert.equal(loadAgentRun(run_id, cwd)?.status, 'created', 'repairable run stays non-terminal until dispatch lease expiry');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'active', 'repairable pre-run revoke retains the claim while the dispatch lease is live');
     // Recovery: the reservation adopts, sees the revoked grant, re-arms at epoch+1 within the
     // still-open dispatch lease → WON (with a single shared lease this was always denied — F1).
     const prep = prepareViaDispatch({ loopId, slotId: 'lsl_r', agent: AGENT, phase: 'findings', task: 'fix', description: 'fix', scope: `review-loop:${loopId}`, claimId: 'clm_x', dispatcherAgent: 'coord', isReviewer: true, cwd });
-    assert.equal(prep.kind, 'won', 'the revoked round re-arms + wins within the longer dispatch lease');
+    assert.equal(
+      prep.kind,
+      'won',
+      `the revoked round re-arms + wins within the longer dispatch lease${prep.kind === 'denied' ? `: ${prep.reason}` : ''}`,
+    );
     assert.equal(launchGrant(turnId, cwd)?.status, 'crossed', 'the re-armed grant was consumed (single spawn)');
+  });
+
+  it('R1d — read-path compatibility does not release a legacy reserved_never_launched terminal while re-arm is live', () => {
+    const { loopId, version } = openSymmetricReview(cwd);
+    const turnId = deriveTurnId(loopId, 'lsl_r', 0);
+    const { assignment_id, run_id } = deriveChildIds(turnId);
+    reserve({
+      turn_id: turnId, loop_id: loopId, slot_id: 'lsl_r', target_slot_generation: 0,
+      loop_version_at_reserve: version, agent: AGENT, claim_id: 'clm_x', phase: 'findings',
+      iteration: 0, store_root: cwd, cwd,
+      lease_deadline: new Date(Date.now() + 30 * 60_000).toISOString(),
+    }, cwd);
+    commitReservation(turnId, cwd);
+    armLaunch(turnId, {
+      token: 'legacy-gen-0', epoch: 0,
+      lease_deadline: new Date(Date.now() + 10 * 60_000).toISOString(),
+    }, cwd);
+    revokeLaunchGrant(turnId, 0, 'reserved_never_launched', cwd);
+    createAgentRun({
+      id: run_id, short_label: run_id, assignment_id, claim_id: 'clm_x', agent: AGENT,
+      transport: 'cli_spawn', scope: `review-loop:${loopId}`, description: 'legacy pre-P0B run',
+      status: 'created', tags: ['turn-owned'],
+    }, cwd);
+    transitionAgentRun(run_id, 'cancelled', {
+      actor: 'legacy-reconciler',
+      status_reason: 'reserved_never_launched: legacy pre-P0B cancellation',
+    }, cwd);
+
+    listEntities('agent_run', cwd);
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'active', 'terminal read repair preserves the live re-arm claim');
   });
 });

@@ -583,33 +583,89 @@ export interface ConsumeResult {
   wonTransition: boolean;
 }
 
+function consumeLaunchGrantLocked(
+  turnId: string,
+  record: TurnReservation,
+  token: string,
+  epoch: number,
+  fence: () => void,
+  cwd?: string,
+): ConsumeResult {
+  const g = record.launch;
+  if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrant: turn_id ${turnId} has no launch grant`);
+  // Epoch/token/lease validated against the immutable grant fields (set once
+  // at arm). Epoch BEFORE token so a stale generation reports epoch_mismatch.
+  if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
+  if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
+  // Expiry is inclusive (now >= deadline) — the SAME rule the sweep uses. This
+  // is intentionally evaluated after projection callbacks as well: a slow repair
+  // cannot cross a generation whose lease expired while it was materializing.
+  if (Date.parse(nowISO()) >= Date.parse(g.lease_deadline)) {
+    throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrant: grant for ${turnId} expired at ${g.lease_deadline}`);
+  }
+  if (g.status === 'revoked') {
+    throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
+  }
+  // Validate that this reservation-lock holder was not reaped while a projection
+  // callback performed local I/O. The fence check MUST precede the irreversible
+  // decision-cell create, not merely the record projection write that follows it.
+  fence();
+  // ATOMIC XOR — claim the decision via exclusive-create. If a revoke already
+  // won (even from a newer holder after this one was reaped), we LOSE here and
+  // must not spawn. No TOCTOU: the create, not a prior check, is the commit.
+  const { decision: committed, won } = claimLaunchDecision(turnId, { decision: 'crossed', token, epoch, at: nowISO() }, cwd);
+  if (committed.decision === 'revoked') {
+    throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
+  }
+  // Won → this call crossed (may spawn). Adopted (won=false) → already crossed
+  // by another invocation: launch_attempted_unknown, caller MUST NOT spawn.
+  const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: committed.at } };
+  fence();
+  writeReservation(next, cwd);
+  return { reservation: next, wonTransition: won };
+}
+
 export function consumeLaunchGrant(turnId: string, token: string, epoch: number, cwd?: string, agentId = 'system'): ConsumeResult {
   return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrant: unknown turn_id ${turnId}`);
+    return consumeLaunchGrantLocked(turnId, record, token, epoch, fence, cwd);
+  }, cwd);
+}
+
+/**
+ * Consume a launch generation only after its deterministic local projections are durable.
+ *
+ * Lock order is intentionally reservation -> store -> loop. `project` must remain a short,
+ * synchronous, local-I/O callback and this API must never be entered while the caller already
+ * holds the store or loop lock. If projection throws, the crossed decision is not created and
+ * an identical replay can repair/adopt the same Assignment, AgentRun and slot binding.
+ */
+export function consumeLaunchGrantWithProjection(
+  turnId: string,
+  token: string,
+  epoch: number,
+  project: (reservation: TurnReservation) => void,
+  cwd?: string,
+  agentId = 'system',
+): ConsumeResult {
+  return withReservationLock(turnId, agentId, (fence) => {
+    const record = readReservation(turnId, cwd);
+    if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrantWithProjection: unknown turn_id ${turnId}`);
+
+    // Validate the immutable generation before allowing it to materialize anything.
     const g = record.launch;
-    if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrant: turn_id ${turnId} has no launch grant`);
-    // Epoch/token/lease validated against the immutable grant fields (set once
-    // at arm). Epoch BEFORE token so a stale generation reports epoch_mismatch.
-    if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
-    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
-    // Expiry is inclusive (now >= deadline) — the SAME rule the sweep uses.
+    if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrantWithProjection: turn_id ${turnId} has no launch grant`);
+    if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrantWithProjection: epoch ${epoch} != grant epoch ${g.epoch}`);
+    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrantWithProjection: token mismatch for ${turnId}`);
+    if (g.status === 'revoked') throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrantWithProjection: grant for ${turnId} was revoked — MUST NOT project or spawn`);
+    if (g.status === 'crossed') return { reservation: record, wonTransition: false };
     if (Date.parse(nowISO()) >= Date.parse(g.lease_deadline)) {
-      throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrant: grant for ${turnId} expired at ${g.lease_deadline}`);
+      throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrantWithProjection: grant for ${turnId} expired at ${g.lease_deadline}`);
     }
-    // ATOMIC XOR — claim the decision via exclusive-create. If a revoke already
-    // won (even from a newer holder after this one was reaped), we LOSE here and
-    // must not spawn. No TOCTOU: the create, not a prior check, is the commit.
-    const { decision: committed, won } = claimLaunchDecision(turnId, { decision: 'crossed', token, epoch, at: nowISO() }, cwd);
-    if (committed.decision === 'revoked') {
-      throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
-    }
-    // Won → this call crossed (may spawn). Adopted (won=false) → already crossed
-    // by another invocation: launch_attempted_unknown, caller MUST NOT spawn.
-    const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: committed.at } };
-    fence();
-    writeReservation(next, cwd);
-    return { reservation: next, wonTransition: won };
+
+    project(record);
+    return consumeLaunchGrantLocked(turnId, record, token, epoch, fence, cwd);
   }, cwd);
 }
 

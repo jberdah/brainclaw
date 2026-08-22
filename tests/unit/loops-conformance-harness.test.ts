@@ -47,6 +47,19 @@ function openReviewLoop(cwd: string, slotId = 'lsl_r') {
 }
 
 function prep(cwd: string, loopId: string, slotId = 'lsl_r') {
+  try {
+    loadClaim('clm_conf', cwd);
+  } catch {
+    saveClaim({
+      schema_version: 2,
+      id: 'clm_conf',
+      agent: 'codex',
+      scope: `review-loop:${loopId}`,
+      description: 'conformance review turn',
+      created_at: nowISO(),
+      status: 'active',
+    }, cwd);
+  }
   const r = prepareTurnOwnedReviewDispatch({
     loopId, slotId, agent: 'codex', phase: 'findings', task: 'review',
     description: 'conformance review turn', scope: `review-loop:${loopId}`,

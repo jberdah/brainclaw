@@ -34,6 +34,7 @@ import {
   type IterationProtocol,
   type NextPhaseDecision,
 } from './iteration-engine.js';
+import { withLoopLock } from './lock.js';
 
 function nextSeq(loopId: string, cwd?: string): number {
   const events = listLoopEvents(loopId, cwd);
@@ -638,6 +639,72 @@ export function turn(input: TurnInput, cwd?: string): LoopThread {
   );
   writeThreadFile(next, cwd);
   return next;
+}
+
+export interface BindTurnProjectionInput extends TurnInput {
+  slot_id: string;
+  turn_id: string;
+  assignment_id: string;
+  claim_id: string;
+}
+
+export class TurnProjectionConflictError extends Error {
+  constructor(public readonly loopId: string, public readonly slotId: string, detail: string) {
+    super(`Turn projection conflict for ${loopId}/${slotId}: ${detail}`);
+    this.name = 'TurnProjectionConflictError';
+  }
+}
+
+const ACTIVE_PROJECTED_SLOT_STATUSES = new Set<LoopSlot['status']>([
+  'assigned', 'working', 'waiting_input',
+]);
+
+/**
+ * Idempotently bind the deterministic turn/assignment/claim tuple to a loop slot.
+ *
+ * This entry point owns the loop lock because the dispatch path is not already inside
+ * bclaw_loop's lock wrapper. The legacy `turn()` API deliberately keeps its existing
+ * semantics for callers that already hold that lock.
+ */
+export function bindTurnProjection(input: BindTurnProjectionInput, cwd?: string): LoopThread {
+  return withLoopLock({
+    cwd,
+    intent: 'bind_turn_projection',
+    agentId: input.actor,
+    scope: { kind: 'loop', loopId: input.id },
+    work: () => {
+      const current = loadLoopOrThrow(input.id, cwd);
+      assertMutable(current, 'bind_turn_projection');
+      const slot = resolveTurnSlot(current, input);
+
+      const identical =
+        slot.current_turn_id === input.turn_id
+        && slot.assignment_id === input.assignment_id
+        && slot.claim_id === input.claim_id;
+      if (identical) return current;
+
+      if (slot.current_turn_id === input.turn_id) {
+        throw new TurnProjectionConflictError(
+          input.id,
+          input.slot_id,
+          `turn ${input.turn_id} is already bound to assignment=${slot.assignment_id ?? 'none'} claim=${slot.claim_id ?? 'none'}`,
+        );
+      }
+      if (
+        slot.current_turn_id !== undefined
+        && slot.current_turn_id !== input.turn_id
+        && ACTIVE_PROJECTED_SLOT_STATUSES.has(slot.status)
+      ) {
+        throw new TurnProjectionConflictError(
+          input.id,
+          input.slot_id,
+          `active turn ${slot.current_turn_id} cannot be replaced by ${input.turn_id}`,
+        );
+      }
+
+      return turn(input, cwd);
+    },
+  });
 }
 
 /* ============================ complete_turn =============================== */

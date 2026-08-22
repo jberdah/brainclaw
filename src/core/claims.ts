@@ -16,6 +16,7 @@ import { loadState, persistState } from './state.js';
 import { createRuntimeEvent } from './events.js';
 import { latestActivityMs, readHeartbeat } from './runtime-signals.js';
 import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
+import { loadAssignment } from './assignments.js';
 
 /** Parse duration string like '4h', '30m' to ms. */
 function parseTtl(value: string): number {
@@ -1312,6 +1313,45 @@ export function linkClaimToAssignment(claimId: string, assignmentId: string, cwd
     const claim = loadClaim(claimId, cwd);
     claim.assignment_id = assignmentId;
     saveClaimUnlocked(claim, cwd);
+  });
+}
+
+export class ClaimAssignmentConflictError extends Error {
+  constructor(public readonly claimId: string, detail: string) {
+    super(`Claim/Assignment projection conflict for ${claimId}: ${detail}`);
+    this.name = 'ClaimAssignmentConflictError';
+  }
+}
+
+/**
+ * Idempotently bind an active claim to the deterministic Assignment of its turn.
+ * Unlike the legacy patch helper, this never overwrites a divergent binding.
+ */
+export function ensureClaimAssignmentBinding(claimId: string, assignmentId: string, cwd?: string): Claim {
+  return mutate({ cwd }, () => {
+    const claim = loadClaim(claimId, cwd);
+    if (claim.status !== 'active') {
+      throw new ClaimAssignmentConflictError(claimId, `claim is ${claim.status}, expected active`);
+    }
+    if (claim.assignment_id === assignmentId) return claim;
+    if (claim.assignment_id !== undefined) {
+      // Symmetric review/fix cycles intentionally retain one active coordinator
+      // claim across rounds. A later deterministic turn may advance that pointer,
+      // but only after the previous Assignment is durably terminal.
+      const prior = loadAssignment(claim.assignment_id, cwd);
+      const priorTerminal = prior && [
+        'completed', 'cancelled', 'expired', 'rerouted',
+      ].includes(prior.status);
+      if (!priorTerminal) {
+        throw new ClaimAssignmentConflictError(
+          claimId,
+          `already bound to non-terminal ${claim.assignment_id}, cannot bind ${assignmentId}`,
+        );
+      }
+    }
+    claim.assignment_id = assignmentId;
+    saveClaimUnlocked(claim, cwd);
+    return claim;
   });
 }
 

@@ -80,8 +80,9 @@ describe('Loop Engine documentation surface', () => {
     assert.match(authority, /AttemptAuthority/, 'attempt-authority guide must name AttemptAuthority');
     assert.match(authority, /TurnReservation/, 'attempt-authority guide must reference the TurnReservation core');
     assert.match(authority, /launch decision cell/i, 'attempt-authority guide must reference the launch decision cell');
-    assert.match(authority, /### Current wired order/, 'attempt-authority must describe the current dispatch order');
-    assert.match(authority, /### Target order/, 'attempt-authority must describe the target dispatch order');
+    assert.match(authority, /one normative dispatch shape/i, 'attempt-authority must describe one normative dispatch order');
+    assert.match(authority, /Durable projections/, 'attempt-authority must place durable projections before crossing');
+    assert.doesNotMatch(authority, /### Target order/, 'a shipped invariant must no longer be documented as a future target');
     // Identity matrix + numbered invariants
     assert.match(authority, /\| `turn_id`/, 'attempt-authority must ship an identity matrix row for turn_id');
     assert.match(authority, /\| `run_id`/, 'attempt-authority must ship an identity matrix row for run_id');

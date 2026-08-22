@@ -415,6 +415,18 @@ export function reconcileStrandedFailureClaimAtRead(run: AgentRun, cwd?: string,
   if (run.status !== 'failed' && run.status !== 'cancelled') return false;
   if (!run.claim_id) return false;
   const now = options.nowMs ?? Date.now();
+  if (run.status_reason?.startsWith('reserved_never_launched:')) {
+    const reservation = findReservationByRunId(run.id, cwd);
+    const dispatchDeadline = reservation ? Date.parse(reservation.lease_deadline) : Number.NaN;
+    if (
+      reservation?.decision === 'committed'
+      && reservation.launch?.status === 'revoked'
+      && Number.isFinite(dispatchDeadline)
+      && now < dispatchDeadline
+    ) {
+      return false;
+    }
+  }
   const anchor = Date.parse(run.completed_at ?? run.updated_at ?? run.created_at);
   if (Number.isFinite(anchor) && now - anchor > STRANDED_RELEASE_RETRY_WINDOW_MS) return false;
   try {
@@ -687,8 +699,10 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
  *   - within lease → NO-OP (the worker may yet cross the launch fence / start);
  *   - past lease + launch grant CROSSED → `failed` / `launch_attempted_unknown`
  *     (the worker WAS invoked; its outcome is unknowable, so it must not complete);
- *   - past lease + grant not crossed → `cancelled` / `reserved_never_launched`
- *     (no launch receipt — nothing ran; matches attemptStatus(revoked)='cancelled').
+ *   - past launch lease + grant not crossed, while dispatch lease is live →
+ *     revoke and retain the non-terminal run for re-arm;
+ *   - past dispatch lease + grant not crossed → `cancelled` /
+ *     `reserved_never_launched` (the recovery window is exhausted).
  */
 function reconcileTurnOwnedPreRunLease(
   run: AgentRun,
@@ -730,13 +744,8 @@ function reconcileTurnOwnedPreRunLease(
 
   // Past lease, no accepted completion — the launch-grant status (authoritative,
   // decision-file reconciled) decides the terminal.
-  const grant = launchGrant(reservation.turn_id, cwd);
-  const crossed = grant?.status === 'crossed';
-  const targetStatus: AgentRunStatus = crossed ? 'failed' : 'cancelled';
-  const action: ReconcileAction = crossed ? 'inferred_failed' : 'inferred_cancelled';
-  const reason = crossed
-    ? `launch_attempted_unknown: launch grant crossed but run never reached running by lease ${leaseISO} — outcome unknown, never completed`
-    : `reserved_never_launched: no launch receipt by lease ${leaseISO} (grant=${grant?.status ?? 'none'})`;
+  let grant = launchGrant(reservation.turn_id, cwd);
+  let crossed = grant?.status === 'crossed';
   // pln#630 dec#149 R1 (review Finding 2) — make the reserved_never_launched strand REACHABLE
   // through the WIRED lazy reconciler: revoke the still-armed grant so its authoritative status
   // becomes `revoked`. That is what lets reconcileTurn's fix-cycle strand detector see the strand
@@ -746,6 +755,25 @@ function reconcileTurnOwnedPreRunLease(
   if (!crossed && grant?.status === 'armed') {
     try { revokeLaunchGrant(reservation.turn_id, grant.epoch, 'reserved_never_launched', cwd, actor); }
     catch { /* raced to crossed/revoked — authoritative status governs */ }
+    grant = launchGrant(reservation.turn_id, cwd);
+    crossed = grant?.status === 'crossed';
+  }
+  const targetStatus: AgentRunStatus = crossed ? 'failed' : 'cancelled';
+  const action: ReconcileAction = crossed ? 'inferred_failed' : 'inferred_cancelled';
+  const reason = crossed
+    ? `launch_attempted_unknown: launch grant crossed but run never reached running by lease ${leaseISO} — outcome unknown, never completed`
+    : `reserved_never_launched: no launch receipt by lease ${leaseISO} (grant=${grant?.status ?? 'none'})`;
+  const dispatchLeaseMs = Date.parse(reservation.lease_deadline);
+  const dispatchLeaseLive = Number.isFinite(dispatchLeaseMs) && now < dispatchLeaseMs;
+  if (!crossed && dispatchLeaseLive) {
+    return {
+      run_id: run.id,
+      action: 'no_op',
+      reason: `${reason}; retained non-terminal for re-arm until dispatch lease ${reservation.lease_deadline}`,
+      evidence,
+      previous_status,
+      current_status: run.status,
+    };
   }
   try {
     transitionAgentRun(run.id, targetStatus, { actor, status_reason: reason }, cwd);

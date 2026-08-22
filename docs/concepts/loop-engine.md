@@ -66,8 +66,14 @@ eventually be accepted. `AttemptAuthority` is the single writer for that
 turn's identity and commit-decision fields; the Loop engine never
 double-writes them. It is a façade over the existing `TurnReservation` core
 in [`src/core/loops/attempt-reservation.ts`](../../src/core/loops/attempt-reservation.ts),
-not a new subsystem or a new journal. Every spawn is gated on the same
-atomic CAS: `reserve → commit → arm → consume → wonTransition === true`.
+not a new subsystem or a new journal. Its normative turn-owned chronology is
+`reserve → commit → arm → durable projections → consume → wonTransition ===
+true`. The currently wired runtime adapter follows it; protocol drivers that do
+not yet auto-dispatch still use the shared engine and reservation core without
+claiming this stronger boundary. The pre-crossing callback creates or validates
+the Assignment and AgentRun, binds the active claim, and binds the slot. A turn
+crossed through that adapter is therefore harvestable; a pre-crossing crash is
+repairable by replaying the same deterministic ids.
 
 The concurrency and recovery contract lives in the dedicated document —
 see [Attempt authority](./attempt-authority.md) for the full model,
@@ -437,6 +443,10 @@ transitions and their handling lives in
 [attempt-authority.md#recovery](./attempt-authority.md#recovery). Loop-level
 recovery on top of that:
 
+- **Projection repair before crossing.** The common dispatch choke point
+  replays create-or-validate operations for Assignment, AgentRun, claim and
+  slot while the grant is still armed. It crosses only after all four exist;
+  an already-crossed replay never acquires spawn authority again.
 - **Terminal loop early-return.** Every mutating convergence
   (`reconcileTurn`, `reconcileFailedTurn`) idempotent no-ops on a closed
   loop and still releases the coordinator claim.
@@ -592,6 +602,7 @@ table above rather than treating review as the default abstraction.
 ## Related
 
 - [attempt-authority.md](./attempt-authority.md) — identity, dispatch decisions and spawn authority for every turn
+- [P0B projection-boundary tests](../../tests/unit/loops-p0b-projections-before-crossing.test.ts) — crash/replay coverage around the common pre-crossing boundary
 - [Per-protocol guides](../loops/) — review / ideation / implementation / research / debug
 - [plans-and-claims.md](plans-and-claims.md)
 - [coordination.md](coordination.md)

@@ -50,30 +50,35 @@ function agentRunStoreForDir(dirPath: string): JsonStore<AgentRun> {
 
 export function saveAgentRun(run: AgentRun, cwd?: string): void {
   mutate({ cwd }, () => {
-    ensureAgentRunsDir(cwd);
-    const store = new JsonStore<AgentRun>({
-      dirPath: agentRunsDir(cwd, 'write'),
-      documentType: 'agent_run',
-      getId: (item) => item.id,
-      sort: (a, b) => a.created_at.localeCompare(b.created_at),
-    });
-    const parsed = AgentRunSchema.parse(run);
-    // pln#568 (I2): journal the post-image BEFORE the projection write.
-    const created = !store.exists(parsed.id);
-    emitRegistryPostImage('agent_run', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
-    registryFaultPoint('after_registry_journal');
-    store.save(parsed);
-    // Converge the other layout (mirrors saveClaim / saveAssignment): leaving a legacy copy
-    // holding the stale status is what let a deleted record be resurrected by its own zombie.
-    const writeDir = agentRunsDir(cwd, 'write');
-    for (const dirPath of entityRecordDirs('runs', cwd ?? process.cwd())) {
-      if (dirPath === writeDir) continue;
-      const legacyPath = path.join(dirPath, `${parsed.id}.json`);
-      try {
-        if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
-      } catch { /* best effort — the dual-layout list keeps it visible */ }
-    }
+    saveAgentRunUnlocked(run, cwd);
   });
+}
+
+/** Store-lock caller variant used by create-or-validate projection repair. */
+function saveAgentRunUnlocked(run: AgentRun, cwd?: string): void {
+  ensureAgentRunsDir(cwd);
+  const store = new JsonStore<AgentRun>({
+    dirPath: agentRunsDir(cwd, 'write'),
+    documentType: 'agent_run',
+    getId: (item) => item.id,
+    sort: (a, b) => a.created_at.localeCompare(b.created_at),
+  });
+  const parsed = AgentRunSchema.parse(run);
+  // pln#568 (I2): journal the post-image BEFORE the projection write.
+  const created = !store.exists(parsed.id);
+  emitRegistryPostImage('agent_run', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
+  registryFaultPoint('after_registry_journal');
+  store.save(parsed);
+  // Converge the other layout (mirrors saveClaim / saveAssignment): leaving a legacy copy
+  // holding the stale status is what let a deleted record be resurrected by its own zombie.
+  const writeDir = agentRunsDir(cwd, 'write');
+  for (const dirPath of entityRecordDirs('runs', cwd ?? process.cwd())) {
+    if (dirPath === writeDir) continue;
+    const legacyPath = path.join(dirPath, `${parsed.id}.json`);
+    try {
+      if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+    } catch { /* best effort — the dual-layout list keeps it visible */ }
+  }
 }
 
 export function loadAgentRun(id: string, cwd?: string): AgentRun | undefined {
@@ -204,10 +209,10 @@ export interface CreateAgentRunOptions {
   tags?: string[];
 }
 
-export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): AgentRun {
+function buildAgentRun(options: CreateAgentRunOptions, cwd?: string): AgentRun {
   const generated = options.id ? undefined : generateAgentRunId(cwd);
   const now = nowISO();
-  const run: AgentRun = AgentRunSchema.parse({
+  return AgentRunSchema.parse({
     schema_version: 1,
     id: options.id ?? generated!.id,
     // Same landmine as createAssignment: `generated` is undefined when the caller
@@ -244,8 +249,9 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
     artifacts: [],
     tags: options.tags ?? [],
   });
+}
 
-  saveAgentRun(run, cwd);
+function emitAgentRunCreatedSideEffects(run: AgentRun, options: CreateAgentRunOptions, cwd?: string): void {
   emitAgentRunEvent(run, 'run_created', options.agent, cwd);
   if (run.status !== 'created') {
     emitAgentRunEvent(run, `run_${run.status}` as import('./event-log.js').EventAction, options.agent, cwd);
@@ -260,7 +266,89 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
     scope: run.scope,
     session_id: run.session_id,
   }, cwd);
+}
+
+export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): AgentRun {
+  const run = buildAgentRun(options, cwd);
+
+  saveAgentRun(run, cwd);
+  emitAgentRunCreatedSideEffects(run, options, cwd);
   return run;
+}
+
+export class AgentRunProjectionConflictError extends Error {
+  constructor(public readonly runId: string, detail: string) {
+    super(`AgentRun projection conflict for ${runId}: ${detail}`);
+    this.name = 'AgentRunProjectionConflictError';
+  }
+}
+
+export interface EnsureAgentRunProjectionResult {
+  run: AgentRun;
+  created: boolean;
+  repaired?: boolean;
+}
+
+const RECOVERABLE_PROJECTION_RUN_STATUSES = new Set<AgentRunStatus>([
+  'created', 'launching', 'waiting_input', 'running',
+]);
+
+function assertAgentRunProjectionMatches(
+  existing: AgentRun,
+  expected: AgentRun,
+): void {
+  const fields: Array<keyof AgentRun> = [
+    'id', 'assignment_id', 'claim_id', 'agent', 'agent_id', 'transport', 'scope',
+    'worktree_path', 'attempt_index',
+  ];
+  for (const field of fields) {
+    if (existing[field] !== expected[field]) {
+      throw new AgentRunProjectionConflictError(
+        expected.id,
+        `${String(field)} differs (existing=${String(existing[field])}, expected=${String(expected[field])})`,
+      );
+    }
+  }
+  if (existing.project_id !== undefined && existing.project_id !== expected.project_id) {
+    throw new AgentRunProjectionConflictError(expected.id, 'project_id differs');
+  }
+  if (!RECOVERABLE_PROJECTION_RUN_STATUSES.has(existing.status)) {
+    throw new AgentRunProjectionConflictError(expected.id, `existing status is terminal (${existing.status})`);
+  }
+}
+
+/**
+ * Create-or-validate the deterministic P0 AgentRun projection for one logical turn.
+ * Recovery never mints attempt 2 and never resets an existing live run to `created`.
+ */
+export function ensureAgentRunProjection(
+  options: CreateAgentRunOptions & { id: string },
+  cwd?: string,
+): EnsureAgentRunProjectionResult {
+  const normalized: CreateAgentRunOptions & { id: string } = { ...options, attempt_index: 1 };
+  const expected = buildAgentRun(normalized, cwd);
+  let created = false;
+  let repaired = false;
+  const run = mutate({ cwd }, () => {
+    const existing = loadAgentRun(options.id, cwd);
+    if (existing) {
+      const requiredTags = normalized.tags ?? [];
+      const enriched = requiredTags.every((tag) => existing.tags.includes(tag))
+        ? existing
+        : { ...existing, tags: [...new Set([...existing.tags, ...requiredTags])] };
+      assertAgentRunProjectionMatches(enriched, expected);
+      if (enriched !== existing) {
+        saveAgentRunUnlocked(enriched, cwd);
+        repaired = true;
+      }
+      return enriched;
+    }
+    saveAgentRunUnlocked(expected, cwd);
+    created = true;
+    return expected;
+  });
+  if (created) emitAgentRunCreatedSideEffects(run, normalized, cwd);
+  return { run, created, ...(repaired ? { repaired: true } : {}) };
 }
 
 export interface TransitionAgentRunOptions {

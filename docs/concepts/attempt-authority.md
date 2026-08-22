@@ -108,9 +108,11 @@ mutates them.
 
 Downstream artifacts — the assignment record, the agent_run row, the loop
 slot's `current_turn_id` pointer — are **projections** of the authority
-record. They are written after the atomic CAS wins; a crash between the
-CAS and the projection is repaired by re-deriving from the reservation
-record. Nothing else in the system may write to the authoritative fields
+record. Since P0B (`pln#677`), they are created or validated idempotently
+**before** the launch CAS crosses. A crash before crossing leaves the grant
+armed and repairable from the same deterministic ids; a crash after crossing
+therefore always leaves real Assignment, AgentRun, claim and slot projections
+behind. Nothing else in the system may write to the authoritative fields
 listed above.
 
 ## Surfaces and their roles
@@ -167,6 +169,11 @@ mutation goes through `withReservationLock` for cross-process exclusion.
   **`wonTransition === true` is the exactly-once spawn authority**; a
   caller with `wonTransition === false` MUST NOT spawn (the grant was
   already crossed by another invocation).
+- `consumeLaunchGrantWithProjection(turn_id, token, epoch, project)` —
+  dispatch choke point used by the Loop runtime. It holds the reservation
+  lock, executes a short synchronous projection callback, rechecks the
+  lock fence and lease, then performs the same crossed/revoked CAS. A
+  projection error exits before crossing.
 - `revokeLaunchGrant(turn_id, epoch, reason): TurnReservation` — CAS
   `armed → revoked`. Refused once crossed.
 - `sweepExpiredLaunchGrants(): string[]` — revoke every armed grant
@@ -192,20 +199,27 @@ mutation goes through `withReservationLock` for cross-process exclusion.
   routes a lane.
 - `attemptStatus(reservation, run_status?)` — the derived projection.
 
+**Projection helpers (outside the authority record)**
+
+- `ensureAssignmentProjection` and `ensureAgentRunProjection` are
+  create-or-validate operations: an identical replay is a no-op; a
+  conflicting deterministic id fails closed. P0 forces `attempt_index = 1`.
+- `ensureClaimAssignmentBinding` binds an active claim without overwriting
+  a live conflicting Assignment. A retained review/fix-cycle claim may move
+  only after its previous Assignment is terminal.
+- Concurrent slots receive distinct claims because the Claim projection has a
+  single `assignment_id` pointer. Their scopes keep the parseable
+  `review-loop:<loop_id>` prefix and add the slot identity.
+- `bindTurnProjection` performs the slot write under the loop lock. The same
+  `(turn_id, assignment_id, claim_id)` tuple is a no-op and does not append a
+  second `turn_assigned` event.
+
 ## Ordered dispatch
 
-The engine has **one shape** — deterministic id → reserve → commit → arm →
-consume → spawn on `wonTransition === true` → harvest → advance/close. The
-open question at P0 is *where the assignment / agent_run / slot-binding
-projections land inside that chain*. Both the current and the target order
-are described here so future changes can be sequenced against a shared
-vocabulary.
-
-### Current wired order
-
-The path in
-[`src/core/review-loop-turn-dispatch.ts`](../../src/core/review-loop-turn-dispatch.ts)
-that ships today:
+The authority contract has **one normative dispatch shape**. The current
+turn-owned runtime adapter uses this chronology; other protocol drivers share
+the same Loop and reservation primitives but do not yet all expose an
+equivalent automatic dispatch path:
 
 1. **`deriveTurnId`** — mint the deterministic turn id from
    `(loop_id, slot_id, iteration)`. A concurrent duplicate dispatch of
@@ -217,14 +231,15 @@ that ships today:
 4. **`armLaunch`** (or adopt an existing armed grant / re-arm a revoked
    one at a strictly greater epoch) — mint a fresh generation `epoch`
    and evidence nonce `token`.
-5. **`consumeLaunchGrant`** — the atomic fence immediately before the
-   spawn. Only `wonTransition === true` may proceed; every other
-   invocation observing a `crossed` incumbent must treat the attempt as
-   `launch_attempted_unknown` and refuse to spawn.
-6. **Assignment / agent_run / slot binding projections** — on
-   `wonTransition === true` only, create the assignment record, create
-   the agent_run record, and call `turn()` to bind the slot. All
-   idempotent — driven off deterministic child ids.
+5. **Durable projections** — inside
+   `consumeLaunchGrantWithProjection`, create or validate the deterministic
+   Assignment and AgentRun, bind the active claim to the Assignment, and bind
+   the loop slot to `(turn_id, assignment_id, claim_id)`. Replays are
+   idempotent; divergence fails closed.
+6. **Cross the launch grant** — after the callback returns, the helper
+   rechecks the reservation-lock fence and lease, then performs the atomic
+   `armed → crossed` CAS. Only `wonTransition === true` may spawn; every
+   other invocation observing a `crossed` incumbent must refuse to spawn.
 7. **Worker execution** — the worker echoes `turn_id`, `run_id`, and
    the launch `token` (evidence nonce) in its LANE-RESULT and any signal
    files.
@@ -236,39 +251,17 @@ that ships today:
    old generation. Any future generation must arm at a strictly higher
    epoch.
 
-The crash gap this leaves open: if the process dies **after**
-`consumeLaunchGrant` returns `wonTransition = true` but **before** the
-assignment/agent_run/turn projections are persisted, the grant is already
-`crossed` (irreversible), so a recoverer cannot revoke and re-arm — and yet
-no assignment/run exists for the LANE-RESULT to match against. The
-symptoms surface as an orphaned crossed grant + a `launch_attempted_unknown`
-attempt.
+The P0A characterization suite preserves the historical failure mode: crossing
+before creating those projections could leave an irreversible orphaned grant
+after a crash. P0B closes that gap without changing the persisted schema or
+wire format. P0 still keeps *one logical attempt = one physical run*; a future
+multi-run/takeover model requires explicit generation and compatibility work.
 
-### Target order (dec#171)
-
-The correctif called out in `dec#171` and staged by `pln#676` moves the
-projections **before** the consume:
-
-1. `deriveTurnId`
-2. `reserve`
-3. `commitReservation`
-4. `armLaunch`
-5. **Assignment / agent_run / slot binding projections** *(moved earlier)*
-   — persist the deterministic assignment and run rows and bind the slot
-   idempotently, before the fence.
-6. `consumeLaunchGrant` — only `wonTransition === true` authorises spawn.
-   Because the projections already exist, a post-consume crash leaves a
-   crossed grant paired with a real assignment/run, so harvest and the
-   read-strict evidence path have something to match against.
-7. Worker execution
-8. Harvest / reconcile
-9. Loop advance / close / reroute
-
-The target order does not change any wire format, API, or invariant on
-this page; it moves an idempotent write earlier in the chain to close the
-crash gap. P0 keeps *one logical attempt = one physical run*; the future
-multi-run/takeover model is deferred and will land with an explicitly
-incompatible generation counter, fencing, and `minimum_reader_version`.
+The cross-store lock order is **reservation → entity store → loop**. The
+projection callback must stay synchronous and must never enter while already
+holding an entity-store or loop lock. This prevents lock inversion while
+keeping the launch CAS and all required projections in one recoverable critical
+path.
 
 ## Recovery
 
@@ -278,27 +271,29 @@ state.
 
 - **No reservation on disk** — nothing to recover. The turn was never
   reserved.
-- **`prepared`** — an incomplete reserve. Two safe outcomes: repair
-  forward by completing the projections then committing, or abort with
-  a reason. Both are one CAS on the record.
+- **`prepared`** — an incomplete reserve. Two safe outcomes: commit the
+  reservation and continue, or abort with a reason. Projections are created
+  only after commit, inside the pre-crossing callback.
 - **`committed`, no launch grant** — a committed attempt that never
   armed. Arm a fresh generation (`epoch = 0`) when policy permits;
   otherwise leave it for the sweep.
-- **`committed`, `launch.status = armed`, lease live** — a live
-  generation. Either the supervisor is still running (leave alone) or
-  it crashed. The lease bounds the wait; when it expires,
-  `sweepExpiredLaunchGrants` revokes the grant
-  (`reserved_never_launched`).
+- **`committed`, `launch.status = armed`, lease live** — a live generation.
+  A replay may idempotently repair any incomplete projections and then compete
+  for the same crossing. The lease bounds the wait; when it expires,
+  `sweepExpiredLaunchGrants` revokes the grant (`reserved_never_launched`).
 - **`committed`, `launch.status = armed`, lease expired** — sweep it.
   The record stays committed (repair-only); it just never spawns for
   this generation. A new generation can be armed with a strictly
   greater epoch.
-- **`committed`, `launch.status = crossed`** — the worker launched.
-  Treat as `launch_attempted_unknown`: never re-spawn. Wait for
-  evidence; if none arrives, that is a bounded blocked outcome, not a
+- **`committed`, `launch.status = crossed`** — the worker launched and all
+  P0B projections exist. Treat as `launch_attempted_unknown`: never re-spawn.
+  Wait for evidence; if none arrives, that is a bounded blocked outcome, not a
   re-dispatch.
-- **`committed`, `launch.status = revoked`** — this generation is
-  dead. A new generation may arm at a strictly greater epoch.
+- **`committed`, `launch.status = revoked`** — this generation is dead. A
+  `reserved_never_launched` reconciliation retains the active claim while the
+  longer dispatch lease remains live and keeps the deterministic run
+  non-terminal for a fresh epoch. Once the dispatch lease expires, normal
+  cancellation and release apply.
 - **`aborted`** — terminal. No further action; the attempt will never
   dispatch. This is what closes the "recoverer aborted, stale reserver
   resumes and commits" split-brain: the CAS on `aborted` is
@@ -330,8 +325,9 @@ here descriptively; the characterization suite locks them empirically.
 - **I2 — Deterministic derivation.** `deriveTurnId(loop_id, slot_id,
   iteration)` and `deriveChildIds(turn_id)` are pure functions of
   their inputs. Repair is idempotent.
-- **I3 — Single dispatch choke point.** The only path to spawn is
-  `assertDispatchable` → `armLaunch` → `consumeLaunchGrant` with
+- **I3 — Single dispatch choke point.** The Loop runtime reaches spawn only
+  through `assertDispatchable` → `armLaunch` →
+  `consumeLaunchGrantWithProjection`, and only when that helper returns
   `wonTransition === true`. Nothing else may bypass it.
 - **I4 — Commit irreversibility.** `committed` never becomes
   `aborted`. `aborted` never becomes `committed`. The CAS decision is
@@ -349,14 +345,14 @@ here descriptively; the characterization suite locks them empirically.
 - **I8 — Consume XOR revoke.** For a given generation, `crossed` and
   `revoked` are mutually exclusive. A `crossed` grant is never
   revocable; a `revoked` grant is never crossable.
-- **I9 — Exactly-once spawn.** Only the `consumeLaunchGrant` invocation
-  with `wonTransition === true` may spawn. Every other invocation
-  observing a `crossed` incumbent must treat the attempt as
-  `launch_attempted_unknown` and refuse to spawn.
-- **I10 — Fenced writes.** Every durable write inside
-  `withReservationLock` performs a fence re-read of the lock's
-  `mutation_id`. A reaped-then-recycled holder aborts cleanly without
-  writing.
+- **I9 — Exactly-once spawn.** Only the consuming invocation with
+  `wonTransition === true` may spawn. Every other invocation observing a
+  `crossed` incumbent must treat the attempt as `launch_attempted_unknown`
+  and refuse to spawn. A crossed P0B turn already has all durable projections.
+- **I10 — Fenced writes.** Every authoritative write inside
+  `withReservationLock` performs a fence re-read of the lock's `mutation_id`.
+  The projection callback runs before the decision-cell CAS, and the fence is
+  re-read again after it; a reaped-then-recycled holder cannot cross.
 - **I11 — Epoch monotonicity.** Re-arming a launch grant requires
   `input.epoch > prior.epoch`. Old generations can never re-arm.
 - **I12 — Distinct token per generation.** `armLaunch` mints a random
@@ -373,7 +369,8 @@ here descriptively; the characterization suite locks them empirically.
 - **I15 — Reservation is the sole authority.** Nothing outside
   `AttemptAuthority` writes `decision`, `launch.status`,
   `launch.token`, `launch.epoch`, `child_ids`. Projections read from
-  the reservation, never the reverse.
+  the reservation, never the reverse. The reservation's `claim_id` is the
+  binding authority; caller disagreement fails before projection or crossing.
 - **I16 — Recovery is decision-driven.** A recoverer's next action is
   a total function of `(decision, launch.status, launch.lease_deadline,
   now)`. Marker-file presence is never consulted for the decision.
@@ -397,6 +394,7 @@ here descriptively; the characterization suite locks them empirically.
 - Characterization tests —
   [`tests/unit/loops-attempt-reservation.test.ts`](../../tests/unit/loops-attempt-reservation.test.ts),
   [`tests/unit/loops-launch-grant.test.ts`](../../tests/unit/loops-launch-grant.test.ts),
-  [`tests/unit/loops-conformance-harness.test.ts`](../../tests/unit/loops-conformance-harness.test.ts)
+  [`tests/unit/loops-conformance-harness.test.ts`](../../tests/unit/loops-conformance-harness.test.ts),
+  [`tests/unit/loops-p0b-projections-before-crossing.test.ts`](../../tests/unit/loops-p0b-projections-before-crossing.test.ts)
 - pln#676 — this doc's rollout plan
 - dec#171 — canonical decision behind the model

@@ -1176,7 +1176,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
           // no ids, so a harvest could only match reviewer slots by agent name —
           // which completes the WRONG slot in symmetric (multi-reviewer) mode.
           try {
-            const reviewScope = `review-loop:${loop.id}`;
+            // One claim owns one reviewer slot. A loop-wide claim cannot safely
+            // represent parallel assignments because Claim has one assignment_id
+            // projection; keep the parseable loop prefix and add slot identity.
+            const reviewScope = `review-loop:${loop.id}:slot:${slot.slot_id}`;
             const reviewDescription =
               `Review loop turn for ${loop.id} slot ${slot.slot_id} phase findings. `
               + `Mode: ${advanced.loop.protocol?.review_mode ?? 'asymmetric'}. ${req.task}`;

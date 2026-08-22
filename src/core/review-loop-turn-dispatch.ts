@@ -18,18 +18,18 @@
  * command-level orchestrator that owns both and calls this to spawn. Nothing
  * here imports harvest or review-loop-close, so no import cycle is introduced.
  */
-import { createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment } from './claims.js';
-import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId, loadAssignment } from './assignments.js';
-import { turn } from './loops/verbs.js';
+import { createCoordinatorClaim, attachAssignmentMessageToClaim, ensureClaimAssignmentBinding, linkClaimToAssignment } from './claims.js';
+import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId, ensureAssignmentProjection } from './assignments.js';
+import { bindTurnProjection, turn } from './loops/verbs.js';
 import { getLoop } from './loops/store.js';
 import { generateDispatchBrief } from './dispatcher.js';
 import { sendMessage } from './messaging.js';
 import { buildInvokeCommand, resolveModel } from './agent-capability.js';
 import { attemptExecution } from './execution.js';
 import type { TurnEcho } from './execution-adapters.js';
-import { createAgentRun, loadAgentRun, transitionAgentRun } from './agentruns.js';
+import { ensureAgentRunProjection, transitionAgentRun } from './agentruns.js';
 import {
-  reserve, commitReservation, armLaunch, consumeLaunchGrant, launchGrant,
+  reserve, commitReservation, armLaunch, consumeLaunchGrantWithProjection, launchGrant,
   deriveTurnId, deriveChildIds, ReservationStateError, LaunchFenceError,
 } from './loops/attempt-reservation.js';
 import type { LoopSlot } from './loops/types.js';
@@ -96,6 +96,26 @@ export interface PrepareTurnOwnedReviewInput {
   sessionId?: string;
   isReviewer: boolean;
   cwd: string;
+  /** Test-only deterministic crash seam; production callers leave it undefined. */
+  faultInjector?: (point: TurnProjectionFaultPoint) => void;
+}
+
+export type TurnProjectionFaultPoint =
+  | 'after_reservation'
+  | 'after_commit'
+  | 'after_arm'
+  | 'after_assignment'
+  | 'after_run'
+  | 'after_claim_binding'
+  | 'after_slot_binding'
+  | 'before_consume'
+  | 'after_consume';
+
+function turnProjectionFaultPoint(input: PrepareTurnOwnedReviewInput, point: TurnProjectionFaultPoint): void {
+  input.faultInjector?.(point);
+  if (process.env.BRAINCLAW_FAULT_POINT === `turn_projection_${point}`) {
+    throw new Error(`fault-injection: turn_projection_${point}`);
+  }
 }
 
 /**
@@ -169,7 +189,9 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
 
   // ── Phase 2: FAIL-CLOSED. Identity is reserved; never legacy-spawn from here. ──
   try {
+    turnProjectionFaultPoint(input, 'after_reservation');
     commitReservation(turnId, cwd);
+    turnProjectionFaultPoint(input, 'after_commit');
 
     // Arm-or-adopt the launch grant. Arm when none exists OR when a prior generation was
     // REVOKED (reserved_never_launched — a crash between arm and consume, then the expiry
@@ -191,66 +213,87 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
       }
       grant = launchGrant(turnId, cwd);
     }
+    turnProjectionFaultPoint(input, 'after_arm');
     // A crossed grant = launch_attempted_unknown (worker already invoked, never re-spawn);
     // still-revoked = re-arm refused (lease expired) → never-launch; absent → all do-not-spawn.
     if (!grant || grant.status !== 'armed') {
       return { kind: 'denied', reason: `launch_denied: grant is ${grant?.status ?? 'absent'} (not armed)` };
     }
 
-    // Consume the grant — the atomic exactly-once SPAWN authority.
+    // pln#677 / dec#171 — materialize every deterministic projection BEFORE the
+    // irreversible crossing. The reservation lock serializes projection+CAS; each
+    // projection is create-or-validate so a pre-crossing crash is safely replayable.
     let wonTransition: boolean;
     try {
-      ({ wonTransition } = consumeLaunchGrant(turnId, grant.token, grant.epoch, cwd));
+      ({ wonTransition } = consumeLaunchGrantWithProjection(
+        turnId,
+        grant.token,
+        grant.epoch,
+        (reservation) => {
+          // P0 has no cross-claim takeover transaction. The reservation's claim is
+          // authoritative; a different recovery claim must fail closed rather than
+          // partially rebind Assignment/Run/slot to a second owner.
+          if (reservation.claim_id !== claimId) {
+            throw new Error(`claim mismatch: reservation=${reservation.claim_id}, caller=${claimId}`);
+          }
+
+          ensureAssignmentProjection({
+            id: assignmentId,
+            short_label: assignmentId,
+            claim_id: reservation.claim_id,
+            agent: input.agent,
+            agent_id: input.agentId,
+            dispatcher_agent: input.dispatcherAgent,
+            dispatcher_session_id: input.sessionId,
+            scope: input.scope,
+            description: input.description,
+            tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
+          }, cwd);
+          turnProjectionFaultPoint(input, 'after_assignment');
+
+          ensureAgentRunProjection({
+            id: runId,
+            short_label: runId,
+            assignment_id: assignmentId,
+            claim_id: reservation.claim_id,
+            attempt_index: 1,
+            agent: input.agent,
+            agent_id: input.agentId,
+            transport: 'cli_spawn',
+            status: 'created',
+            scope: input.scope,
+            description: input.description,
+            worktree_path: input.worktreePath,
+            tags: ['turn-owned', 'review', 'loop'],
+          }, cwd);
+          turnProjectionFaultPoint(input, 'after_run');
+
+          ensureClaimAssignmentBinding(reservation.claim_id, assignmentId, cwd);
+          turnProjectionFaultPoint(input, 'after_claim_binding');
+
+          bindTurnProjection({
+            id: loopId,
+            slot_id: slotId,
+            actor: input.dispatcherAgentId ?? input.dispatcherAgent,
+            input: input.task,
+            turn_id: turnId,
+            assignment_id: assignmentId,
+            claim_id: reservation.claim_id,
+          }, cwd);
+          turnProjectionFaultPoint(input, 'after_slot_binding');
+          turnProjectionFaultPoint(input, 'before_consume');
+        },
+        cwd,
+        input.dispatcherAgentId ?? input.dispatcherAgent,
+      ));
     } catch (err) {
-      return { kind: 'denied', reason: `launch_denied: consume refused (${err instanceof Error ? err.message : String(err)})` };
+      return { kind: 'denied', reason: `launch_denied: projection/consume refused (${err instanceof Error ? err.message : String(err)})` };
     }
     if (!wonTransition) {
       // Adopted — another invocation crossed the fence. MUST NOT spawn.
       return { kind: 'denied', reason: 'launch_denied: grant already crossed by a concurrent dispatch' };
     }
-
-    // ── WON: this dispatch is the SOLE spawner. Bind slot + run to MY live claim
-    // (claimId), NOT the reservation's first-reserver claim (dec#144 #3) — else a
-    // recovery-winner would bind the slot to a dead claim and break complete_turn
-    // auth. Mints are idempotent (save overwrites, so guard on load). ──
-    if (!loadAssignment(assignmentId, cwd)) {
-      createAssignment({
-        id: assignmentId,
-        short_label: assignmentId,
-        claim_id: claimId,
-        agent: input.agent,
-        dispatcher_agent: input.dispatcherAgent,
-        dispatcher_session_id: input.sessionId,
-        scope: input.scope,
-        description: input.description,
-        tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
-      }, cwd);
-    }
-    if (!loadAgentRun(runId, cwd)) {
-      createAgentRun({
-        id: runId,
-        short_label: runId,
-        assignment_id: assignmentId,
-        claim_id: claimId,
-        agent: input.agent,
-        agent_id: input.agentId,
-        transport: 'cli_spawn',
-        status: 'created',
-        scope: input.scope,
-        description: input.description,
-        worktree_path: input.worktreePath,
-        tags: ['turn-owned', 'review', 'loop'],
-      }, cwd);
-    }
-    turn({
-      id: loopId,
-      slot_id: slotId,
-      actor: input.dispatcherAgentId ?? input.dispatcherAgent,
-      input: input.task,
-      turn_id: turnId,
-      assignment_id: assignmentId,
-      claim_id: claimId,
-    }, cwd);
+    turnProjectionFaultPoint(input, 'after_consume');
 
     return { kind: 'won', assignmentId, runId, turnId, nonce: grant.token };
   } catch (err) {
@@ -327,7 +370,11 @@ export async function dispatchReviewLoopTurn(
   // caller always supplies one — default defensively for direct callers/tests.
   const cwd = input.cwd ?? process.cwd();
   const agent = slot.agent ?? '';
-  const scope = `review-loop:${loopId}`;
+  // A claim owns one slot's execution lineage, not the whole loop. Using the
+  // loop-wide scope here made parallel reviewers reuse/conflict on one claim
+  // and its single assignment_id pointer. The suffix stays compatible with
+  // readers that parse the leading `review-loop:<loop_id>` namespace.
+  const scope = `review-loop:${loopId}:slot:${slot.slot_id}`;
   const isReviewer = slot.role === 'reviewer';
   const result: DispatchReviewLoopTurnResult = {
     loop_id: loopId,
@@ -496,7 +543,8 @@ export async function dispatchReviewLoopTurn(
     if (assignmentId) {
       try {
         attachAssignmentMessageToClaim(claimResult.claimId, msg.id, cwd);
-        linkClaimToAssignment(claimResult.claimId, assignmentId, cwd);
+        if (turnEcho) ensureClaimAssignmentBinding(claimResult.claimId, assignmentId, cwd);
+        else linkClaimToAssignment(claimResult.claimId, assignmentId, cwd);
         transitionAssignment(assignmentId, 'offered', { actor: input.dispatcherAgent }, cwd);
         patchAssignmentMessageId(assignmentId, msg.id, cwd);
       } catch (linkErr) {
