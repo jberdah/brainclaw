@@ -90,6 +90,51 @@ export const MCP_CANONICAL_GRAMMAR_TOOL_NAMES: string[] = [
 ];
 
 /**
+ * Curated MCP workflow surface for Hermes. Hermes receives the shared Tier B
+ * instructions, which prescribe session/claim closure, inbox coordination,
+ * step updates, and Code Map discovery in addition to the canonical memory
+ * grammar. Keep this list aligned with that instruction contract; it is an
+ * advertised-tool policy, not a headless auto-approval policy.
+ */
+export const MCP_HERMES_WORKFLOW_TOOL_NAMES: string[] = [
+  ...MCP_CANONICAL_GRAMMAR_TOOL_NAMES,
+  'bclaw_remove',
+  'bclaw_move',
+  'bclaw_session_start',
+  'bclaw_session_end',
+  'bclaw_claim',
+  'bclaw_release_claim',
+  'bclaw_add_step',
+  'bclaw_complete_step',
+  'bclaw_update_step',
+  'bclaw_delete_step',
+  'bclaw_list_sequences',
+  'bclaw_create_sequence',
+  'bclaw_update_sequence',
+  'bclaw_delete_sequence',
+  'bclaw_read_inbox',
+  'bclaw_ack_message',
+  'bclaw_send_message',
+  'bclaw_correct_handoff',
+  'bclaw_write_note',
+  'bclaw_quick_capture',
+  'bclaw_search',
+  'bclaw_setup',
+  'bclaw_bootstrap',
+  'bclaw_switch',
+  'bclaw_release_notes',
+  'bclaw_coordinate',
+  'bclaw_dispatch',
+  'bclaw_loop',
+  'bclaw_dispatch_status',
+  'bclaw_assignment_update',
+  'bclaw_code_find',
+  'bclaw_code_brief',
+  'bclaw_code_status',
+  'bclaw_code_refresh',
+];
+
+/**
  * Tools removed from the MCP surface at the v1.0 cut (Phase 3 slice 3i).
  * Hidden from every `tools/list` response; direct `tools/call` still works
  * as a migration escape hatch.

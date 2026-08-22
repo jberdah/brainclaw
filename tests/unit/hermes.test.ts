@@ -17,6 +17,7 @@ import yaml from 'yaml';
 import {
   AGENT_EXPORT_REGISTRY,
   ensureHermesMcpConfig,
+  LOCAL_ONLY_AGENT_WORKSPACE_FILES,
   resolveExportTarget,
 } from '../../src/core/agent-files.js';
 import {
@@ -26,9 +27,42 @@ import {
 import { detectAiAgent } from '../../src/core/ai-agent-detection.js';
 import { buildAgentInventory } from '../../src/core/agent-inventory.js';
 import { buildAgentIntegrationDeclaration } from '../../src/core/agent-integrations.js';
+import { renderBrainclawSection, type InstructionTemplateInput } from '../../src/core/instruction-templates.js';
+import { MCP_HERMES_WORKFLOW_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../../src/core/protocol-tool-policy.js';
+import type { State } from '../../src/core/schema.js';
+
+const LEGACY_HERMES_BRAINCLAW_MCP_TOOLS = [
+  'bclaw_context',
+  'bclaw_work',
+  'bclaw_find',
+  'bclaw_get',
+  'bclaw_create',
+  'bclaw_update',
+  'bclaw_transition',
+];
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function renderHermesInstructions(): string {
+  const state: State = {
+    version: 1,
+    write_version: 1,
+    active_constraints: [],
+    recent_decisions: [],
+    known_traps: [],
+    open_handoffs: [],
+    plan_items: [],
+  };
+  const input: InstructionTemplateInput = {
+    profile: getAgentCapabilityProfile('hermes')!,
+    state,
+    projectName: 'test-project',
+    brainclawVersion: '0.20.0',
+    resolvedInstructions: [],
+  };
+  return renderBrainclawSection(input).content;
 }
 
 describe('Hermes — capability profile', () => {
@@ -75,6 +109,10 @@ describe('Hermes — registries', () => {
     assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.location === 'machine' && s.path === '.hermes/config.yaml'));
     assert.ok(declaration.surfaces.some((s) => s.kind === 'skill' && s.path === '.agents/skills/brainclaw/SKILL.md'));
   });
+
+  it('does not classify the machine-level Hermes config as workspace-local', () => {
+    assert.ok(!(LOCAL_ONLY_AGENT_WORKSPACE_FILES as readonly string[]).includes('.hermes/config.yaml'));
+  });
 });
 
 describe('Hermes — MCP config writer', () => {
@@ -92,12 +130,28 @@ describe('Hermes — MCP config writer', () => {
       const parsed = yaml.parse(written);
       assert.deepEqual(parsed.skills.external_dirs, [path.join(workspace, '.agents', 'skills')]);
       assert.equal(parsed.mcp_servers.brainclaw.env.BRAINCLAW_AGENT, 'hermes');
-      assert.ok(parsed.mcp_servers.brainclaw.tools.include.includes('bclaw_work'));
+      assert.deepEqual(
+        parsed.mcp_servers.brainclaw.tools.include,
+        MCP_HERMES_WORKFLOW_TOOL_NAMES.filter((name) => !REMOVED_IN_V1_TOOLS.has(name)),
+      );
       assert.equal(parsed.mcp_servers.brainclaw.tools.prompts, false);
       assert.equal(parsed.mcp_servers.brainclaw.tools.resources, false);
       fs.rmSync(workspace, { recursive: true, force: true });
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('advertises every Brainclaw tool named in its generated instructions', () => {
+    const instructionTools = new Set(
+      Array.from(renderHermesInstructions().matchAll(/`(bclaw_[a-z_]+)/g), (match) => match[1]),
+    );
+    const configuredTools = new Set(
+      MCP_HERMES_WORKFLOW_TOOL_NAMES.filter((name) => !REMOVED_IN_V1_TOOLS.has(name)),
+    );
+
+    for (const name of instructionTools) {
+      assert.ok(configuredTools.has(name), `${name} is required by Hermes instructions but absent from tools.include`);
     }
   });
 
@@ -136,6 +190,36 @@ describe('Hermes — MCP config writer', () => {
       assert.deepEqual(parsed.mcp_servers.brainclaw.tools.include, ['bclaw_work']);
       assert.equal(parsed.mcp_servers.brainclaw.env.BRAINCLAW_AGENT, 'hermes');
       fs.rmSync(workspace, { recursive: true, force: true });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates the exact legacy managed tool list to the workflow surface', () => {
+    const home = tempDir('bclaw-hermes-migrate-');
+    try {
+      const filePath = path.join(home, '.hermes', 'config.yaml');
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, yaml.stringify({
+        mcp_servers: {
+          brainclaw: {
+            command: '/custom/brainclaw',
+            args: ['mcp'],
+            tools: { include: LEGACY_HERMES_BRAINCLAW_MCP_TOOLS },
+          },
+        },
+      }), 'utf-8');
+
+      const result = ensureHermesMcpConfig(home);
+      assert.ok(result);
+      assert.equal(result!.updated, true);
+
+      const parsed = yaml.parse(fs.readFileSync(filePath, 'utf-8'));
+      assert.deepEqual(
+        parsed.mcp_servers.brainclaw.tools.include,
+        MCP_HERMES_WORKFLOW_TOOL_NAMES.filter((name) => !REMOVED_IN_V1_TOOLS.has(name)),
+      );
+      assert.equal(parsed.mcp_servers.brainclaw.command, '/custom/brainclaw');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

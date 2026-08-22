@@ -46,7 +46,7 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 | **Agent-ready context**          | compact, prompt-sized context built from real workspace state instead of stale instructions                                                                                                         |
 | **Code Map**                     | a Tree-sitter symbol + import index (11 languages — JS/TS, Python, PHP, Java, Go, Rust, C#, Ruby, C, C++) so agents ask "where is X / what should I read first" before editing, with related decisions/traps attached — `bclaw_code_find` / `bclaw_code_brief`, see [code map](docs/code-map.md) |
 | **Native agent files**           | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance                                                                         |
-| **Multi-turn loops**             | review and ideation loops with structured phases, iteration semantics, and per-phase memory filters — see[loop engine](docs/concepts/loop-engine.md) and [ideation loop](docs/concepts/ideation-loop.md) |
+| **Multi-turn loops**             | review, ideation, implementation, research, and debug workflows with structured phases, iteration semantics, verification gates, and per-phase memory filters — see [loop engine](docs/concepts/loop-engine.md) |
 | **Machine AI surface discovery** | detects local coding agents plus desktop AI work surfaces such as ChatGPT Desktop and Gemini CLI                                                                                                    |
 | **Queued surface tasks**         | stores project-scoped requests for other local AI surfaces, such as visual generation, drafting, summaries, or research                                                                             |
 | **Local-first storage**          | plain text + JSON, Git-friendly, no mandatory cloud, no telemetry by default                                                                                                                        |
@@ -263,14 +263,29 @@ bclaw_loop({ intent: "get", loop_id: "lop_abc" }); // inspect status any time
 
 ## The Loop Engine (Multi-Turn Workflows)
 
-Brainclaw's Loop Engine moves beyond manual ping-pong by formalizing multi-turn workflows (review, ideation, testing). It features two distinct review modes:
+Brainclaw's Loop Engine formalizes repeated multi-turn work so agents can
+resume, automate, and audit it rather than relying on manual ping-pong. It is
+one engine with five shipped default workflows: **review, ideation,
+implementation, research, and debug**.
 
-- **Asymmetric Mode**: The classic author→reviewer handoff. The reviewer creates findings, and the original author must apply the fixes.
-- **Symmetric Mode**: Eliminates unnecessary round-trips. Both the author and reviewer slots can apply fixes directly, drastically speeding up spec and documentation reviews.
+| Workflow | Typical outcome | Normal entry point |
+| --- | --- | --- |
+| Review | accepted verdict or bounded fix cycle | `bclaw_coordinate(intent="review", open_loop=true)` |
+| Ideation | memory-confronted plan draft or synthesis | `bclaw_coordinate(intent="ideate")` |
+| Implementation | green verification and handoff | `bclaw_loop(intent="open", kind="implementation", allow_orphan=true)`, then `bind` |
+| Research | evidence-backed synthesis | `bclaw_loop(intent="open", kind="research", allow_orphan=true)` |
+| Debug | reproduced, verified fix and handoff | `bclaw_loop(intent="open", kind="debug", allow_orphan=true)` |
 
-Each loop maintains a structured lifecycle, explicit phases, iteration bounds, and per-phase memory filters, executed seamlessly via `bclaw_loop`.
+Every loop has structured phases, bounded iteration, explicit artifacts, and
+per-phase memory filters. The shared controls are `open`, `turn`,
+`complete_turn`, `advance`, `add_artifact`, `pause`, `resume`, and `close`;
+implementation also adds `bind` and `verify`. `request_input` /
+`provide_input` are cross-cutting clarification primitives for any workflow.
 
-**Autonomous convergence (pln#628 Focus 4B + pln#630):** a dispatched reviewer doesn't need to be driven by hand. It writes its verdict (`review_verdict: approve | request_changes`) into its `LANE-RESULT.json`; when the coordinator harvests the lane, brainclaw records the verdict on the loop and **auto-closes it on approve** — the review loop reaches `reviewer_green` with no human ping-pong. On `request_changes`, brainclaw **runs the fix→re-review cycle autonomously**: it bumps the round, retains the worktree, and re-dispatches — through an exactly-once turn-attempt state machine (immutable attempt records behind an atomic launch fence, on by default; kill-switch `BRAINCLAW_TURN_OWNED_REVIEW=0`) so a turn is never double-spawned, with a bounded round cap that lands on `blocked` instead of looping forever.
+Review is a useful specialized path, not the definition of the engine. It has
+asymmetric and symmetric modes and can auto-close on an approved verdict; the
+other workflows use the same lifecycle to converge on a plan, synthesis,
+handoff, or verified fix. See the [Loop Engine guide](docs/concepts/loop-engine.md).
 
 ## Enterprise Ready: Mono-repo & Micro-services
 
@@ -310,7 +325,7 @@ Recent releases have moved a lot of multi-agent parallel work from "risky" to "s
 
 - **Per-claim auto-worktree** — each dispatched lane gets its own isolated git worktree; the coordinator integrates with an octopus merge.
 - **Sequenced parallel execute** — `bclaw_dispatch(intent="execute")` fans out independent lanes across several agent instances and integrates the result.
-- **Symmetric review-fix loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="symmetric")` runs an alternating review-and-fix conversation across two slots without shared-checkout collisions. The reviewer's verdict is harvested from `LANE-RESULT.json` and the loop **auto-closes on approve** — no manual round-trip to converge the approve path.
+- **Loop Engine protocols** — review, ideation, implementation, research, and debug workflows share a persisted lifecycle. Review offers a symmetric auto-fix shortcut; implementation and debug bind verification to the work; ideation and research converge on durable syntheses.
 - **Cross-platform spawn** — OS-aware prompt delivery (stdin pipe / inline arg) plus a brief-ack file handshake, so spawned workers can be detected and timed out reliably on Windows and Unix.
 - **Worktree GC is scope-bounded** — symlinks and junctions are no longer followed during cleanup, so post-merge sweeps can't wipe `node_modules` or other neighboring directories.
 - **MCP runtime self-heal** — when the runtime is corrupted, the server logs an actionable repair pointer; `brainclaw doctor --repair` rebuilds dist in one step.
@@ -327,8 +342,9 @@ Recommended use today:
 
 1. for parallel work, dispatch a sequence with `bclaw_dispatch(intent="execute")` — each lane gets its own worktree
 2. for sequential work in the same project, let one agent claim at a time and rely on handoffs
-3. when reviewing or fixing across agents, prefer symmetric review loops over manual ping-pong
-4. keep multi-machine workflows on a single source of truth until federation lands
+3. choose the loop by outcome: ideation for a plan, implementation or debug for a verified handoff, research for a synthesis, and review for a verdict
+4. when reviewing or fixing across agents, prefer symmetric review loops over manual ping-pong
+5. keep multi-machine workflows on a single source of truth until federation lands
 
 ---
 

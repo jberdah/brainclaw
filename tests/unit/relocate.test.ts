@@ -34,6 +34,9 @@ function makeWorkspace(): { root: string; a: string; b: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-move-'));
   cleanup.push(root);
   makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
+  // Keep session-scoped MCP calls inside this temporary workspace even when the
+  // operating-system temp directory contains a stale .brainclaw store.
+  fs.appendFileSync(path.join(root, '.brainclaw', 'config.yaml'), 'store_type: workspace\n');
   const a = path.join(root, 'applications', 'app_a');
   fs.mkdirSync(a, { recursive: true }); makeStore(a, 'app_a');
   const b = path.join(root, 'applications', 'app_b');

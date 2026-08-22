@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   MCP_HEADLESS_AUTO_TOOL_NAMES as POLICY_HEADLESS_AUTO,
   MCP_CANONICAL_GRAMMAR_TOOL_NAMES as POLICY_CANONICAL_GRAMMAR,
+  MCP_HERMES_WORKFLOW_TOOL_NAMES as POLICY_HERMES_WORKFLOW,
   REMOVED_IN_V1_TOOLS as POLICY_REMOVED_IN_V1,
 } from '../../src/core/protocol-tool-policy.js';
 import {
@@ -57,6 +58,15 @@ describe('protocol-tool-policy ↔ catalog set equality (pln#622 PR1)', () => {
     // list — a catalog reorder must fail this test, not silently reorder
     // generated agent configs.
     assert.deepEqual(POLICY_CANONICAL_GRAMMAR, CATALOG_CANONICAL_GRAMMAR);
+  });
+
+  it('MCP_HERMES_WORKFLOW_TOOL_NAMES contains only published, non-removed tools', () => {
+    const catalogNames = new Set<string>(ALL_TOOLS.map((tool) => tool.name));
+    const removedTools = new Set<string>(POLICY_REMOVED_IN_V1);
+    for (const name of POLICY_HERMES_WORKFLOW) {
+      assert.ok(catalogNames.has(name), `${name} is not present in the MCP catalog`);
+      assert.ok(!removedTools.has(name), `${name} is removed from the v1 MCP surface`);
+    }
   });
 
   it('REMOVED_IN_V1_TOOLS matches the catalog set', () => {

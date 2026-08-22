@@ -1984,7 +1984,7 @@ The default catalog is intentionally small and centred on the canonical grammar.
 |---|---|
 | `bclaw_coordinate(intent)` | Assign, consult, review, reroute, or summarize across agents. Pass `open_loop: true` on `intent="review"` to also dispatch the reviewer turn. |
 | `bclaw_dispatch(intent)` | Parallelize execute across a sequence's lanes (analysis / execute / review). |
-| `bclaw_loop(intent)` | Drive a turn in an existing multi-turn loop (`turn`, `complete_turn`, `advance`, `close`; implementation loops add `bind` to dispatch the linked sequence and `verify` to run the opener-configured `command_green` check). Do not call `bclaw_loop(intent="open")` directly without dispatch — use `bclaw_coordinate(intent="review", open_loop: true)` instead. |
+| `bclaw_loop(intent)` | Open, inspect, or drive a multi-turn loop. The public lifecycle is `open`, `get`, `list`, `turn`, `complete_turn`, `advance`, `add_artifact`, `pause`, `resume`, and `close`; implementation loops also add `bind` and `verify`, and any kind may use `request_input` / `provide_input`. `bclaw_coordinate` / `bclaw_dispatch` remain the ergonomic review and ideation shortcuts. A direct `open` must include `allow_orphan: true` to acknowledge that the caller will dispatch or drive it. |
 
 **Sequences**:
 
