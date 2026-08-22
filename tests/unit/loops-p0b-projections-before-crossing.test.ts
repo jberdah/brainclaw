@@ -23,6 +23,7 @@ import {
   consumeLaunchGrantWithProjection,
   deriveChildIds,
   deriveTurnId,
+  getReservation,
   launchGrant,
 } from '../../src/core/loops/attempt-reservation.js';
 import { listLoopEvents, openLoop, getLoop } from '../../src/core/loops/store.js';
@@ -156,7 +157,10 @@ describe('P0B dispatch crash boundaries', () => {
     const mismatch = prepareTurnOwnedReviewDispatch({ ...f.input, claimId: 'clm_other' });
     assert.equal(mismatch.kind, 'denied');
     if (mismatch.kind === 'denied') assert.match(mismatch.reason, /claim mismatch/);
-    assert.equal(launchGrant(f.turnId, cwd)?.status, 'armed');
+    // P0C strict immutable adoption: a foreign claim cannot commit/arm the
+    // owner's prepared reservation merely by retrying the same turn id.
+    assert.equal(getReservation(f.turnId, cwd)?.decision, 'prepared');
+    assert.equal(launchGrant(f.turnId, cwd), undefined);
     assert.equal(loadAssignment(f.assignmentId, cwd), undefined);
     assert.equal(loadAgentRun(f.runId, cwd), undefined);
     assert.equal(turnEvents(f), 0);

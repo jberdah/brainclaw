@@ -68,13 +68,31 @@ double-writes them. It is a façade over the existing `TurnReservation` core
 in [`src/core/loops/attempt-reservation.ts`](../../src/core/loops/attempt-reservation.ts),
 not a new subsystem or a new journal. Its normative turn-owned chronology is
 `reserve → commit → arm → durable projections → consume → wonTransition ===
-true`. The currently wired runtime adapter follows it; protocol drivers that do
-not yet auto-dispatch still use the shared engine and reservation core without
-claiming this stronger boundary. The pre-crossing callback creates or validates
+true`. `prepareTurnExecution` applies it to worker phases of all five kinds and
+refuses `engine`/`manual` phases before reservation. Review and multi-agent
+ideation use it through their coordinator shortcuts; implementation, research
+and debug use the same contract when their driver dispatches a worker, even
+where the phase is still operator-driven. The pre-crossing callback creates or validates
 the Assignment and AgentRun, binds the active claim, and binds the slot. A turn
 crossed through that adapter is therefore harvestable; a pre-crossing crash is
 repairable by replaying the same deterministic ids.
 
+Phase-specific execution metadata lives in `LOOP_KIND_POLICIES`; phase graphs,
+gates, iteration and stop conditions remain exclusively in `DEFAULT_PROTOCOLS`.
+The current execution split is deliberately visible here for all five protocols:
+
+| Kind | Worker phases | Engine phases | Manual phases | Integration required before convergence |
+|---|---|---|---|---|
+| `review` | `findings`, `author_response`, `followup_review` | `verdict` | `change_summary` | `author_response` |
+| `ideation` | `critique` | — | `proposal`, `revision`, `synthesis` | — |
+| `implementation` | `execute` | `bind`, `verify` | `handoff_ready` | `execute` |
+| `research` | `investigate`, `synthesize` | `conclude` | — | — |
+| `debug` | `reproduce`, `hypothesize`, `isolate`, `fix` | — | `handoff` | `fix` |
+
+Every worker result must carry the phase's explicit `artifact_type`. A summary
+is useful observability, but it is never proof that opens a gate. Report harvest
+may reconcile read-only phases; mutating phases keep their claim until
+`harvest --integrate` has integrated the worktree.
 The concurrency and recovery contract lives in the dedicated document —
 see [Attempt authority](./attempt-authority.md) for the full model,
 identity matrix, ordered dispatch and invariants I1–I18. This page assumes

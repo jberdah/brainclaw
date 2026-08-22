@@ -5,6 +5,10 @@
 > spawn authority belong to [`AttemptAuthority`](../concepts/attempt-authority.md);
 > nothing on this page overrides them.
 
+Reviewer phases return the structured verdict fields; `author_response`
+returns `artifact_type: "author_response"` with its evidence in `body`. Since
+that phase changes the worktree, it converges only after `harvest --integrate`.
+
 ## Purpose
 
 A `review` loop validates a change that already happened. The change lives on
@@ -120,8 +124,9 @@ cap (→ `blocked`, handed to a human). The report-only harvest path never
 cycles: it can neither re-dispatch nor retain the claim, so it defers
 `request_changes` to `--integrate` and still closes on `approve`.
 
-Set `BRAINCLAW_TURN_OWNED_REVIEW=0` (also `false`/`off`/`no`) to fall back to
-the legacy review finalizer if a problem surfaces in production.
+Set `BRAINCLAW_TURN_OWNED_LOOPS=off` to disable the common path, or `review`
+to limit it to review. `BRAINCLAW_TURN_OWNED_REVIEW=0` (also
+`false`/`off`/`no`) remains the backward-compatible kill switch.
 
 ## Symmetric review-and-fix
 
@@ -183,6 +188,7 @@ plus the run status — never a decision on marker-file presence.
 |---|---|
 | Default protocol | [`src/core/loops/types.ts`](../../src/core/loops/types.ts) (`DEFAULT_PROTOCOLS.review`) |
 | Coordinator dispatch | [`src/core/review-loop-turn-dispatch.ts`](../../src/core/review-loop-turn-dispatch.ts) |
+| Common attempt + projections | [`src/core/loops/attempt-authority.ts`](../../src/core/loops/attempt-authority.ts), [`src/core/loops/turn-execution.ts`](../../src/core/loops/turn-execution.ts) |
 | Close / reducer | [`src/core/loops/reconcile-turn.ts`](../../src/core/loops/reconcile-turn.ts), [`src/core/review-loop-close.ts`](../../src/core/review-loop-close.ts) |
 | Result reducer | [`src/core/loops/result-reducers.ts`](../../src/core/loops/result-reducers.ts) |
 | Tests | [`tests/unit/review-loop-close.test.ts`](../../tests/unit/review-loop-close.test.ts), [`tests/unit/loops-mcp-facade.test.ts`](../../tests/unit/loops-mcp-facade.test.ts) |

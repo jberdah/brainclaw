@@ -5,6 +5,9 @@
 > spawn authority belong to [`AttemptAuthority`](../concepts/attempt-authority.md);
 > nothing on this page overrides them.
 
+Worker results are explicit: `finding` for `investigate` and `synthesis` for
+`synthesize`. Both are read-only results and may converge during report harvest.
+
 ## Purpose
 
 A `research` loop converges an open-ended question into a synthesised
@@ -121,6 +124,8 @@ in before synthesise fires.
 | Default protocol | [`src/core/loops/types.ts`](../../src/core/loops/types.ts) (`DEFAULT_PROTOCOLS.research`) |
 | Iteration FSM (`critic_signal`) | [`src/core/loops/iteration-engine.ts`](../../src/core/loops/iteration-engine.ts) |
 | Gate evaluator | [`src/core/loops/verbs.ts`](../../src/core/loops/verbs.ts) (`evaluatePhaseAdvanceGate`) |
+| Attempt + execution policy | [`src/core/loops/attempt-authority.ts`](../../src/core/loops/attempt-authority.ts), [`src/core/loops/kind-policies.ts`](../../src/core/loops/kind-policies.ts) |
+| Result reducer | [`src/core/loops/result-reducers.ts`](../../src/core/loops/result-reducers.ts) |
 | Tests | [`tests/unit/loops-iteration-engine.test.ts`](../../tests/unit/loops-iteration-engine.test.ts), [`tests/unit/loops-phase-advance-gate.test.ts`](../../tests/unit/loops-phase-advance-gate.test.ts) |
 
 ## Related

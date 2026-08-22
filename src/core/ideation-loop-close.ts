@@ -14,9 +14,9 @@
  * `ideate-loop:<lop>` scope + a completed lane, map the critic's summary/notes into ONE
  * `critique` artifact, complete_turn(done), then attempt advance — a blocked n:3 gate is
  * EXPECTED (more critiques still needed), not an error. Convergent + idempotent under
- * withLoopLock. Uses the LEGACY LANE-harvest path, NOT the turn-owned reconcileTurn (which is
- * REVIEW-ONLY today — turn-owned is now the default for review loops but ideation stays on the
- * legacy path; the ideationReducer is the forward-compatible seam for when turn-owned ideation lands).
+ * withLoopLock. This remains the compatibility path for legacy ideation lanes
+ * without a TurnReservation/evidence nonce. Turn-owned ideation lanes now use
+ * the common reconcileTurn + ideationReducer path instead.
  *
  * Purely additive: a new module + two harvest call sites, reusing complete_turn / advance
  * / withLoopLock unchanged. Touches NO review-dispatch code.

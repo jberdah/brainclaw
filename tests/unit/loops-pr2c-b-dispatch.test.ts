@@ -14,6 +14,7 @@ import { loadAgentRun, listAgentRuns } from '../../src/core/agentruns.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { acquireLock } from '../../src/core/loops/lock.js';
 import { memoryDir } from '../../src/core/io.js';
+import { phasePolicy } from '../../src/core/loops/kind-policies.js';
 
 // pln#630 PR2c-b (dec#144) — coordinator-inline-consume: the exactly-once turn
 // machine wired into review dispatch. prepareTurnOwnedReviewDispatch runs the
@@ -31,6 +32,7 @@ function makeWorkspace(): string {
 function openReviewLoop(cwd: string): string {
   const loop = openLoop({
     kind: 'review', title: 't', created_by: 'coordinator', mode: 'symmetric',
+    phases: [{ name: 'findings' }],
     slots: [{ slot_id: SLOT, role: 'reviewer', agent: 'claude-code' }],
   }, cwd);
   saveClaim({
@@ -108,11 +110,13 @@ describe('PR2c-b prepareTurnOwnedReviewDispatch (pln#630 dec#144)', () => {
   it('DENIED on crash-recovery of a CROSSED grant: prepare must not re-spawn (launch_attempted_unknown)', () => {
     const loopId = openReviewLoop(cwd);
     const turnId = deriveTurnId(loopId, SLOT, 0);
+    const policy = phasePolicy('review', 'findings')!;
     // Simulate a prior dispatch that reserved+committed+armed+CROSSED then crashed.
     reserve({
       turn_id: turnId, loop_id: loopId, slot_id: SLOT, target_slot_generation: 0,
-      loop_version_at_reserve: 1, agent: 'claude-code', claim_id: 'clm_dead',
+      loop_version_at_reserve: 1, agent: 'claude-code', claim_id: 'clm_coord',
       phase: 'findings', iteration: 0, store_root: cwd, cwd,
+      completion_mode: policy.completion_mode, expected_artifacts: policy.expected_artifacts,
       lease_deadline: new Date(Date.now() + 600_000).toISOString(),
     }, cwd);
     commitReservation(turnId, cwd);

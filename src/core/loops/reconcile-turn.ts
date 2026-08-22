@@ -34,7 +34,7 @@ export interface ReconcileTurnInput {
   turn_id: string;
   /** The authoritative turn result (LANE-RESULT). Must carry turn_id/run_id/nonce matching the attempt. */
   lane: LaneResult;
-  /** ideation only — critique bodies resolved from the attempt's critique_batch artifact. */
+  /** ideation only — explicitly typed critique bodies resolved from the attempt result. */
   critiques?: Array<{ body: string; addresses_critique?: string[] }>;
   actor?: string;
   cwd?: string;
@@ -259,7 +259,19 @@ function convergeLockedTurn(
     try {
       const [primary, ...extras] = reduced.artifacts;
       for (const a of extras) {
-        try { add_artifact({ id: loop.id, actor, artifact: { phase: a.phase, type: a.type, body: a.body, produced_by: a.produced_by } }, cwd); }
+        try {
+          add_artifact({
+            id: loop.id,
+            actor,
+            artifact: {
+              phase: a.phase,
+              type: a.type,
+              body: a.body,
+              produced_by: a.produced_by,
+              addresses_critique: a.addresses_critique,
+            },
+          }, cwd);
+        }
         catch { /* an extra artifact failing must not abort convergence */ }
       }
       complete_turn({
@@ -268,7 +280,14 @@ function convergeLockedTurn(
         actor,
         outcome: reduced.slot_outcome,
         failure_reason: reduced.failure_reason,
-        ...(primary ? { artifact: { phase: primary.phase, type: primary.type, body: primary.body } } : {}),
+        ...(primary ? {
+          artifact: {
+            phase: primary.phase,
+            type: primary.type,
+            body: primary.body,
+            addresses_critique: primary.addresses_critique,
+          },
+        } : {}),
       }, cwd);
     } catch (err) {
       return { reconciled: false, reason: `complete_turn failed: ${err instanceof Error ? err.message : String(err)}` };

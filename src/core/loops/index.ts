@@ -114,3 +114,34 @@ export {
   type WorkerReplyContract,
   type ArtifactRequirement,
 } from './worker-reply-contract.js';
+export {
+  abortAttempt,
+  inspectAttempt,
+  matchEvidence,
+  prepareAttempt,
+  projectAndCross,
+  revokeAttempt,
+  type AttemptCrossResult,
+  type AttemptSnapshot,
+  type PreparedAttempt,
+  type PrepareAttemptInput,
+} from './attempt-authority.js';
+export {
+  LOOP_KIND_POLICIES,
+  assertLoopKindPoliciesComplete,
+  isWorkerPhase,
+  phasePolicy,
+  policyForKind,
+  type AttemptCompletionMode,
+  type LoopKindPolicy,
+  type LoopPhaseExecutionPolicy,
+  type PhaseExecution,
+} from './kind-policies.js';
+export {
+  ensureTurnExecutionProjections,
+  prepareTurnExecution,
+  type PrepareTurnExecutionInput,
+  type PrepareTurnExecutionResult,
+  type TurnExecutionProjectionInput,
+  type TurnProjectionStage,
+} from './turn-execution.js';

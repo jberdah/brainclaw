@@ -1,4 +1,4 @@
-import { LOOP_ARTIFACT_BODY_MAX_BYTES } from './types.js';
+import { LOOP_ARTIFACT_BODY_MAX_BYTES, type LoopKind } from './types.js';
 import type { LaneResult } from '../schema.js';
 import type { TurnReservation } from './attempt-reservation.js';
 
@@ -44,8 +44,8 @@ export interface ReducerResult {
 
 /**
  * Reducer input: the parsed LANE-RESULT for the turn + the phase to stamp +
- * (for ideation) the critique bodies reconcileTurn resolved from the attempt's
- * `critique_batch` expected artifact. reconcileTurn owns evidence/identity
+ * (for ideation) the explicitly typed critique bodies reconcileTurn resolved
+ * from the attempt result. reconcileTurn owns evidence/identity
  * validation BEFORE calling a reducer — reducers are pure and assume the lane is
  * already proven to belong to this attempt.
  */
@@ -70,6 +70,22 @@ export const reviewReducer: ResultReducer = (input, attempt) => {
   if (lane.status !== 'completed') {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: `review lane status is ${lane.status}, not completed` };
   }
+  if (phase === 'author_response') {
+    if (lane.artifact_type !== 'author_response') {
+      return { artifacts: [], slot_outcome: 'failed', failure_reason: "review author_response requires artifact_type 'author_response'" };
+    }
+    const response = (lane.body ?? '').trim();
+    if (!response) {
+      return { artifacts: [], slot_outcome: 'failed', failure_reason: 'review author_response produced no body' };
+    }
+    return {
+      artifacts: [{ phase, type: 'author_response', body: capBody(response), produced_by: attempt.agent }],
+      slot_outcome: 'done',
+    };
+  }
+  if (phase !== 'findings' && phase !== 'followup_review') {
+    return { artifacts: [], slot_outcome: 'failed', failure_reason: `review phase '${phase}' has no worker-result contract` };
+  }
   if (!lane.review_verdict) {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: 'review lane completed without a review_verdict — cannot converge the loop' };
   }
@@ -84,7 +100,7 @@ export const reviewReducer: ResultReducer = (input, attempt) => {
 };
 
 /**
- * ideation reducer (§6). A `critique_batch` → N `critique` artifacts (so
+ * ideation reducer (§6). An explicitly typed critique → `critique` artifacts (so
  * `min_artifacts_by_type` can open the next phase). A bare summary with no
  * critique body → slot `failed`, gate stays shut (correct: no fake progress from
  * a lane that produced no critiques).
@@ -94,8 +110,37 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
   if (lane.status !== 'completed') {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: `ideation lane status is ${lane.status}, not completed` };
   }
+  if (phase !== 'critique') {
+    const artifactType = phase === 'proposal' ? 'proposal' : phase === 'revision' ? 'revision' : phase === 'synthesis' ? 'plan_draft' : undefined;
+    if (!artifactType) {
+      return { artifacts: [], slot_outcome: 'failed', failure_reason: `ideation phase '${phase}' has no result contract` };
+    }
+    if (lane.artifact_type !== artifactType) {
+      return { artifacts: [], slot_outcome: 'failed', failure_reason: `ideation phase '${phase}' expected artifact_type '${artifactType}', got '${lane.artifact_type}'` };
+    }
+    const body = (lane.body ?? lane.summary).trim();
+    if (!body) return { artifacts: [], slot_outcome: 'failed', failure_reason: `ideation ${phase} produced no body` };
+    if (artifactType === 'plan_draft') {
+      const addresses = [
+        ...(lane.artifacts ?? []).filter((id) => /^art_[0-9a-z]+$/.test(id)),
+        ...(critiques ?? []).flatMap((c) => c.addresses_critique ?? []),
+      ];
+      const uniqueAddresses = [...new Set(addresses)];
+      if (uniqueAddresses.length === 0) {
+        return { artifacts: [], slot_outcome: 'failed', failure_reason: 'ideation synthesis must cite critique artifact ids in lane.artifacts' };
+      }
+      return {
+        artifacts: [{ phase, type: artifactType, body: capBody(body), produced_by: attempt.agent, addresses_critique: uniqueAddresses }],
+        slot_outcome: 'done',
+      };
+    }
+    return { artifacts: [{ phase, type: artifactType, body: capBody(body), produced_by: attempt.agent }], slot_outcome: 'done' };
+  }
+  if (lane.artifact_type !== 'critique') {
+    return { artifacts: [], slot_outcome: 'failed', failure_reason: "ideation critique requires artifact_type 'critique'" };
+  }
   if (!critiques || critiques.length === 0) {
-    return { artifacts: [], slot_outcome: 'failed', failure_reason: 'ideation lane produced no critiques (bare summary) — gate stays shut' };
+    return { artifacts: [], slot_outcome: 'failed', failure_reason: 'ideation critique lane produced no critiques (bare summary) — gate stays shut' };
   }
   return {
     artifacts: critiques.map((c) => ({
@@ -107,11 +152,9 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
 };
 
 /**
- * Default reducer for loop kinds without a specialized one (implementation /
- * research / debug / bootstrap): a completed lane → one generic `lane_result`
- * artifact carrying the summary; a non-completed lane → slot failed. Keeps
- * convergence sensible without fabricating structured artifacts a kind never
- * declared.
+ * Explicit legacy helper retained for callers/tests that intentionally want a
+ * generic lane_result. The exhaustive LoopKind registry below never falls back
+ * to it: every shipped kind has a phase-aware reducer.
  */
 export const defaultReducer: ResultReducer = (input, attempt) => {
   const { lane, phase } = input;
@@ -124,12 +167,64 @@ export const defaultReducer: ResultReducer = (input, attempt) => {
   };
 };
 
-const RESULT_REDUCERS: Record<string, ResultReducer> = {
+function typedPhaseReducer(
+  kind: Exclude<LoopKind, 'review' | 'ideation'>,
+  artifactByPhase: Readonly<Record<string, string>>,
+): ResultReducer {
+  return (input, attempt) => {
+    const { lane, phase } = input;
+    if (lane.status !== 'completed') {
+      return { artifacts: [], slot_outcome: 'failed', failure_reason: `${kind} lane status is ${lane.status}, not completed` };
+    }
+    const expectedType = artifactByPhase[phase];
+    if (!expectedType) {
+      return { artifacts: [], slot_outcome: 'failed', failure_reason: `${kind} phase '${phase}' has no worker-result contract` };
+    }
+    if (lane.artifact_type !== expectedType) {
+      return {
+        artifacts: [],
+        slot_outcome: 'failed',
+        failure_reason: `${kind} phase '${phase}' expected artifact_type '${expectedType}', got '${lane.artifact_type}'`,
+      };
+    }
+    // Every worker artifact is explicitly attested. In particular a narrative
+    // summary can never masquerade as a gate-driving repro or verify report.
+    const body = (lane.body ?? lane.summary).trim();
+    if (!body) {
+      return { artifacts: [], slot_outcome: 'failed', failure_reason: `${kind} phase '${phase}' produced no artifact body` };
+    }
+    return {
+      artifacts: [{ phase, type: expectedType, body: capBody(body), produced_by: attempt.agent }],
+      slot_outcome: 'done',
+    };
+  };
+}
+
+export const implementationReducer = typedPhaseReducer('implementation', {
+  execute: 'execute_report',
+});
+
+export const researchReducer = typedPhaseReducer('research', {
+  investigate: 'finding',
+  synthesize: 'synthesis',
+});
+
+export const debugReducer = typedPhaseReducer('debug', {
+  reproduce: 'repro',
+  hypothesize: 'hypothesis',
+  isolate: 'isolation_report',
+  fix: 'verify_report',
+});
+
+export const RESULT_REDUCERS: Record<LoopKind, ResultReducer> = {
   review: reviewReducer,
   ideation: ideationReducer,
+  implementation: implementationReducer,
+  research: researchReducer,
+  debug: debugReducer,
 };
 
-/** The reducer for a loop kind — a specialized one when registered, else the default. */
-export function reducerForKind(kind: string): ResultReducer {
-  return RESULT_REDUCERS[kind] ?? defaultReducer;
+/** The reducer for a loop kind. Exhaustive by construction: no silent fallback. */
+export function reducerForKind(kind: LoopKind): ResultReducer {
+  return RESULT_REDUCERS[kind];
 }

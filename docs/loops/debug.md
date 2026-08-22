@@ -5,6 +5,10 @@
 > spawn authority belong to [`AttemptAuthority`](../concepts/attempt-authority.md);
 > nothing on this page overrides them.
 
+Worker results use `repro`, `hypothesis`, `isolation_report`, and
+`verify_report` respectively. The mutating `fix` phase remains claimed until
+`harvest --integrate`; the earlier read-only phases may converge on report.
+
 ## Purpose
 
 A `debug` loop drives a broken system back to green. The invariant it
@@ -82,7 +86,7 @@ Two phases carry gates:
 | `repro` | `reproduce` | inline ≤ 4 KB: the command / test / URL that fails, and the exit signature |
 | `hypothesis` | `hypothesize` | inline ≤ 4 KB |
 | `isolation_report` | `isolate` | inline ≤ 4 KB |
-| `verify_report` | `fix` | inline JSON: `{ command, exit_code, summary, ran_at }` |
+| `verify_report` | `fix` | inline JSON: `{ command, exit_code, passed, duration_ms?, stdout_tail?, stderr_tail? }` |
 | `file_diff` | any phase | ref-based body (`{ref, byte_count, sha256}`) |
 | `handoff` | `handoff` | `ref` to a `handoff` primitive |
 
@@ -127,6 +131,8 @@ investigation so the isolation and fix turns can edit freely.
 | Default protocol | [`src/core/loops/types.ts`](../../src/core/loops/types.ts) (`DEFAULT_PROTOCOLS.debug`) |
 | Iteration FSM (`command_green`) | [`src/core/loops/iteration-engine.ts`](../../src/core/loops/iteration-engine.ts) |
 | Gate evaluator | [`src/core/loops/verbs.ts`](../../src/core/loops/verbs.ts) (`evaluatePhaseAdvanceGate`) |
+| Attempt + execution policy | [`src/core/loops/attempt-authority.ts`](../../src/core/loops/attempt-authority.ts), [`src/core/loops/kind-policies.ts`](../../src/core/loops/kind-policies.ts) |
+| Result reducer | [`src/core/loops/result-reducers.ts`](../../src/core/loops/result-reducers.ts) |
 | Tests | [`tests/unit/loops-iteration-engine.test.ts`](../../tests/unit/loops-iteration-engine.test.ts), [`tests/unit/loops-phase-advance-gate.test.ts`](../../tests/unit/loops-phase-advance-gate.test.ts), [`tests/unit/loops-impl-protocol.test.ts`](../../tests/unit/loops-impl-protocol.test.ts) |
 
 ## Related

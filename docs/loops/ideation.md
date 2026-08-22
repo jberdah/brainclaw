@@ -5,6 +5,9 @@
 > spawn authority belong to [`AttemptAuthority`](../concepts/attempt-authority.md);
 > nothing on this page overrides them.
 
+The automated critic returns `artifact_type: "critique"` with a non-empty
+`body`. A narrative `summary` alone never creates a critique or opens the gate.
+
 ## Purpose
 
 An `ideation` loop stress-tests a proposal **before** it crystallises into a
@@ -141,7 +144,9 @@ at the proposal phase and callers can retry manually.
 | Iteration FSM | [`src/core/loops/iteration-engine.ts`](../../src/core/loops/iteration-engine.ts) |
 | Gate evaluator | [`src/core/loops/verbs.ts`](../../src/core/loops/verbs.ts) (`evaluatePhaseAdvanceGate`) |
 | Brief assembler | [`src/core/loops/brief-assembly.ts`](../../src/core/loops/brief-assembly.ts) |
-| Driver | [`src/commands/mcp.ts`](../../src/commands/mcp.ts) (`req.intent === 'ideate'`) |
+| Driver | [`src/commands/mcp-write-coordination.ts`](../../src/commands/mcp-write-coordination.ts) (`req.intent === 'ideate'`) |
+| Attempt + execution policy | [`src/core/loops/attempt-authority.ts`](../../src/core/loops/attempt-authority.ts), [`src/core/loops/kind-policies.ts`](../../src/core/loops/kind-policies.ts) |
+| Result reducer | [`src/core/loops/result-reducers.ts`](../../src/core/loops/result-reducers.ts) |
 | Tests | [`tests/unit/loops-iteration-engine.test.ts`](../../tests/unit/loops-iteration-engine.test.ts), [`tests/unit/loops-phase-advance-gate.test.ts`](../../tests/unit/loops-phase-advance-gate.test.ts), [`tests/unit/loops-brief-assembly.test.ts`](../../tests/unit/loops-brief-assembly.test.ts), [`tests/unit/ideation-loop-e2e.test.ts`](../../tests/unit/ideation-loop-e2e.test.ts) |
 
 ## Related

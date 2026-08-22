@@ -48,6 +48,11 @@ answers the question, not marker-file presence or wall-clock heuristics.
   `(loop_id, slot_id, iteration)` so a duplicate dispatch of the same slot
   in the same iteration hits `reservation_exists` and adopts the existing
   attempt instead of minting a second one.
+  `phase` is deliberately not part of the persisted hash. Within one iteration,
+  a driver therefore assigns distinct role slots to distinct worker phases; an
+  attempted phase reuse on the same slot fails the immutable-contract adoption
+  check instead of minting a second identity. Changing the hash is a separate
+  migration, not part of P0C.
 - **Physical run** — the concrete process that executed the attempt. Its
   `run_id` is derived deterministically from `turn_id` (`deriveChildIds`),
   so a crashed reserver can be repaired idempotently without minting a
@@ -133,6 +138,31 @@ for authority.
 
 ## Functional API
 
+The kind-neutral facade lives in
+[`src/core/loops/attempt-authority.ts`](../../src/core/loops/attempt-authority.ts).
+It exposes five operations and persists only the existing reservation record:
+
+- `prepareAttempt` — reserve-or-adopt an identical immutable contract, commit
+  it, then arm or adopt one launch generation.
+- `projectAndCross` — run deterministic projections and cross the launch fence;
+  only `{ kind: 'won' }` authorises a spawn.
+- `inspectAttempt` — read the reservation plus its derived status and nonce.
+- `matchEvidence` — require the full `(turn_id, run_id, nonce)` match.
+- `revokeAttempt` / `abortAttempt` — fence an un-crossed generation or abort a
+  still-prepared reservation.
+
+[`src/core/loops/turn-execution.ts`](../../src/core/loops/turn-execution.ts)
+composes this facade with the common Assignment, AgentRun, claim and slot
+projections. [`src/core/loops/kind-policies.ts`](../../src/core/loops/kind-policies.ts)
+declares which phases are `worker`, `engine`, or `manual`, their completion mode
+and expected artifacts. Each worker phase also declares its earliest safe
+finalization path: `report` for read-only results, or `integrate` when the
+worktree must be integrated before Assignment/AgentRun settlement and claim
+release. These policies do not contain phase graphs, gates or stop conditions:
+`DEFAULT_PROTOCOLS` and the Loop Engine remain authoritative for those decisions.
+
+The lower-level primitives remain in `attempt-reservation.ts`:
+
 The public surface is a small set of functions in
 `src/core/loops/attempt-reservation.ts`. They are pure with respect to
 their inputs plus the reservation file for the given `turn_id`, and every
@@ -208,18 +238,20 @@ mutation goes through `withReservationLock` for cross-process exclusion.
   a live conflicting Assignment. A retained review/fix-cycle claim may move
   only after its previous Assignment is terminal.
 - Concurrent slots receive distinct claims because the Claim projection has a
-  single `assignment_id` pointer. Their scopes keep the parseable
-  `review-loop:<loop_id>` prefix and add the slot identity.
+  single `assignment_id` pointer. Each scope identifies both loop and slot;
+  protocol-specific prefixes remain a routing convention, not authority.
 - `bindTurnProjection` performs the slot write under the loop lock. The same
   `(turn_id, assignment_id, claim_id)` tuple is a no-op and does not append a
   second `turn_assigned` event.
 
 ## Ordered dispatch
 
-The authority contract has **one normative dispatch shape**. The current
-turn-owned runtime adapter uses this chronology; other protocol drivers share
-the same Loop and reservation primitives but do not yet all expose an
-equivalent automatic dispatch path:
+The authority contract has **one normative dispatch shape**. Every worker phase
+of the five LoopKinds can use `prepareTurnExecution`; engine/manual phases are
+refused before reservation. Review and multi-agent ideation coordinator
+shortcuts call the common path today. Implementation, research and debug expose
+the same contract to their loop drivers even where the operator still drives
+the phase explicitly rather than through a kind-specific coordinator shortcut:
 
 1. **`deriveTurnId`** — mint the deterministic turn id from
    `(loop_id, slot_id, iteration)`. A concurrent duplicate dispatch of
@@ -246,7 +278,11 @@ equivalent automatic dispatch path:
 8. **Harvest / reconcile** — `findReservationByAssignmentId` /
    `findReservationByRunId` map the incoming lane onto its reservation.
    `evidenceMatchesAttempt` gates state mutation on a full triple match
-   with the current generation. Stale evidence is rejected silently.
+   with the current generation. Typed `artifact_type` evidence is required;
+   narrative summaries never become gate-driving artifacts. Read-only phases
+   may settle during report harvest, while mutating phases remain claimed until
+   `harvest --integrate` has integrated their worktree. Stale evidence is
+   withheld from convergence and surfaced through harvest/reconcile diagnostics.
 9. **Loop advance / close / reroute** — `revokeLaunchGrant` fences the
    old generation. Any future generation must arm at a strictly higher
    epoch.
@@ -389,12 +425,16 @@ here descriptively; the characterization suite locks them empirically.
 - Loop protocols — [`../loops/`](../loops/)
 - Dispatch lifecycle — [`dispatch-lifecycle.md`](./dispatch-lifecycle.md)
 - Reference implementation —
+  [`src/core/loops/attempt-authority.ts`](../../src/core/loops/attempt-authority.ts),
+  [`src/core/loops/turn-execution.ts`](../../src/core/loops/turn-execution.ts),
+  [`src/core/loops/kind-policies.ts`](../../src/core/loops/kind-policies.ts),
   [`src/core/loops/attempt-reservation.ts`](../../src/core/loops/attempt-reservation.ts),
   [`src/core/loops/reconcile-turn.ts`](../../src/core/loops/reconcile-turn.ts)
 - Characterization tests —
   [`tests/unit/loops-attempt-reservation.test.ts`](../../tests/unit/loops-attempt-reservation.test.ts),
   [`tests/unit/loops-launch-grant.test.ts`](../../tests/unit/loops-launch-grant.test.ts),
   [`tests/unit/loops-conformance-harness.test.ts`](../../tests/unit/loops-conformance-harness.test.ts),
-  [`tests/unit/loops-p0b-projections-before-crossing.test.ts`](../../tests/unit/loops-p0b-projections-before-crossing.test.ts)
+  [`tests/unit/loops-p0b-projections-before-crossing.test.ts`](../../tests/unit/loops-p0b-projections-before-crossing.test.ts),
+  [`tests/unit/loops-p0c-conformance.test.ts`](../../tests/unit/loops-p0c-conformance.test.ts)
 - pln#676 — this doc's rollout plan
 - dec#171 — canonical decision behind the model

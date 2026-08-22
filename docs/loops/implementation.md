@@ -5,6 +5,10 @@
 > spawn authority belong to [`AttemptAuthority`](../concepts/attempt-authority.md);
 > nothing on this page overrides them.
 
+The `execute` worker returns `artifact_type: "execute_report"`. Because this
+phase edits its worktree, report-only harvest does not settle the turn or
+release its claim; convergence happens after `harvest --integrate`.
+
 ## Purpose
 
 An `implementation` loop drives a bound plan+sequence to a green
@@ -77,7 +81,7 @@ the iteration engine reads the reports produced against this gate.
 |---|---|---|
 | `sequence_ref` | `bind` | inline (short pointer to the bound sequence) |
 | `execute_report` | `execute` | inline text ≤ 4 KB, or ref-based when large |
-| `verify_report` | `verify` | inline JSON: `{ command, exit_code, summary, ran_at }` |
+| `verify_report` | `verify` | inline JSON: `{ command, exit_code, passed, duration_ms?, stdout_tail?, stderr_tail? }` |
 | `file_diff` | any phase | ref-based body (`{ref, byte_count, sha256}`) |
 | `handoff` | `handoff_ready` | `ref` to a `handoff` primitive |
 
@@ -126,7 +130,9 @@ adopts the existing attempt.
 | Default protocol | [`src/core/loops/types.ts`](../../src/core/loops/types.ts) (`DEFAULT_PROTOCOLS.implementation`) |
 | Bind verb | [`src/core/loops/verbs.ts`](../../src/core/loops/verbs.ts) (`bind`) |
 | Iteration FSM (command_green) | [`src/core/loops/iteration-engine.ts`](../../src/core/loops/iteration-engine.ts) |
-| Turn dispatch | [`src/core/review-loop-turn-dispatch.ts`](../../src/core/review-loop-turn-dispatch.ts) (shared plumbing) |
+| Attempt authority | [`src/core/loops/attempt-authority.ts`](../../src/core/loops/attempt-authority.ts) |
+| Turn execution policy | [`src/core/loops/kind-policies.ts`](../../src/core/loops/kind-policies.ts), [`src/core/loops/turn-execution.ts`](../../src/core/loops/turn-execution.ts) |
+| Result reducer | [`src/core/loops/result-reducers.ts`](../../src/core/loops/result-reducers.ts) |
 | Tests | [`tests/unit/loops-impl-bind.test.ts`](../../tests/unit/loops-impl-bind.test.ts), [`tests/unit/loops-impl-protocol.test.ts`](../../tests/unit/loops-impl-protocol.test.ts), [`tests/unit/loops-gate-content-integrity.test.ts`](../../tests/unit/loops-gate-content-integrity.test.ts) |
 
 ## Related

@@ -19,6 +19,7 @@ import {
   createCoordinatorClaim,
   linkClaimToAssignment,
   listClaims,
+  releaseClaimIfActive,
   saveClaim,
 } from '../core/claims.js';
 import {
@@ -54,6 +55,8 @@ import {
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import { prepareTurnOwnedReviewDispatch, turnOwnedReviewEnabled } from '../core/review-loop-turn-dispatch.js';
+import { prepareTurnExecution } from '../core/loops/turn-execution.js';
+import { removeWorktree } from '../core/worktree.js';
 import type { TurnEcho } from '../core/execution-adapters.js';
 import {
   createAssignment,
@@ -564,16 +567,16 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       // emit three identical context-free warnings (pln#626 Phase 1 R5).
       if (execResult.error) opts.warnings.push(`${entry.agent}: ${execResult.error}`);
       if (turnEcho) {
-        // pln#630 risk #1 — a turn-owned reviewer's run was ALREADY created (`created`) by
-        // prepareTurnOwnedReviewDispatch. Do NOT mint a second run here (double-mint). Transition
-        // the deterministic run → running on a real spawn (mirrors dispatchReviewLoopTurn); leave
+          // A turn-owned loop run was ALREADY created (`created`) before crossing.
+          // Do NOT mint a second run here (double-mint). Transition the
+          // deterministic run → running on a real spawn; leave
         // it `created` otherwise so the no-sentinel legacy fallback (turnOwnedLaneEvidence) + the
         // pre-run lease reconciler govern it. Non-turn-owned entries take the unchanged else-branch.
         if (execResult.execution_status === 'delivered_and_started') {
           try {
             transitionAgentRun(turnEcho.run_id, 'running', {
               actor: opts.senderAgent, actor_id: opts.senderAgentId, pid: execResult.pid,
-              status_reason: 'turn-owned reviewer spawned by coordinator',
+              status_reason: 'turn-owned loop worker spawned by coordinator',
             }, opts.cwd);
           } catch { /* best-effort — the reconciler converges if this races */ }
         }
@@ -1614,7 +1617,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     // pln#513 step 2 — labelled block (ideate:) so the bootstrap
     // join-or-lock path can break out early after assigning result.
     const loopsModuleRef = await import('../core/loops/index.js');
-    const { openLoop, add_artifact, advance, turn, getLoop, buildIdeationBrief } = loopsModuleRef;
+    const { openLoop, add_artifact, advance, getLoop, buildIdeationBrief } = loopsModuleRef;
     const presetSelected = req.preset
       ? (await import('../core/loops/presets/index.js')).PRESETS[req.preset]
       : undefined;
@@ -1905,48 +1908,60 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               id: claimResult.claimId,
             });
 
-            let criticAssignmentId: string | undefined;
-            try {
-              const preId = generateAssignmentId(dispatchCwd);
-              const assignment = createAssignment({
-                id: preId.id,
-                short_label: preId.short_label,
-                claim_id: claimResult.claimId,
-                agent: slot.agent,
-                dispatcher_agent: senderAgent,
-                dispatcher_session_id: connectionSessionId,
-                scope: criticScope,
-                description: criticDescription,
-                tags: ['coordinate', 'ideate', 'loop'],
-              }, dispatchCwd);
-              criticAssignmentId = assignment.id;
-              artifacts.push({ type: 'assignment', id: assignment.id });
-            } catch (asgErr) {
-              warnings.push(
-                `ideate assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
-              );
+            // P0C / dec#171 — ideation crosses the same attempt fence as every
+            // worker-backed LoopKind phase. Assignment, AgentRun, claim binding
+            // and slot binding are all durable before the irreversible crossing.
+            const attempt = prepareTurnExecution({
+              kind: 'ideation',
+              loop_id: loopId,
+              slot_id: slot.slot_id,
+              phase: advancedLoop.current_phase,
+              agent: slot.agent,
+              agent_id: slot.agent_id,
+              claim_id: claimResult.claimId,
+              dispatcher_agent: senderAgent,
+              dispatcher_agent_id: senderAgentId,
+              dispatcher_session_id: connectionSessionId,
+              scope: criticScope,
+              description: criticDescription,
+              task: briefResult.text,
+              cwd: dispatchCwd,
+              worktree_path: claimResult.worktreePath,
+              assignment_tags: ['coordinate', 'ideate', 'loop', 'turn-owned'],
+              run_tags: ['turn-owned', 'ideate', 'loop'],
+            });
+            if (attempt.kind !== 'won') {
+              warnings.push(`ideate attempt denied for slot ${slot.slot_id}: ${attempt.reason}; no worker spawned`);
+              // A pre-identity refusal or an authority owned by another claim
+              // cannot use this freshly created lane claim. Release only claims
+              // created by THIS call; a reused claim may belong to a concurrent
+              // winner and must remain intact. Repairable/same-claim authority is
+              // also retained so projections can be replayed safely.
+              if (attempt.claim_disposition === 'release' && !claimResult.reusedExisting) {
+                try {
+                  const released = releaseClaimIfActive(claimResult.claimId, dispatchCwd);
+                  if (released.released) {
+                    side_effects.push({ action: 'release', entity: 'claim', id: claimResult.claimId });
+                    if (claimResult.worktreePath) {
+                      try { removeWorktree(dispatchCwd, claimResult.worktreePath, { force: true }); }
+                      catch (cleanupError) {
+                        warnings.push(`ideate denied-claim worktree cleanup failed for ${claimResult.claimId}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+                      }
+                    }
+                  }
+                } catch (cleanupError) {
+                  warnings.push(`ideate denied-claim cleanup failed for ${claimResult.claimId}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+                }
+              }
+              continue;
             }
-
-            // pln#629 — bind the slot to its claim/assignment NOW that both
-            // exist (mirrors the review path, pln#628 BLOCKING 2). The turn()
-            // used to fire BEFORE the assignment was created, leaving
-            // slot.assignment_id undefined: bclaw_loop get's reconcile then
-            // skipped the critic slot (loops-handlers.ts `if (!assignmentId)
-            // continue`) and dispatch_status(lop_) resolved no assignment, so
-            // ideate loops could never be reconciled (trp_dfe0b941 /
-            // trp_2187b340 / trp_1de94516). Runs even if assignment creation
-            // failed (undefined id → legacy agent-match fallback, as review).
-            turn(
-              {
-                id: loopId,
-                slot_id: slot.slot_id,
-                actor: creatorActor,
-                input: briefResult.text,
-                assignment_id: criticAssignmentId,
-                claim_id: claimResult.claimId,
-              },
-              dispatchCwd,
-            );
+            const criticAssignmentId = attempt.assignment_id;
+            const criticTurnEcho: TurnEcho = {
+              turn_id: attempt.turn_id,
+              run_id: attempt.run_id,
+              nonce: attempt.nonce,
+            };
+            artifacts.push({ type: 'assignment', id: criticAssignmentId });
 
             // pln#626 Phase 2 — the critique-only contract must reach the
             // DELIVERED brief, not just the claim record: buildCoordinateBrief
@@ -1955,7 +1970,8 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             // critic without brainclaw MCP) ahead of the ideation brief body.
             const criticTaskText =
               `CRITIQUE-ONLY TASK — do NOT edit code or commit. Read the proposal below and reply with your critique: `
-              + `call bclaw_loop(intent='complete_turn') if you have brainclaw MCP, otherwise write your critique to LANE-RESULT.json in your worktree root (the coordinator harvests it).\n\n`
+              + `call bclaw_loop(intent='complete_turn') if you have brainclaw MCP, otherwise write LANE-RESULT.json in your worktree root with `
+              + `"status":"completed", "artifact_type":"critique", and the full critique in "body" (the coordinator harvests it).\n\n`
               + briefResult.text;
             const criticBrief = buildCoordinateBrief(slot.agent, criticTaskText, {
               claimId: claimResult.claimId,
@@ -2010,6 +2026,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               entry: queued.entry,
               invoke: queued.invoke,
               worktreePath: claimResult.worktreePath,
+              turnEcho: criticTurnEcho,
             });
             dispatchedCritics += 1;
           } catch (criticErr) {

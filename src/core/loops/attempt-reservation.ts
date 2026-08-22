@@ -23,10 +23,10 @@ import { acquireLock } from './lock.js';
  * attempt is dispatchable ONLY when `committed`. Absent-commit therefore means
  * "never dispatch", which is what closes the double-spawn / phantom-launch class.
  *
- * SCOPE (review-only slice): this module owns the reservation record + its
- * decision CAS + the dispatch guard. Wiring the real assignment/run/slot
- * projections onto a committed reservation is a later PR; the child ids are
- * derived deterministically here so that repair is idempotent when it lands.
+ * SCOPE: this module owns the kind-neutral reservation record + its decision
+ * CAS + launch guard. `attempt-authority.ts` is the functional facade and
+ * `turn-execution.ts` materializes Assignment/Run/claim/slot projections before
+ * crossing. The child ids stay deterministic so repair is idempotent.
  */
 
 export type ReservationDecision = 'prepared' | 'committed' | 'aborted';
