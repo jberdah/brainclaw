@@ -409,15 +409,27 @@ bclaw_coordinate({
   targetAgents: ['codex'],
 })
 
+// Open a direct implementation loop. The caller owns subsequent bind/turn
+// actions, which is why allow_orphan is explicit.
+bclaw_loop({
+  intent: 'open',
+  kind: 'implementation',
+  title: 'Implement the extracted dispatcher',
+  allow_orphan: true,
+  linked: { plan_ids: ['pln_abc'], sequence_ids: ['seq_abc'] },
+  verify: { command: ['npm', 'test'] },
+})
+
 // Correct a handoff instead of mutating it
 bclaw_correct_handoff({ originalId: 'hnd_xyz', reason: 'wrong contract', text: '...' })
 ```
 
-For the full ideation_loop design (phases, context_filter, iteration
-block, advance_gate, brief assembly, single vs multi-agent UX), see
-[docs/concepts/ideation-loop.md](../concepts/ideation-loop.md). For
-the underlying loop engine, see
-[docs/concepts/loop-engine.md](../concepts/loop-engine.md).
+For the full ideation loop design (phases, context filters, iteration block,
+advance gate, brief assembly, single vs multi-agent UX), see
+[docs/concepts/ideation-loop.md](../concepts/ideation-loop.md). The underlying
+engine supports the five built-in `review`, `ideation`, `implementation`,
+`research`, and `debug` workflows, plus cross-cutting `request_input` /
+`provide_input`; see [docs/concepts/loop-engine.md](../concepts/loop-engine.md).
 
 #### Deprecation status
 

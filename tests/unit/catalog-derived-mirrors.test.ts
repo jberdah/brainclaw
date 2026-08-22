@@ -27,6 +27,7 @@ import {
   REMOVED_IN_V1_TOOLS,
 } from '../../src/commands/mcp.js';
 import { getCapabilityProfile, DEFAULT_CAPABILITY_PROFILES } from '../../src/core/agent-capability.js';
+import { MCP_HERMES_WORKFLOW_TOOL_NAMES } from '../../src/core/protocol-tool-policy.js';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-mirrors-'));
@@ -105,7 +106,7 @@ describe('catalog-derived mirrors — drift detection', () => {
 
   it('MCP_CANONICAL_GRAMMAR_TOOL_NAMES excludes coordination facades', () => {
     // Coordination tools (dispatch, coordinate, loop) ARE facade tier but
-    // shouldn't appear in narrow-surface configs — Hermes etc. don't route work.
+    // intentionally stay outside the minimal canonical grammar.
     for (const name of ['bclaw_dispatch', 'bclaw_coordinate', 'bclaw_loop', 'bclaw_dispatch_status', 'bclaw_setup']) {
       assert.ok(
         !MCP_CANONICAL_GRAMMAR_TOOL_NAMES.includes(name),
@@ -130,7 +131,7 @@ describe('catalog-derived mirrors — drift detection', () => {
     assert.deepEqual(MCP_CANONICAL_GRAMMAR_TOOL_NAMES.slice().sort(), expected.slice().sort());
   });
 
-  it('Hermes MCP config emits exactly the canonical-grammar surface', () => {
+  it('Hermes MCP config emits its managed workflow surface', () => {
     const homeDir = tmpDir();
     try {
       const result = ensureHermesMcpConfig(homeDir);
@@ -142,7 +143,7 @@ describe('catalog-derived mirrors — drift detection', () => {
       };
       const include = parsed.mcp_servers?.brainclaw?.tools?.include;
       assert.ok(Array.isArray(include), 'Hermes mcp_servers.brainclaw.tools.include should be an array');
-      const expected = MCP_CANONICAL_GRAMMAR_TOOL_NAMES.filter((n) => !REMOVED_IN_V1_TOOLS.has(n));
+      const expected = MCP_HERMES_WORKFLOW_TOOL_NAMES.filter((n) => !REMOVED_IN_V1_TOOLS.has(n));
       assert.deepEqual(include?.slice().sort(), expected.slice().sort());
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });

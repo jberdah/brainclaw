@@ -92,9 +92,11 @@ surface stays small; richer ergonomic helpers are facades on top.
 The reference implementation surfaces these as MCP tools named
 `bclaw_work`, `bclaw_context`, `bclaw_find`, `bclaw_get`, `bclaw_create`,
 `bclaw_update`, `bclaw_transition`. The same names appear in
-`src/commands/mcp.ts:MCP_CANONICAL_GRAMMAR_TOOL_NAMES` and are derived from
-the tool catalog, not hand-curated. Hermes and other narrow-surface agents
-include exactly this set in their MCP `tools.include`.
+`src/core/protocol-tool-policy.ts:MCP_CANONICAL_GRAMMAR_TOOL_NAMES`; the
+catalog derivation is checked against that static core policy in tests. This is
+the minimum grammar, not a universal agent allowlist. Hermes receives the
+broader `MCP_HERMES_WORKFLOW_TOOL_NAMES` surface because its generated
+instructions also require lifecycle, inbox, coordination, and Code Map tools.
 
 ### 4.1 Coordination verbs (experimental — protocol v0.2 candidates)
 
@@ -197,7 +199,7 @@ the wire format for cross-project signaling.
 | Protocol concept              | Reference implementation in brainclaw                                 |
 |-------------------------------|-----------------------------------------------------------------------|
 | Entity schemas                | [`src/core/schema.ts`](../src/core/schema.ts)                          |
-| Canonical grammar tool set    | [`src/commands/mcp.ts`](../src/commands/mcp.ts) — `MCP_CANONICAL_GRAMMAR_TOOL_NAMES` |
+| Canonical grammar tool set    | [`src/core/protocol-tool-policy.ts`](../src/core/protocol-tool-policy.ts) — `MCP_CANONICAL_GRAMMAR_TOOL_NAMES` |
 | MCP tool catalog              | [`src/commands/mcp.ts`](../src/commands/mcp.ts) — `ALL_TOOLS`          |
 | Per-agent writer wiring       | [`src/core/agent-files.ts`](../src/core/agent-files.ts) — `AGENT_WIRING_REGISTRY` |
 | Capability profiles           | [`src/core/agent-capability.ts`](../src/core/agent-capability.ts)       |

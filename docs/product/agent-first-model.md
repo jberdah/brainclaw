@@ -82,42 +82,41 @@ The Loop engine (pln#394) was designed as a generic control plane —
 one engine, many protocols. Review & Fix Loop (pln#395) was the first
 shipped protocol. The strategic reflection clarifies that:
 
-- We do **not** need to code eight protocols. We need to wire four
-  polished entry points for the high-leverage kinds, and document
-  patterns for the rest as composition variants.
+- We do **not** need to code eight protocols. The five shipped defaults
+  cover the high-leverage kinds; future work should polish their entry
+  points and document further patterns as composition variants.
 - The engine already supports everything required: `open`, `turn`,
   `advance`, `complete_turn`, `add_artifact`, `pause`, `resume`,
   `close`, with per-phase `advance_when`, composite `StopCondition`,
   idempotency, and CAS.
 
-### Ranked protocols to wire next
+### Supported protocol families
 
-1. **Ideation Loop** — **MVP shipped in v1.5.0** (pln#492). The shipped
-   shape is single-champion-plus-memory rather than the four-role
-   framing originally drafted: empirical work in May 2026
-   (`feedback_ideation_loop_single_agent_method`) showed that one
-   model produces useful adversarial pressure when the critic phase's
-   `context_filter` makes it confront only adversarial memory (traps,
-   feedback, runtime_notes). Multi-agent slots are still supported as
-   an opt-in for richer diversity. See [docs/concepts/ideation-loop.md](../concepts/ideation-loop.md).
-   Reframer phase (pln#493) is the next layer — covers the
-   novelty/simplicity/external-pattern blind spot of memory-driven
-   critique.
-2. **Debug & Root-Cause Loop**. Five phases: symptom → hypothesis →
-   test → fix → verify. Targets the #1 pain point of single-agent
-   debugging — the lack of structure. High daily impact.
-3. **Research & Synthesis Loop**. Researcher → analyzer → synthesizer
-   → validator. Replaces "the human reads twenty pages" with a
-   condensed summary of the same sources. Novel utility vs the other
-   protocols.
-4. **Planning & Breakdown Loop**. Goal → decomposer → estimator →
-   validator → refiner. Compounds with brainclaw's existing Plans and
-   Sequences — makes plan creation less naive.
+The runtime ships **five default protocols**, not just a review loop:
+
+| Protocol | What it structures | Public entry point |
+|---|---|---|
+| `review` | change summary → findings → response → verdict | `bclaw_coordinate(intent="review", open_loop=true)` or `bclaw_dispatch(intent="review", openLoop=true)` |
+| `ideation` | proposal → adversarial critique ↔ revision → synthesis | `bclaw_coordinate(intent="ideate")`, with the optional `bootstrap` preset |
+| `implementation` | bind a plan/sequence → execute ↔ verify → handoff | direct `bclaw_loop(intent="open", kind="implementation", allow_orphan=true)`, then `bind` |
+| `research` | investigate ↔ synthesize → conclude | direct `bclaw_loop(intent="open", kind="research", allow_orphan=true)` |
+| `debug` | reproduce → hypothesize ↔ isolate ↔ fix → handoff | direct `bclaw_loop(intent="open", kind="debug", allow_orphan=true)` |
+
+The direct entry point requires `allow_orphan=true` because the caller is
+responsible for driving or dispatching the loop. It does not mean the loop is
+unsupported: `bclaw_loop` publicly exposes `open`, `turn`, `complete_turn`,
+`advance`, `add_artifact`, `pause`, `resume`, `close`, and the
+implementation-specific `bind` and `verify` actions.
+
+**Clarification is cross-cutting.** Any protocol may use `request_input` and
+`provide_input` to pause for a bounded, evidence-backed operator decision.
+Treating it as a shared primitive avoids inventing a review-shaped loop for a
+simple missing decision.
 
 ### Variants, not new protocols
 
-The following items from the brainstorm are compositions of the four
-above and do not require separate engine work:
+The following items are compositions of the shipped protocols and do not
+require separate engine work:
 
 - **Reflection / Self-Critique** = ideation loop with `mode:
   'symmetric'` and all slots assigned to the same agent. The engine
@@ -125,12 +124,12 @@ above and do not require separate engine work:
 - **Validation & Approval Multi-Audience** = review loop with N
   reviewer slots (one per audience) plus a consolidator slot. Purely
   a slot-configuration pattern.
-- **Optimization / Refactoring** = implementation loop framed around
-  a before/after artifact pair. A convention, not a new protocol.
+- **Optimization / Refactoring** = implementation loop framed around a
+  before/after artifact pair. A convention, not a new protocol.
 
 ### What "wiring" means concretely (per protocol)
 
-For each of the four priority protocols:
+For a new protocol or a material protocol extension:
 
 - Polished `DEFAULT_PROTOCOLS` entry (phases, stop_condition, default
   roles) in `src/core/loops/types.ts`.
@@ -165,8 +164,9 @@ sections toward visible-to-human items.
 
 ## 5. Practical implications
 
-- Next implementation move: reframer phase (pln#493) on top of the
-  shipped ideation_loop, then the Debug & Root-Cause Loop.
+- Next implementation move: a reframer phase (pln#493) on top of the
+  shipped ideation loop, then improved ergonomics and examples for the
+  already-shipped debug and research protocols.
 - Parallel track: the cockpit needs dedicated planning once the engine
   emits enough signals (event streaming, reputation exposure, audit
   narrative generation, cost attribution).

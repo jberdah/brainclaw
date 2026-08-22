@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
-import { MCP_HEADLESS_AUTO_TOOL_NAMES, MCP_CANONICAL_GRAMMAR_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from './protocol-tool-policy.js';
+import { MCP_HEADLESS_AUTO_TOOL_NAMES, MCP_CANONICAL_GRAMMAR_TOOL_NAMES, MCP_HERMES_WORKFLOW_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from './protocol-tool-policy.js';
 import { renderToml, tomlArrayTableHasEntry } from './toml-writer.js';
 import { PROTOCOL_SKILLS, renderProtocolSkill } from './protocol-skills.js';
 import { getInstalledBrainclawVersion } from './brainclaw-version.js';
@@ -479,7 +479,6 @@ export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   KILOCODE_MCP_RELATIVE_PATH,
   KILOCODE_CONFIG_RELATIVE_PATH,
   MISTRAL_VIBE_CONFIG_RELATIVE_PATH,
-  HERMES_CONFIG_RELATIVE_PATH,
   CONTINUE_CONFIG_RELATIVE_PATH,
   OPENCODE_CONFIG_RELATIVE_PATH,
   WINDSURF_MCP_RELATIVE_PATH,
@@ -1767,25 +1766,24 @@ export function ensureMistralVibeMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
-// Hermes' MCP `tools.include` array — narrow canonical-grammar surface. Derived
-// from MCP_CANONICAL_GRAMMAR_TOOL_NAMES (which is itself ALL_TOOLS-derived) so
-// new facade tools or canonical grammar verbs propagate without a manual edit
-// here (pln#546 step 2). REMOVED_IN_V1_TOOLS are stripped so deprecated names
-// don't reappear in user-facing configs.
-//
-// LAZY (pln#564 coordinator fix): computed on first call, NOT at module init.
-// agent-files.ts ↔ commands/mcp.ts form an import cycle; reading the imported
-// MCP_CANONICAL_GRAMMAR_TOOL_NAMES at module-eval time threw a TDZ
-// ("Cannot access 'MCP_CANONICAL_GRAMMAR_TOOL_NAMES' before initialization")
-// when agent-files loaded mid-mcp-init — which broke the MCP server. tsc does
-// not catch this (runtime-only). Deferring the read to call time fixes it.
-let hermesBrainclawMcpToolsCache: string[] | undefined;
 function getHermesBrainclawMcpTools(): string[] {
-  if (!hermesBrainclawMcpToolsCache) {
-    hermesBrainclawMcpToolsCache = MCP_CANONICAL_GRAMMAR_TOOL_NAMES
-      .filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
-  }
-  return hermesBrainclawMcpToolsCache;
+  return MCP_HERMES_WORKFLOW_TOOL_NAMES
+    .filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
+}
+
+function hasExactMcpToolList(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((tool, index) => tool === expected[index]);
+}
+
+function isLegacyHermesBrainclawMcpTools(value: unknown): boolean {
+  // The original Hermes writer emitted precisely the canonical seven-tool
+  // list. Upgrade that known managed value, but preserve every other list as
+  // an explicit user customization.
+  const legacyTools = MCP_CANONICAL_GRAMMAR_TOOL_NAMES
+    .filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
+  return hasExactMcpToolList(value, legacyTools);
 }
 
 export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath?: string): AutoConfigWriteResult | undefined {
@@ -1832,6 +1830,8 @@ export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath
     }
   }
   const mcpCmd = getBrainclawMcpCommand();
+  const existingInclude = currentTools.include;
+  const managedInclude = getHermesBrainclawMcpTools();
 
   const desiredEntry = {
     ...current,
@@ -1843,7 +1843,9 @@ export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath
     },
     tools: {
       ...currentTools,
-      include: Array.isArray(currentTools.include) ? currentTools.include : getHermesBrainclawMcpTools(),
+      include: Array.isArray(existingInclude) && !isLegacyHermesBrainclawMcpTools(existingInclude)
+        ? existingInclude
+        : managedInclude,
       prompts: typeof currentTools.prompts === 'boolean' ? currentTools.prompts : false,
       resources: typeof currentTools.resources === 'boolean' ? currentTools.resources : false,
     },

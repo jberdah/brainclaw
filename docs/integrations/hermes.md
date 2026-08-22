@@ -24,8 +24,9 @@ The machine setup writes `~/.hermes/config.yaml`. The project enable step writes
 the universal Brainclaw skill into `.agents/skills/brainclaw/SKILL.md` and
 adds the project `.agents/skills` directory to Hermes `skills.external_dirs`.
 
-The generated MCP entry is intentionally filtered to the facade and canonical
-grammar tools:
+The generated MCP entry is intentionally filtered to the workflow tools Hermes
+is instructed to use. This controls tool discovery only; it does not grant
+headless approval for writes.
 
 ```yaml
 skills:
@@ -40,16 +41,54 @@ mcp_servers:
       BRAINCLAW_AGENT: hermes
     tools:
       include:
-        - bclaw_work
         - bclaw_context
+        - bclaw_work
         - bclaw_find
         - bclaw_get
         - bclaw_create
         - bclaw_update
+        - bclaw_remove
         - bclaw_transition
+        - bclaw_move
+        - bclaw_session_start
+        - bclaw_session_end
+        - bclaw_claim
+        - bclaw_release_claim
+        - bclaw_add_step
+        - bclaw_complete_step
+        - bclaw_update_step
+        - bclaw_delete_step
+        - bclaw_list_sequences
+        - bclaw_create_sequence
+        - bclaw_update_sequence
+        - bclaw_delete_sequence
+        - bclaw_read_inbox
+        - bclaw_ack_message
+        - bclaw_send_message
+        - bclaw_correct_handoff
+        - bclaw_write_note
+        - bclaw_quick_capture
+        - bclaw_search
+        - bclaw_setup
+        - bclaw_bootstrap
+        - bclaw_switch
+        - bclaw_release_notes
+        - bclaw_coordinate
+        - bclaw_dispatch
+        - bclaw_loop
+        - bclaw_dispatch_status
+        - bclaw_assignment_update
+        - bclaw_code_find
+        - bclaw_code_brief
+        - bclaw_code_status
+        - bclaw_code_refresh
       prompts: false
       resources: false
 ```
+
+When Brainclaw revisits an existing config, it upgrades the exact historical
+seven-tool managed list. Any other `tools.include` array is treated as a user
+customization and is preserved unchanged.
 
 ## Memory Boundary
 
