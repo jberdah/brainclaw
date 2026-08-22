@@ -1,15 +1,35 @@
 # Loop engine
 
-brainclaw coordinates many agents against shared state.
-The Loop engine turns repetitive multi-turn workflows
-— review, ideation, implementation, research, and debugging —
-into **first-class, persistable, automatable objects**.
+brainclaw coordinates many agents against shared state. The Loop engine
+turns repetitive multi-turn workflows — review, ideation, implementation,
+research, and debug — into **first-class, persistable, automatable objects**
+sharing one common runtime.
 
 Status: **shipped**. `bclaw_loop` exposes the persistent engine and its five
 built-in protocols; `bclaw_coordinate` and `bclaw_dispatch` add ergonomic
 shortcuts for ideation and review. This document retains the RFC-level
 concurrency contract and implementation history where it explains an
 invariant, but its operational sections describe the surface available today.
+
+**How this doc is organised.** It starts with the shared engine — authority,
+phases, artifacts, lifecycle verbs, gates, recovery, observability — and
+then points at five per-protocol guides. Each protocol has its own page in
+[`docs/loops/`](../loops/); this page is not a review guide. The five
+protocols are equal citizens of the engine, and this is not a review feature
+with a few extensions.
+
+- [Review](../loops/review.md) — validate a change against a reviewer.
+- [Ideation](../loops/ideation.md) — pressure-test a proposal against
+  project memory.
+- [Implementation](../loops/implementation.md) — drive a plan+sequence to a
+  green verify.
+- [Research](../loops/research.md) — converge open-ended investigation to
+  a synthesis.
+- [Debug](../loops/debug.md) — drive a broken system back to green.
+
+Identity, dispatch decisions and spawn authority live in a separate façade
+over the reservation core — see
+[Attempt authority](./attempt-authority.md).
 
 ## Why
 
@@ -37,6 +57,22 @@ A Loop is a **persistent thread of structured work** with:
 
 A Loop stores *references* to existing objects — it never duplicates them.
 Claims, handoffs, and candidates remain the source of truth for their own data.
+
+## Attempt authority
+
+Every dispatched turn crosses several boundaries — the loop mints identity,
+an assignment must be persisted, a run must be launched, evidence must
+eventually be accepted. `AttemptAuthority` is the single writer for that
+turn's identity and commit-decision fields; the Loop engine never
+double-writes them. It is a façade over the existing `TurnReservation` core
+in [`src/core/loops/attempt-reservation.ts`](../../src/core/loops/attempt-reservation.ts),
+not a new subsystem or a new journal. Every spawn is gated on the same
+atomic CAS: `reserve → commit → arm → consume → wonTransition === true`.
+
+The concurrency and recovery contract lives in the dedicated document —
+see [Attempt authority](./attempt-authority.md) for the full model,
+identity matrix, ordered dispatch and invariants I1–I18. This page assumes
+that contract without restating it.
 
 ## Data model
 
@@ -341,84 +377,84 @@ The Loop engine is a **control plane**; existing primitives remain the **data pl
 
 A Loop never copies these objects — it links them. Deleting the linked primitive does not break the loop; the reference just becomes dangling, surfaced in diagnostics.
 
-## Review automation (one workflow)
+## Per-protocol guides
 
-Review is the most automated convenience path: manual review round-trips can
-disappear. Its special handling below does not change the general Loop Engine
-model described in [Supported workflows](#supported-workflows).
+Each of the five kinds has its own operator-facing guide with the same
+template — purpose, default protocol, entry points, advance gates, stop
+condition, artifacts, routing, recovery, "when NOT to use", reference
+implementation. Consult them for anything protocol-specific.
 
-The existing `review` intent in `bclaw_coordinate` already creates a review candidate. We extend it — **strictly backward-compatible** — with an optional flag `open_loop?: boolean` that **defaults to `false`**. Every existing `review` call behaves exactly as today; a caller must explicitly opt in by passing `open_loop: true`. The coordinate enum was extended in v1.5.0 to add `ideate` (memory-confrontation ideation_loop driver — see [ideation-loop.md](./ideation-loop.md) for the full design and §[Automation: extending `bclaw_coordinate(intent='ideate')`](#automation-extending-bclaw_coordinateintentideate) below for a summary). The current vocabulary is `assign | consult | review | reroute | summarize | ideate`. A future minor version may flip the `open_loop` default after telemetry confirms adoption, but such a flip will be gated by MCP schema versioning (pln#392) and surfaced in the changelog.
+- [Review](../loops/review.md) — the most automated coordinator shortcut,
+  autonomous fix cycle on `request_changes`, symmetric review-and-fix mode.
+- [Ideation](../loops/ideation.md) — memory-confrontation with a
+  per-phase context filter and a `critique↔revision` iteration block; see
+  also the full RFC in [ideation-loop.md](./ideation-loop.md).
+- [Implementation](../loops/implementation.md) — `bind → execute↔verify →
+  handoff_ready`, deterministic `command_green` exit.
+- [Research](../loops/research.md) — `investigate↔synthesize → conclude`,
+  no `blocked` outcome, `critic_signal` exit.
+- [Debug](../loops/debug.md) — `reproduce → hypothesize↔isolate↔fix →
+  handoff`, mirrors implementation's `command_green` gate on the repro.
 
-When `bclaw_coordinate(intent='review', open_loop: true)` is called, it:
+`bclaw_coordinate` exposes two of these as ergonomic shortcuts today:
+`intent='review'` (with `open_loop: true`) and `intent='ideate'`. Both
+were extended strictly backward-compatibly — every prior call still
+behaves as before. The current coordinate vocabulary is
+`assign | consult | review | reroute | summarize | ideate`.
 
-1. Creates the review candidate as today.
-2. Opens a `review` loop via `bclaw_loop(intent: 'open', kind: 'review', ...)` with slots `{role: 'author', agent: caller}`, `{role: 'reviewer', agent: target}`.
-3. Links the provided handoff/candidate to the loop as an artifact at `change_summary`.
-4. Advances to `findings` and calls `bclaw_loop(intent: 'turn')` to dispatch to the reviewer.
-5. On turn completion with a verdict artifact, auto-advances; `reviewer_green` stop closes.
-6. On a `request_changes` verdict, the fix cycle re-dispatches the reviewer into the same worktree until `approve` or the `max_iterations` cap.
+## Common engine extensions used by protocols
 
-**How the verdict reaches the loop (shipped, pln#628 Focus 4B).** A dispatched reviewer worker does not call `bclaw_loop` itself — it writes its outcome to `LANE-RESULT.json` at the worktree root, including an optional `review_verdict` (`approve` | `request_changes`) and `review_summary`. When the coordinator runs `brainclaw harvest <assignment_id>` (report-only path and `--integrate`), a review lane carrying a `review_verdict` is mapped onto its loop: brainclaw records a `verdict` artifact on the reviewer slot (`approve` → an `accepted…` body) and calls `advance`, which **auto-closes the loop on `reviewer_green` for `approve`** — no human driving `complete_turn`/`advance`.
+Three engine extensions are shared across protocols; per-protocol guides
+reference them rather than re-defining them.
 
-**The autonomous fix cycle (PR2, `--integrate` only).** On `request_changes`, `harvest --integrate` bumps the loop's round counter, **keeps the claim + worktree alive**, and re-dispatches the same reviewer slot into that **same worktree** (symmetric mode) with a findings-aware brief: apply the requested changes in place, then re-review. Commits accumulate on one branch — no fresh worktree per turn, so the branch-per-scope / refuse-unharvested-commits invariants are never tripped. The cycle repeats until `approve` (→ `reviewer_green` close) or the `max_iterations` cap (n=3 → auto-close `blocked`, handed to a human). The report-only harvest path never cycles (it can neither re-dispatch nor retain the claim); it defers `request_changes` to `--integrate` and still closes on `approve`. The mapping is idempotent, resolves the reviewer slot strictly by `assignment_id` (so symmetric multi-reviewer loops target the right slot), and runs the `complete_turn`+`advance` pair under the loop lock so an interrupted pass resumes rather than stalls. Asymmetric (author ≠ reviewer) cross-agent worktree sharing is a planned follow-up.
-
-### Symmetric review-AND-fix mode
-
-By default, the phases `findings` and `author_response` follow the classical asymmetric split — the reviewer identifies issues, the author applies fixes on the next turn. That doubles the number of round-trips: every issue needs one full turn to be identified, then another to be fixed.
-
-When both slots are coding agents with write access to the artifact under review (the common case with `bclaw_coordinate(intent='review', open_loop: true, mode: 'symmetric')`), the protocol collapses those two roles into one behavior per turn: **the reviewer reviews AND applies whatever fixes it can make directly**, then returns a summary artifact of changes applied + a request for the other slot to review those changes. The other slot then takes its turn with the same semantics — review-and-fix on whatever is left — and so on. Exit is reached when a reviewer turn produces a green verdict with no unapplied findings and with `changes_applied` omitted or empty for that turn, or when `max_iterations` is hit.
-
-The phase sequence stays the same (`findings → author_response → followup_review`), but each turn may emit at most one `changes_applied` artifact alongside any `finding` artifacts. That artifact must summarize the concrete edits made in that turn and point at the mutated object via `ref` when one exists (candidate, handoff, message, or other linked primitive); it is a turn summary, not a second source of truth. The next-turn handler always starts from the committed-and-reviewed state of the previous turn, not from the original draft. This halves the round-trip count when fixes are mechanical enough for the reviewer to own, which is the common case for spec work and small-to-mid refactors.
-
-Selector: `mode: 'symmetric' | 'asymmetric'` on the `open_loop` call (or directly on `bclaw_loop(intent='open', kind='review', mode:…)`). Defaults to `asymmetric` for safety. On `open`, the server persists the resolved selection to `loop.protocol.review_mode` so resume/turn handlers do not depend on the original request envelope. If `symmetric` is requested but the active slot is human-operated or lacks write authority to the reviewed artifact, that turn degrades gracefully to asymmetric behavior for that slot: findings/verdicts are still allowed, `changes_applied` is omitted, and the loop proceeds without protocol error. Implementation-loops and security reviews typically stay asymmetric; RFC and doc reviews benefit most from symmetric.
-
-The operator never copy-pastes. They see status in the board (`bclaw_context(kind="board")`) and can `bclaw_loop(intent="get", loop_id=…)` for detail.
-
-## Automation: extending `bclaw_coordinate(intent='ideate')`
-
-Shipped in v1.5.0 (pln#492). The full design — phases, context_filter,
-iteration block, advance_gate, brief assembly, system events,
-single-agent vs multi-agent UX — lives in [ideation-loop.md](./ideation-loop.md).
-Summary for the loop-engine perspective:
-
-- `bclaw_coordinate(intent='ideate', task=…, [targetAgents=[…]])` opens
-  an ideation_loop with the caller as `champion` slot and the targets
-  (when provided) as `critic` slots. The task is stored verbatim as
-  the `proposal` artifact (sliced to the 4 KB body cap).
-- Single-agent mode (no `targetAgents`): the loop opens at the
-  proposal phase and stops there. The champion drives the cycle
-  manually via `bclaw_loop(intent='turn'|'advance')`. Useful when the
-  loop's structure (memory filter, gate, iteration accounting) is
-  what's wanted, not the multi-slot orchestration.
-- Multi-agent mode (explicit `targetAgents`): the driver advances
-  proposal → critique and dispatches a turn per critic with a brief
-  assembled by `buildIdeationBrief` — context-filtered (critic sees
-  only `traps + feedback + runtime_notes + critique_history`),
-  BM25-ranked via `search()`, capped at 48 KB.
-
-The ideation_loop introduces three loop-engine extensions consumed by
-this driver:
-
-- `LoopPhase.context_filter?: LoopContextCategory[]` — closed enum
+- **`LoopPhase.context_filter?: LoopContextCategory[]`** — closed enum
   with `'*'` wildcard. Drives per-phase memory selection at brief
-  assembly time.
-- `LoopPhase.advance_gate?: StopCondition` — re-uses the StopCondition
-  vocabulary as a phase-exit guard. When unmet, the driver emits a
-  `phase_advance_blocked` system event (a non-artifact event in the
-  journal) with a structured `gate_reason` and throws an actionable
-  error. The default ideation `critique` advance_gate is
-  `min_artifacts_by_type { type: 'critique', n: 3, scope: 'phase' }`.
-- `LoopProtocolConfig.iteration?: { cycle, max_iterations, exit_when }`
-  — wraps the inner critique↔revision loop. The FSM
-  (`decideNextPhase` in `iteration-engine.ts`) handles cycle progress,
-  exit_when predicates (`no_new_critique_artifacts` / `critic_signal`),
-  and emits `max_iterations_reached` when the cap fires.
+  assembly time (ideation, implementation, research, debug all use it).
+- **`LoopPhase.advance_gate?: StopCondition`** — re-uses the
+  `StopCondition` vocabulary as a phase-exit guard. When unmet, the driver
+  emits a `phase_advance_blocked` system event with a structured
+  `gate_reason` and throws an actionable error. Every protocol except
+  `review` ships at least one default gate.
+- **`LoopProtocolConfig.iteration?: { cycle, max_iterations, exit_when }`**
+  — wraps an inner cycle. The FSM (`decideNextPhase` in
+  `iteration-engine.ts`) handles cycle progress and the `exit_when`
+  predicates (`no_new_critique_artifacts`, `critic_signal`,
+  `command_green`), and emits `max_iterations_reached` when the cap
+  fires.
 
 Both new event kinds — `phase_advance_blocked` and
 `max_iterations_reached` — live in the same event journal as
 `turn_assigned` / `phase_advanced`. They are intentionally **not**
 artifacts (which would force every consumer to filter `is_system`
 before processing content).
+
+## Recovery and observability
+
+Recovery of a dispatched turn is decision-driven, not marker-driven — a
+recoverer reads the reservation record and acts on its
+`(decision, launch.status, lease_deadline)` triple. The full set of
+transitions and their handling lives in
+[attempt-authority.md#recovery](./attempt-authority.md#recovery). Loop-level
+recovery on top of that:
+
+- **Terminal loop early-return.** Every mutating convergence
+  (`reconcileTurn`, `reconcileFailedTurn`) idempotent no-ops on a closed
+  loop and still releases the coordinator claim.
+- **Journal crash recovery.** `max(event.seq) > thread.version` triggers
+  a synchronous journal replay before any new mutation proceeds (see the
+  commit protocol below).
+- **Superseded-turn guard.** A newer turn taking over a slot binds
+  `slot.current_turn_id`; a late reconcile of the old turn no-ops.
+- **Contradictions.** A turn-keyed completed+failed pair on the same
+  attempt withholds convergence and journals a `run_blocked` runtime
+  event with `status_reason: turn_evidence_contradiction`.
+
+Observability is split across four surfaces — see
+[attempt-authority.md#surfaces-and-their-roles](./attempt-authority.md#surfaces-and-their-roles).
+In short: the `TurnReservation` record + launch decision cell is
+**authoritative**; `LoopEvent` is **causal**; `RuntimeEvent` is
+**telemetry**; the legacy `events.jsonl` stream is **compatibility-only**.
+No consumer looks past its role. There is no fifth journal.
 
 ## Persistence
 
@@ -555,6 +591,8 @@ table above rather than treating review as the default abstraction.
 
 ## Related
 
+- [attempt-authority.md](./attempt-authority.md) — identity, dispatch decisions and spawn authority for every turn
+- [Per-protocol guides](../loops/) — review / ideation / implementation / research / debug
 - [plans-and-claims.md](plans-and-claims.md)
 - [coordination.md](coordination.md)
 - [dispatch-lifecycle.md](dispatch-lifecycle.md) — entity FSMs (loop / assignment / agent_run / claim), brief-ack semantics, log-file diagnostic playbook
@@ -562,13 +600,4 @@ table above rather than treating review as the default abstraction.
 - pln#394 `feat/loop-engine-mvp`
 - pln#395 `feat/review-loop-protocol`
 - pln#392 `doc/mcp-versioning-and-surface-governance` (prerequisite)
-
-## Review-specific reliability notes
-
-Review loops retain an extra exactly-once fix-cycle implementation because they
-can automatically redispatch after `request_changes`. A reviewer writes
-`review_verdict` and `review_summary` to `LANE-RESULT.json`; harvest maps this
-to the loop, auto-closes on approval, and boundedly redispatches fix work when
-appropriate. This is review-specific automation, not a limit on the other
-workflow kinds. Set `BRAINCLAW_TURN_OWNED_REVIEW=0` (also `false`/`off`/`no`)
-only to fall back to the legacy review finalizer.
+- pln#676 / dec#171 — attempt-authority rollout
