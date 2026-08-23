@@ -52,7 +52,12 @@ describe('pln#521 P2-bis closeIdeationLoopFromLaneResult', () => {
     const res = closeIdeationLoopFromLaneResult(asg(loopId, 0), lane('asg_c0'), 'coord', cwd);
     assert.equal(res?.action, 'critique_recorded', 'n:3 gate not met after 1 critique');
     const loop = getLoop(loopId, cwd)!;
-    assert.equal(loop.artifacts.filter((a) => a.type === 'critique').length, 1, 'one critique artifact recorded');
+    const [critique] = loop.artifacts.filter((a) => a.type === 'critique');
+    assert.ok(critique, 'one critique artifact recorded');
+    assert.equal(critique.evidence?.producer.channel, 'complete_turn');
+    assert.equal(critique.evidence?.producer.id, 'lsl_c0');
+    assert.equal(critique.evidence?.subject.slot_id, 'lsl_c0');
+    assert.equal(critique.evidence?.subject.assignment_id, 'asg_c0');
     assert.equal(loop.slots.find((s) => s.slot_id === 'lsl_c0')?.status, 'done', 'critic slot completed');
     assert.equal(loop.current_phase, 'critique', 'loop stays in critique until the gate opens');
   });
