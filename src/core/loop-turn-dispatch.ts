@@ -197,7 +197,9 @@ export async function dispatchLoopTurn(input: DispatchLoopTurnInput): Promise<Di
     }, input.cwd);
     result.message_id = message.id;
     attachAssignmentMessageToClaim(claim.claimId, message.id, input.cwd);
-    ensureClaimAssignmentBinding(claim.claimId, prepared.assignment_id, input.cwd);
+    ensureClaimAssignmentBinding(claim.claimId, prepared.assignment_id, input.cwd, {
+      worktreePath: prepared.workspace_path,
+    });
     const assignment = loadAssignment(prepared.assignment_id, input.cwd);
     if (assignment?.status === 'created' || assignment?.status === 'retrying') {
       transitionAssignment(prepared.assignment_id, 'offered', { actor: input.dispatcher_agent }, input.cwd);

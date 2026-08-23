@@ -13,6 +13,11 @@ export interface LoopCommandOptions {
   input?: string;
   role?: string;
   assignmentId?: string;
+  runId?: string;
+  nonce?: string;
+  attemptEpoch?: string | number;
+  executionContractHash?: string;
+  workspaceDigest?: string;
   outcome?: 'done' | 'failed' | 'cancelled';
   failureReason?: string;
   artifact?: string;
@@ -108,6 +113,13 @@ function parseOutcome(opts: LoopCommandOptions): 'done' | 'failed' | 'cancelled'
   return outcome;
 }
 
+function parseOptionalEpoch(value: string | number | undefined, opts: LoopCommandOptions): number | undefined {
+  if (value === undefined) return undefined;
+  const epoch = Number(value);
+  if (!Number.isInteger(epoch) || epoch < 0) fail('--attempt-epoch must be a non-negative integer', 1, opts);
+  return epoch;
+}
+
 function formatNextExpected(hint: NextExpectedHint | null): string {
   if (!hint) return '  (loop has no further expected action)';
   const bits: string[] = [`  next: ${hint.action} (${hint.intent})`];
@@ -143,6 +155,13 @@ function buildRequest(
         intent: 'complete_turn',
         loop_id: loopId,
         slot_id: requireOption(opts.slot, '--slot <slot_id>', opts),
+        assignment_id: opts.assignmentId,
+        turn_id: opts.turnId,
+        run_id: opts.runId,
+        nonce: opts.nonce,
+        attempt_epoch: parseOptionalEpoch(opts.attemptEpoch, opts),
+        execution_contract_hash: opts.executionContractHash,
+        workspace_digest: opts.workspaceDigest,
         outcome: parseOutcome(opts),
         failure_reason: opts.failureReason,
         artifact,

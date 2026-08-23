@@ -7,6 +7,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
+import { runLoopCommand } from '../../src/commands/loop.js';
 import { fingerprintPublicKeyPem } from '../../src/core/agent-registry.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
@@ -180,26 +181,19 @@ describe('complete_turn AttemptAuthority fence', () => {
     assert.equal(JSON.stringify(getLoop(loop.id, cwd)), loopBeforeStale);
     assert.equal(JSON.stringify(listLoopEvents(loop.id, cwd)), eventsBeforeStale);
 
-    const current = await handleBclawLoop({
-      cwd,
-      args: {
-        intent: 'complete_turn',
-        loop_id: loop.id,
-        slot_id: slotId,
-        assignment_id: epoch1.assignment_id,
-        turn_id: epoch1.turn_id,
-        run_id: epoch1.run_id,
-        nonce: epoch1.nonce,
-        attempt_epoch: epoch1.attempt_epoch,
-        execution_contract_hash: epoch1.execution_contract_ref.hash,
-        workspace_digest: epoch1.workspace_digest,
-        outcome: 'done',
-        artifact: { phase: 'findings', type: 'verdict', body: 'accepted: current epoch' },
-        agent: 'codex',
-        agentId: 'agt_codex',
-      },
-    });
-    assert.equal(current.response.status, 'ok');
+    const current = await runLoopCommand('complete-turn', { loop_id: loop.id }, {
+      slot: slotId,
+      assignmentId: epoch1.assignment_id,
+      turnId: epoch1.turn_id,
+      runId: epoch1.run_id,
+      nonce: epoch1.nonce,
+      attemptEpoch: epoch1.attempt_epoch,
+      executionContractHash: epoch1.execution_contract_ref.hash,
+      workspaceDigest: epoch1.workspace_digest,
+      outcome: 'done',
+      artifact: JSON.stringify({ phase: 'findings', type: 'verdict', body: 'accepted: current epoch' }),
+    }, cwd);
+    assert.equal(current.ok, true);
     const completed = getLoop(loop.id, cwd)!;
     assert.equal(completed.slots.find((slot) => slot.slot_id === slotId)?.status, 'done');
     const verdict = completed.artifacts.find((artifact) => artifact.body === 'accepted: current epoch');

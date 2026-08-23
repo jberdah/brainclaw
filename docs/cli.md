@@ -1012,7 +1012,7 @@ research, and debug; they are not a review-only command group.
 | Subcommand | Required arguments/options | Purpose |
 |---|---|---|
 | `turn <loop_id>` | `--slot <slot_id>` | Record a turn assignment. The CLI wrapper is state-only; MCP `turn` additionally supports trusted `dispatch:true`. |
-| `complete-turn <loop_id>` | `--slot <slot_id> --outcome <done\|failed\|cancelled>` | Complete a manually driven slot turn; optional `--artifact <json>`. |
+| `complete-turn <loop_id>` | `--slot <slot_id> --outcome <done\|failed\|cancelled>` | Complete a manually driven slot turn; optional `--artifact <json>`. AttemptAuthority v2 workers must also pass the full fence: `--assignment-id`, `--turn-id`, `--run-id`, `--nonce`, `--attempt-epoch`, `--execution-contract-hash`, and `--workspace-digest`. |
 | `takeover <loop_id>` | slot, turn, expected epoch, cause, liveness evidence, external-effect policy, next workspace and coordinator identity | Fence one physical generation and arm a successor without changing the logical Assignment. |
 | `advance <loop_id>` | — | Advance through the protocol; optional `--to-phase`, `--force`, `--reason`. |
 | `add-artifact <loop_id>` | `--phase --type --body` | Attach a typed artifact; optional producer and ref. |

@@ -1329,14 +1329,18 @@ export class ClaimAssignmentConflictError extends Error {
  * Idempotently bind an active claim to the deterministic Assignment of its turn.
  * Unlike the legacy patch helper, this never overwrites a divergent binding.
  */
-export function ensureClaimAssignmentBinding(claimId: string, assignmentId: string, cwd?: string): Claim {
+export function ensureClaimAssignmentBinding(
+  claimId: string,
+  assignmentId: string,
+  cwd?: string,
+  options: { worktreePath?: string } = {},
+): Claim {
   return mutate({ cwd }, () => {
     const claim = loadClaim(claimId, cwd);
     if (claim.status !== 'active') {
       throw new ClaimAssignmentConflictError(claimId, `claim is ${claim.status}, expected active`);
     }
-    if (claim.assignment_id === assignmentId) return claim;
-    if (claim.assignment_id !== undefined) {
+    if (claim.assignment_id !== undefined && claim.assignment_id !== assignmentId) {
       // Symmetric review/fix cycles intentionally retain one active coordinator
       // claim across rounds. A later deterministic turn may advance that pointer,
       // but only after the previous Assignment is durably terminal.
@@ -1351,7 +1355,19 @@ export function ensureClaimAssignmentBinding(claimId: string, assignmentId: stri
         );
       }
     }
-    claim.assignment_id = assignmentId;
+    let changed = false;
+    if (claim.assignment_id !== assignmentId) {
+      claim.assignment_id = assignmentId;
+      changed = true;
+    }
+    // AttemptAuthority keeps one logical Assignment/claim across physical
+    // generations. Rebind the claim's liveness and GC root to the current
+    // generation workspace in the SAME mutation as its Assignment pointer.
+    if (options.worktreePath !== undefined && claim.worktree_path !== options.worktreePath) {
+      claim.worktree_path = options.worktreePath;
+      changed = true;
+    }
+    if (!changed) return claim;
     saveClaimUnlocked(claim, cwd);
     return claim;
   });

@@ -1,16 +1,25 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { loadAgentRun } from '../../src/core/agentruns.js';
-import { saveAgentIdentity } from '../../src/core/agent-registry.js';
+import { fingerprintPublicKeyPem, saveAgentIdentity } from '../../src/core/agent-registry.js';
 import { loadAssignment } from '../../src/core/assignments.js';
+import { loadClaim } from '../../src/core/claims.js';
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { dispatchLoopTurn, type DispatchLoopTurnResult } from '../../src/core/loop-turn-dispatch.js';
 import { getReservation, listReservations } from '../../src/core/loops/attempt-reservation.js';
+import { takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
+import {
+  activateAttemptAuthorityV2,
+  ensureLocalAuthorityHome,
+  prepareAttemptAuthorityRollout,
+  publishAttemptRolloutAck,
+} from '../../src/core/loops/attempt-rollout.js';
 import { getLoop, openLoop } from '../../src/core/loops/store.js';
 import type { LoopKind } from '../../src/core/loops/types.js';
 
@@ -27,6 +36,31 @@ function project(): string {
     assert.equal(git.status, 0, git.stderr);
   }
   return cwd;
+}
+
+function activateV2(cwd: string): void {
+  const home = ensureLocalAuthorityHome(cwd);
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const publicKeyPem = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const privateKeyPem = keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  prepareAttemptAuthorityRollout(cwd, {
+    membership_epoch: 1,
+    authority_home: home,
+    participants: [{
+      writer_id: 'agt_coord',
+      public_key_pem: publicKeyPem,
+      key_fingerprint: fingerprintPublicKeyPem(publicKeyPem),
+      status: 'active',
+    }],
+    prepared_by: 'agt_coord',
+  });
+  publishAttemptRolloutAck(cwd, {
+    membership_epoch: 1,
+    writer_id: 'agt_coord',
+    writer_version: 2,
+    private_key_pem: privateKeyPem,
+  });
+  activateAttemptAuthorityV2(cwd, 1, 'agt_coord');
 }
 
 const workerPhase: Record<'ideation' | 'implementation' | 'research' | 'debug', string> = {
@@ -157,6 +191,68 @@ describe('generic Loop Engine worker dispatch', () => {
     assert.equal(dispatched.error, undefined);
     assert.equal(dispatched.agent, 'claude-code');
     assert.equal(loadAgentRun(dispatched.run_id!, cwd)?.agent, 'claude-code');
+  });
+
+  it('rebinds the stable claim to the successor workspace on takeover redispatch', async () => {
+    const cwd = project();
+    roots.push(cwd);
+    const priorIdentityRoot = process.env.BRAINCLAW_AUTHORITY_IDENTITY_ROOT;
+    process.env.BRAINCLAW_AUTHORITY_IDENTITY_ROOT = path.join(cwd, '.test-local-identities');
+    try {
+      activateV2(cwd);
+      const loop = openLoop({
+        kind: 'debug', title: 'takeover redispatch', created_by: 'agt_coord',
+        phases: [{ name: 'reproduce' }],
+        slots: [{ slot_id: 'lsl_takeover', role: 'debugger', agent: 'codex' }],
+        stop_condition: { kind: 'max_iterations', n: 2 },
+      }, cwd);
+      const dispatchInput = {
+        loop_id: loop.id,
+        slot_id: 'lsl_takeover',
+        task: 'reproduce after takeover',
+        dispatcher_agent: 'coord',
+        dispatcher_agent_id: 'agt_coord',
+        auto_execute: false,
+        cwd,
+      } as const;
+      const first = await dispatchLoopTurn(dispatchInput);
+      assert.equal(first.error, undefined);
+      assert.ok(first.turn_id && first.claim_id && first.assignment_id && first.worktree_path);
+      assert.equal(loadClaim(first.claim_id!, cwd).worktree_path, first.worktree_path);
+
+      const successor = `${cwd}-successor`;
+      roots.push(successor);
+      const added = spawnSync('git', ['worktree', 'add', '-b', `takeover-${path.basename(cwd)}`, successor], {
+        cwd, encoding: 'utf8', windowsHide: true,
+      });
+      assert.equal(added.status, 0, added.stderr);
+      takeoverLoopAttempt({
+        loop_id: loop.id,
+        slot_id: 'lsl_takeover',
+        turn_id: first.turn_id!,
+        expected_epoch: 0,
+        authority_home: ensureLocalAuthorityHome(cwd),
+        actor: 'agt_coord',
+        writer_id: 'agt_coord',
+        cause: 'first worker is no longer live',
+        liveness_evidence: 'wrapper and heartbeat are absent',
+        external_effect_policy: 'idempotent',
+        next_workspace_path: successor,
+        cwd,
+      });
+
+      const second = await dispatchLoopTurn(dispatchInput);
+      assert.equal(second.error, undefined);
+      assert.equal(second.claim_id, first.claim_id, 'logical claim remains stable');
+      assert.equal(second.assignment_id, first.assignment_id, 'logical assignment remains stable');
+      assert.equal(second.worktree_path, successor, 'worker launches in the successor generation workspace');
+      const rebound = loadClaim(first.claim_id!, cwd);
+      assert.equal(rebound.worktree_path, successor, 'claim liveness and GC follow the active physical generation');
+      assert.equal(rebound.assignment_id, second.assignment_id);
+    } finally {
+      if (priorIdentityRoot === undefined) delete process.env.BRAINCLAW_AUTHORITY_IDENTITY_ROOT;
+      else process.env.BRAINCLAW_AUTHORITY_IDENTITY_ROOT = priorIdentityRoot;
+    }
   });
 
   it('grants exactly one authority when two dispatches race for the same slot', async () => {

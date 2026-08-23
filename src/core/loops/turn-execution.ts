@@ -102,7 +102,9 @@ export function ensureTurnExecutionProjections(
   }, cwd);
   input.on_projection?.('run');
 
-  ensureClaimAssignmentBinding(reservation.claim_id, input.assignment_id, cwd);
+  ensureClaimAssignmentBinding(reservation.claim_id, input.assignment_id, cwd, {
+    worktreePath: input.worktree_path,
+  });
   input.on_projection?.('claim_binding');
 
   bindTurnProjection({
