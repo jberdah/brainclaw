@@ -1,4 +1,57 @@
 export * from './types.js';
+export * from './attempt-generations.js';
+export * from './attempt-rollout.js';
+export * from './attempt-takeover.js';
+export {
+  GATE_POLICY_VERSION,
+  artifactEvidenceProvenance,
+  artifactEvidenceDigest,
+  evidenceDigest,
+  evidencePolicyForNewLoop,
+  evidenceWriterEnabled,
+  validateArtifactEvidence,
+  validateThreadEvidence,
+  type EvidenceValidationResult,
+  type ThreadEvidenceDiagnostic,
+} from './evidence.js';
+export {
+  GATE_POLICIES,
+  eligibleArtifactsForPurpose,
+  evaluateCommandGreen,
+  evaluateCriticSignal,
+  evaluateGateCondition,
+  evaluateNoNewCritique,
+  type EvidencePurpose,
+  type GatePolicy,
+  type GateRequirement,
+} from './gate-policy.js';
+export {
+  EXECUTION_CONTRACT_PROTOCOL_VERSION,
+  EXECUTION_CONTRACT_VERSION,
+  CapabilityRequirementSchema,
+  CapabilityResolutionReasonSchema,
+  CapabilitySnapshotSchema,
+  HarnessCapabilityBindingSchema,
+  ExecutionContractRefSchema,
+  ExecutionContractSchema,
+  RuntimeCapabilityObservationSchema,
+  assertExecutionContractIntegrity,
+  capabilitySnapshotHash,
+  canonicalExecutionContract,
+  executionContractHash,
+  executionContractRef,
+  resolveCapabilitySnapshot,
+  validateWorkerContractAcceptance,
+  type CapabilityRequirement,
+  type AcceptedExecutionContractRef,
+  type CapabilityResolutionReason,
+  type CapabilitySnapshot,
+  type ContractAcceptanceVerdict,
+  type ExecutionContract,
+  type ExecutionContractRef,
+  type HarnessCapabilityBinding,
+  type RuntimeCapabilityObservation,
+} from '../execution-contract.js';
 export {
   AwaitingFileApplyApprovalError,
   closeLoop,
@@ -114,3 +167,34 @@ export {
   type WorkerReplyContract,
   type ArtifactRequirement,
 } from './worker-reply-contract.js';
+export {
+  abortAttempt,
+  inspectAttempt,
+  matchEvidence,
+  prepareAttempt,
+  projectAndCross,
+  revokeAttempt,
+  type AttemptCrossResult,
+  type AttemptSnapshot,
+  type PreparedAttempt,
+  type PrepareAttemptInput,
+} from './attempt-authority.js';
+export {
+  LOOP_KIND_POLICIES,
+  assertLoopKindPoliciesComplete,
+  isWorkerPhase,
+  phasePolicy,
+  policyForKind,
+  type AttemptCompletionMode,
+  type LoopKindPolicy,
+  type LoopPhaseExecutionPolicy,
+  type PhaseExecution,
+} from './kind-policies.js';
+export {
+  ensureTurnExecutionProjections,
+  prepareTurnExecution,
+  type PrepareTurnExecutionInput,
+  type PrepareTurnExecutionResult,
+  type TurnExecutionProjectionInput,
+  type TurnProjectionStage,
+} from './turn-execution.js';

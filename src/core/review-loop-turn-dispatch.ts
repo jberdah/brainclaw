@@ -18,21 +18,23 @@
  * command-level orchestrator that owns both and calls this to spawn. Nothing
  * here imports harvest or review-loop-close, so no import cycle is introduced.
  */
-import { createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment } from './claims.js';
-import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId, loadAssignment } from './assignments.js';
+import { createCoordinatorClaim, attachAssignmentMessageToClaim, ensureClaimAssignmentBinding, linkClaimToAssignment, loadClaim } from './claims.js';
+import { createAssignment, loadAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { turn } from './loops/verbs.js';
 import { getLoop } from './loops/store.js';
 import { generateDispatchBrief } from './dispatcher.js';
 import { sendMessage } from './messaging.js';
-import { buildInvokeCommand, resolveModel } from './agent-capability.js';
+import { resolveModel } from './agent-capability.js';
+import { buildHarnessInvocation, resolveHarnessBinding, type HarnessBinding } from './harness-adapters/index.js';
 import { attemptExecution } from './execution.js';
 import type { TurnEcho } from './execution-adapters.js';
-import { createAgentRun, loadAgentRun, transitionAgentRun } from './agentruns.js';
-import {
-  reserve, commitReservation, armLaunch, consumeLaunchGrant, launchGrant,
-  deriveTurnId, deriveChildIds, ReservationStateError, LaunchFenceError,
-} from './loops/attempt-reservation.js';
-import type { LoopSlot } from './loops/types.js';
+import type { ExecutionContractRef } from './execution-contract.js';
+import { transitionAgentRun } from './agentruns.js';
+import { prepareTurnExecution } from './loops/turn-execution.js';
+import { phasePolicy } from './loops/kind-policies.js';
+import { deriveChildIds } from './loops/attempt-reservation.js';
+import { readHeartbeat, signalExists } from './runtime-signals.js';
+import type { LoopKind, LoopSlot } from './loops/types.js';
 
 /**
  * pln#630 — gate for the turn-owned (exactly-once) review dispatch path.
@@ -45,12 +47,27 @@ import type { LoopSlot } from './loops/types.js';
  * Note the routing is doubly-gated: even ON, harvest only reconcile-turns a lane that OWNS a
  * turn reservation — a legacy-dispatched lane (no reservation) still uses the legacy path.
  */
+export type TurnOwnedLoopMode = 'off' | 'review' | 'all';
+
+export function turnOwnedLoopMode(): TurnOwnedLoopMode {
+  const configured = (process.env.BRAINCLAW_TURN_OWNED_LOOPS ?? '').trim().toLowerCase();
+  if (configured === 'off' || configured === 'review' || configured === 'all') return configured;
+  // Backward-compatible alias: an explicitly configured legacy switch controls
+  // review only; an absent legacy switch adopts the new all-kinds default.
+  if (process.env.BRAINCLAW_TURN_OWNED_REVIEW !== undefined) {
+    const legacy = process.env.BRAINCLAW_TURN_OWNED_REVIEW.trim().toLowerCase();
+    return ['0', 'false', 'off', 'no'].includes(legacy) ? 'off' : 'review';
+  }
+  return 'all';
+}
+
+export function turnOwnedLoopEnabled(kind: LoopKind): boolean {
+  const mode = turnOwnedLoopMode();
+  return mode === 'all' || (mode === 'review' && kind === 'review');
+}
+
 export function turnOwnedReviewEnabled(): boolean {
-  // Normalized kill-switch (review Finding 4): any of 0/false/off/no (case/space-insensitive)
-  // disables — so an operator reaching for it under pressure can't mis-set it. Anything else
-  // (including unset) keeps the shipped default ON.
-  const v = (process.env.BRAINCLAW_TURN_OWNED_REVIEW ?? '').trim().toLowerCase();
-  return !['0', 'false', 'off', 'no'].includes(v);
+  return turnOwnedLoopEnabled('review');
 }
 
 /** GRANT lease: bounds ONE launch generation's reserve→arm→consume→spawn→run-`running`
@@ -77,8 +94,13 @@ const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
  */
 type TurnOwnedPrep =
   | { kind: 'legacy' }
-  | { kind: 'denied'; reason: string }
-  | { kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string };
+  | { kind: 'denied'; reason: string; turnId?: string; alreadyCrossed?: boolean }
+  | {
+    kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string;
+    attemptEpoch?: number; workspaceDigest?: string;
+    workspacePath: string;
+    executionContractRef?: ExecutionContractRef; harnessBinding: HarnessBinding;
+  };
 
 export interface PrepareTurnOwnedReviewInput {
   loopId: string;
@@ -94,8 +116,33 @@ export interface PrepareTurnOwnedReviewInput {
   dispatcherAgent: string;
   dispatcherAgentId?: string;
   sessionId?: string;
+  model?: string;
   isReviewer: boolean;
   cwd: string;
+  /** Test-only deterministic crash seam; production callers leave it undefined. */
+  faultInjector?: (point: TurnProjectionFaultPoint) => void;
+}
+
+export type TurnProjectionFaultPoint =
+  | 'after_reservation'
+  | 'after_commit'
+  | 'after_arm'
+  | 'after_assignment'
+  | 'after_run'
+  | 'after_claim_binding'
+  | 'after_slot_binding'
+  | 'before_consume'
+  | 'after_consume'
+  | 'after_spawn';
+
+function turnProjectionFaultPoint(
+  input: { faultInjector?: (point: TurnProjectionFaultPoint) => void },
+  point: TurnProjectionFaultPoint,
+): void {
+  input.faultInjector?.(point);
+  if (process.env.BRAINCLAW_FAULT_POINT === `turn_projection_${point}`) {
+    throw new Error(`fault-injection: turn_projection_${point}`);
+  }
 }
 
 /**
@@ -113,149 +160,113 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
   const { loopId, slotId, claimId, cwd } = input;
 
   // ── Snapshot the loop BEFORE turn() bumps its version (dec#139 item 3). ──
-  let iteration: number;
-  let version: number;
+  let thread: ReturnType<typeof getLoop>;
   try {
-    const thread = getLoop(loopId, cwd);
-    if (!thread) return { kind: 'legacy' }; // loop not found — pre-identity, safe to degrade
-    iteration = thread.iteration_count;
-    version = thread.version;
-  } catch {
-    return { kind: 'legacy' };
+    thread = getLoop(loopId, cwd);
+  } catch (error) {
+    return { kind: 'denied', reason: `launch_denied: indeterminate loop read; fail-closed (${error instanceof Error ? error.message : String(error)})` };
+  }
+  if (!thread) return { kind: 'legacy' }; // proven absent before identity: safe legacy path
+  if (thread.kind !== 'review') return { kind: 'denied', reason: `launch_denied: loop ${loopId} is ${thread.kind}, not review` };
+  if (thread.status !== 'open') return { kind: 'denied', reason: `launch_denied: loop ${loopId} is ${thread.status}, not open` };
+  if (thread.current_phase !== input.phase) {
+    return { kind: 'denied', reason: `launch_denied: phase mismatch (${thread.current_phase} != ${input.phase})` };
+  }
+  const execution = phasePolicy('review', input.phase);
+  if (!execution || execution.execution !== 'worker') {
+    return { kind: 'denied', reason: `launch_denied: review.${input.phase} is ${execution?.execution ?? 'unknown'}, not a worker phase` };
+  }
+  const slot = thread.slots.find((candidate) => candidate.slot_id === slotId);
+  if (!slot) return { kind: 'denied', reason: `launch_denied: slot ${slotId} not found` };
+  if (slot.agent !== undefined && slot.agent !== input.agent) {
+    return { kind: 'denied', reason: `launch_denied: slot agent mismatch (${slot.agent} != ${input.agent})` };
+  }
+  if (slot.agent_id !== undefined && slot.agent_id !== input.agentId) {
+    return { kind: 'denied', reason: `launch_denied: slot agent_id mismatch (${slot.agent_id} != ${input.agentId ?? 'none'})` };
+  }
+  if (slot.claim_id !== undefined && slot.claim_id !== claimId) {
+    return { kind: 'denied', reason: `launch_denied: slot claim mismatch (${slot.claim_id} != ${claimId})` };
+  }
+  let claim: ReturnType<typeof loadClaim>;
+  try {
+    claim = loadClaim(claimId, cwd);
+  } catch (error) {
+    return { kind: 'denied', reason: `launch_denied: indeterminate claim read; fail-closed (${error instanceof Error ? error.message : String(error)})` };
+  }
+  if (!claim) return { kind: 'denied', reason: `launch_denied: claim ${claimId} not found` };
+  if (claim.status !== 'active' || claim.agent !== input.agent || claim.scope !== input.scope) {
+    return { kind: 'denied', reason: `launch_denied: claim ${claimId} is incompatible with slot ${slotId}` };
   }
 
-  const turnId = deriveTurnId(loopId, slotId, iteration);
-  const { assignment_id: assignmentId, run_id: runId } = deriveChildIds(turnId);
-  // Decoupled leases (dec#149 R1): the reservation dispatch lease is longer than each grant's
-  // lease, giving a revoked (reserved_never_launched) round a window to re-arm. reserve() adopts
-  // on a re-dispatch, so the ORIGINAL (longer) dispatch lease governs re-arm eligibility.
-  const dispatchLease = new Date(Date.now() + TURN_OWNED_DISPATCH_LEASE_MS).toISOString();
-  const grantLease = new Date(Date.now() + TURN_OWNED_LEASE_MS).toISOString();
-
-  // ── Phase 1: claim identity. Fail-OPEN allowed ONLY here (nothing reserved yet). ──
+  // From the common adapter onward identity may exist, so every error is
+  // fail-closed. Review is a protocol adapter over the same contract and fence
+  // used by ideation, implementation, research and debug.
+  // Only the loop snapshot above can safely choose the legacy path.
   try {
-    reserve({
-      turn_id: turnId,
+    const harnessBinding = resolveHarnessBinding(input.agent, input.model);
+    const prepared = prepareTurnExecution({
+      kind: 'review',
       loop_id: loopId,
       slot_id: slotId,
-      target_slot_generation: iteration, // LoopSlot has no generation field — observational proxy (dec#144 #8)
-      loop_version_at_reserve: version,
+      phase: input.phase,
       agent: input.agent,
       agent_id: input.agentId,
       claim_id: claimId,
-      phase: input.phase,
-      iteration,
-      store_root: cwd,
+      dispatcher_agent: input.dispatcherAgent,
+      dispatcher_agent_id: input.dispatcherAgentId,
+      dispatcher_session_id: input.sessionId,
+      scope: input.scope,
+      description: input.description,
+      task: input.task,
       cwd,
-      lease_deadline: dispatchLease,
-    }, cwd);
-  } catch (err) {
-    if (err instanceof ReservationStateError && err.code === 'reservation_exists') {
-      // A concurrent dispatch already OWNS this turn_id — adopt it and fall
-      // through to the fail-closed consume path (we may still legitimately win
-      // the fence if the owner reserved-but-never-crossed; otherwise denied).
-    } else {
-      // FAIL-CLOSED (review Finding 1): any other reserve outcome is
-      // INDETERMINATE — a lock timeout (a live holder mid-critical-section),
-      // lock-lost, or unknown error does NOT prove that no identity was claimed.
-      // Degrading to `legacy` here would spawn an ungated worker beside a
-      // reservation that may well exist — the exact concurrent-dispatch
-      // double-spawn MUST-FIX 1 closes. (A definitively pre-identity error is
-      // unreachable here: the lease we build is always parseable, and
-      // loop-not-found is handled before reserve.)
-      return { kind: 'denied', reason: `reserve indeterminate — fail-closed (no legacy fallback): ${err instanceof Error ? err.message : String(err)}` };
+      worktree_path: input.worktreePath,
+      dispatch_lease_ms: TURN_OWNED_DISPATCH_LEASE_MS,
+      grant_lease_ms: TURN_OWNED_LEASE_MS,
+      model: input.model,
+      harness_binding: harnessBinding,
+      assignment_tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
+      run_tags: ['turn-owned', 'review', 'loop'],
+      on_authority_stage: (stage) => turnProjectionFaultPoint(input, stage === 'reserved'
+        ? 'after_reservation'
+        : stage === 'committed' ? 'after_commit' : 'after_arm'),
+      on_projection: (stage) => turnProjectionFaultPoint(input,
+        stage === 'assignment' ? 'after_assignment'
+          : stage === 'run' ? 'after_run'
+            : stage === 'claim_binding' ? 'after_claim_binding'
+              : stage === 'slot_binding' ? 'after_slot_binding' : 'before_consume'),
+    });
+    if (prepared.kind !== 'won') {
+      const reason = /incompatible claim_id/.test(prepared.reason)
+        ? `claim mismatch: ${prepared.reason}`
+        : /lock_timeout/.test(prepared.reason)
+          ? `indeterminate reservation; fail-closed: ${prepared.reason}`
+          : prepared.reason;
+      return {
+        kind: 'denied',
+        reason: `launch_denied: ${reason}`,
+        turnId: prepared.turn_id,
+        alreadyCrossed: prepared.code === 'already_crossed',
+      };
     }
-  }
+    turnProjectionFaultPoint(input, 'after_consume');
 
-  // ── Phase 2: FAIL-CLOSED. Identity is reserved; never legacy-spawn from here. ──
-  try {
-    commitReservation(turnId, cwd);
-
-    // Arm-or-adopt the launch grant. Arm when none exists OR when a prior generation was
-    // REVOKED (reserved_never_launched — a crash between arm and consume, then the expiry
-    // sweep): re-arm a FRESH generation at a strictly-higher epoch so a revoked round becomes
-    // re-dispatchable (pln#630 dec#149 R1 strand recovery). armLaunch permits re-arming a
-    // revoked grant and still enforces the dispatch lease, so a lease-expired reservation
-    // refuses arm and stays correctly stranded (never a phantom-spawn-after-lease). A
-    // concurrent arm surfaces as `already_armed` → adopt the incumbent grant.
-    let grant = launchGrant(turnId, cwd);
-    if (!grant || grant.status === 'revoked') {
-      const priorEpoch = grant?.epoch ?? -1; // fresh → epoch 0 (unchanged); revoked → epoch+1
-      try {
-        armLaunch(turnId, { epoch: priorEpoch + 1, lease_deadline: grantLease }, cwd);
-      } catch (err) {
-        if (!(err instanceof LaunchFenceError && err.code === 'already_armed')) {
-          // dispatch_lease_expired / lease_invalid / not_committed / epoch_mismatch → do-not-spawn.
-          return { kind: 'denied', reason: `arm_refused: ${err instanceof Error ? err.message : String(err)}` };
-        }
-      }
-      grant = launchGrant(turnId, cwd);
-    }
-    // A crossed grant = launch_attempted_unknown (worker already invoked, never re-spawn);
-    // still-revoked = re-arm refused (lease expired) → never-launch; absent → all do-not-spawn.
-    if (!grant || grant.status !== 'armed') {
-      return { kind: 'denied', reason: `launch_denied: grant is ${grant?.status ?? 'absent'} (not armed)` };
-    }
-
-    // Consume the grant — the atomic exactly-once SPAWN authority.
-    let wonTransition: boolean;
-    try {
-      ({ wonTransition } = consumeLaunchGrant(turnId, grant.token, grant.epoch, cwd));
-    } catch (err) {
-      return { kind: 'denied', reason: `launch_denied: consume refused (${err instanceof Error ? err.message : String(err)})` };
-    }
-    if (!wonTransition) {
-      // Adopted — another invocation crossed the fence. MUST NOT spawn.
-      return { kind: 'denied', reason: 'launch_denied: grant already crossed by a concurrent dispatch' };
-    }
-
-    // ── WON: this dispatch is the SOLE spawner. Bind slot + run to MY live claim
-    // (claimId), NOT the reservation's first-reserver claim (dec#144 #3) — else a
-    // recovery-winner would bind the slot to a dead claim and break complete_turn
-    // auth. Mints are idempotent (save overwrites, so guard on load). ──
-    if (!loadAssignment(assignmentId, cwd)) {
-      createAssignment({
-        id: assignmentId,
-        short_label: assignmentId,
-        claim_id: claimId,
-        agent: input.agent,
-        dispatcher_agent: input.dispatcherAgent,
-        dispatcher_session_id: input.sessionId,
-        scope: input.scope,
-        description: input.description,
-        tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
-      }, cwd);
-    }
-    if (!loadAgentRun(runId, cwd)) {
-      createAgentRun({
-        id: runId,
-        short_label: runId,
-        assignment_id: assignmentId,
-        claim_id: claimId,
-        agent: input.agent,
-        agent_id: input.agentId,
-        transport: 'cli_spawn',
-        status: 'created',
-        scope: input.scope,
-        description: input.description,
-        worktree_path: input.worktreePath,
-        tags: ['turn-owned', 'review', 'loop'],
-      }, cwd);
-    }
-    turn({
-      id: loopId,
-      slot_id: slotId,
-      actor: input.dispatcherAgentId ?? input.dispatcherAgent,
-      input: input.task,
-      turn_id: turnId,
-      assignment_id: assignmentId,
-      claim_id: claimId,
-    }, cwd);
-
-    return { kind: 'won', assignmentId, runId, turnId, nonce: grant.token };
+    return {
+      kind: 'won',
+      assignmentId: prepared.assignment_id,
+      runId: prepared.run_id,
+      turnId: prepared.turn_id,
+      nonce: prepared.nonce,
+      attemptEpoch: prepared.attempt_epoch,
+      workspaceDigest: prepared.workspace_digest,
+      workspacePath: prepared.workspace_path,
+      executionContractRef: prepared.execution_contract_ref,
+      harnessBinding,
+    };
   } catch (err) {
     // FAIL-CLOSED: identity reserved; degrade to denied, NEVER legacy.
-    return { kind: 'denied', reason: `turn-owned prep aborted after reserve: ${err instanceof Error ? err.message : String(err)}` };
+    const detail = err instanceof Error ? err.message : String(err);
+    const classified = /incompatible claim_id/.test(detail) ? `claim mismatch: ${detail}` : detail;
+    return { kind: 'denied', reason: `turn-owned prep fail-closed after reserve: ${classified}` };
   }
 }
 
@@ -270,6 +281,12 @@ export const REVIEW_VERDICT_BRIEF_SUFFIX =
   + '"approve" (change is good to merge) or "request_changes" (needs fixes), plus '
   + '"review_summary":"<one-line rationale>". The coordinator reads review_verdict '
   + 'to close the review loop on approve, or continue the fix cycle on request_changes.';
+
+export const AUTHOR_RESPONSE_BRIEF_SUFFIX =
+  '\n\n## Author response (required — integrated before loop convergence)\n'
+  + 'In your LANE-RESULT.json set "status":"completed", "artifact_type":"author_response", '
+  + 'and put the applied-fix summary and validation evidence in "body". List modified files in '
+  + '"files_changed". The coordinator integrates the worktree before accepting this turn.';
 
 export interface DispatchReviewLoopTurnInput {
   loopId: string;
@@ -288,6 +305,10 @@ export interface DispatchReviewLoopTurnInput {
   /** Model override, decoupled from agent identity (resolveModel chain). */
   model?: string;
   cwd?: string;
+  /** Test-only deterministic crash seam shared with preparation boundaries. */
+  faultInjector?: (point: TurnProjectionFaultPoint) => void;
+  /** Test-only execution seam; production callers use attemptExecution. */
+  executionAttempt?: typeof attemptExecution;
 }
 
 export interface DispatchReviewLoopTurnResult {
@@ -304,8 +325,27 @@ export interface DispatchReviewLoopTurnResult {
   /** Manual launch command when the spawn did not auto-start (fallback for the operator). */
   command?: string;
   shell?: string;
+  /** Observability only: a crossed fence with no runtime signal is not re-spawnable. */
+  authority_state?: 'crossed_unknown';
+  needs_operator?: boolean;
   /** Populated when the whole dispatch failed before/at spawn (never thrown to the caller). */
   error?: string;
+}
+
+function hasTurnRuntimeSignal(
+  cwd: string,
+  turnId: string,
+  worktreePath?: string,
+): boolean {
+  const { assignment_id: assignmentId, run_id: runId } = deriveChildIds(turnId);
+  const signalPresent = (signal: 'ack' | 'completed' | 'failed'): boolean =>
+    signalExists(cwd, assignmentId, signal, runId)
+    || signalExists(cwd, assignmentId, signal);
+  return signalPresent('ack')
+    || readHeartbeat(cwd, assignmentId, worktreePath, runId).exists
+    || readHeartbeat(cwd, assignmentId, worktreePath).exists
+    || signalPresent('completed')
+    || signalPresent('failed');
 }
 
 /**
@@ -327,7 +367,11 @@ export async function dispatchReviewLoopTurn(
   // caller always supplies one — default defensively for direct callers/tests.
   const cwd = input.cwd ?? process.cwd();
   const agent = slot.agent ?? '';
-  const scope = `review-loop:${loopId}`;
+  // A claim owns one slot's execution lineage, not the whole loop. Using the
+  // loop-wide scope here made parallel reviewers reuse/conflict on one claim
+  // and its single assignment_id pointer. The suffix stays compatible with
+  // readers that parse the leading `review-loop:<loop_id>` namespace.
+  const scope = `review-loop:${loopId}:slot:${slot.slot_id}`;
   const isReviewer = slot.role === 'reviewer';
   const result: DispatchReviewLoopTurnResult = {
     loop_id: loopId,
@@ -355,7 +399,9 @@ export async function dispatchReviewLoopTurn(
 
     let assignmentId: string | undefined;
     let turnEcho: TurnEcho | undefined;
+    let harnessBinding: HarnessBinding | undefined;
     let runLegacyProjection = true;
+    let executionWorktreePath = claimResult.worktreePath;
 
     // pln#630 — turn-owned (exactly-once) dispatch, now the DEFAULT + FAIL-CLOSED after
     // reserve. Kill-switch off (BRAINCLAW_TURN_OWNED_REVIEW=0) → runLegacyProjection stays
@@ -375,8 +421,10 @@ export async function dispatchReviewLoopTurn(
         dispatcherAgent: input.dispatcherAgent,
         dispatcherAgentId: input.dispatcherAgentId,
         sessionId: input.sessionId,
+        model: resolveModel(agent, { override: input.model }),
         isReviewer,
         cwd,
+        faultInjector: input.faultInjector,
       });
       if (prep.kind === 'denied') {
         // The exactly-once fence says this dispatch is NOT the spawner (adopted /
@@ -397,6 +445,14 @@ export async function dispatchReviewLoopTurn(
         // sabotaging a live winner is high-harm and not self-healing. So we leave it.
         result.execution_status = 'inbox_only';
         result.error = prep.reason;
+        if (
+          prep.alreadyCrossed
+          && prep.turnId
+          && !hasTurnRuntimeSignal(cwd, prep.turnId, claimResult.worktreePath)
+        ) {
+          result.authority_state = 'crossed_unknown';
+          result.needs_operator = true;
+        }
         return result;
       }
       if (prep.kind === 'won') {
@@ -405,7 +461,20 @@ export async function dispatchReviewLoopTurn(
         // ack-wrapper writes a turn-keyed completion sentinel.
         assignmentId = prep.assignmentId;
         result.assignment_id = prep.assignmentId;
-        turnEcho = { turn_id: prep.turnId, run_id: prep.runId, nonce: prep.nonce };
+        turnEcho = {
+          turn_id: prep.turnId,
+          run_id: prep.runId,
+          nonce: prep.nonce,
+          ...(prep.executionContractRef ? {
+            contract_hash: prep.executionContractRef.hash,
+            capability_snapshot_hash: prep.executionContractRef.snapshot_hash,
+          } : {}),
+          ...(prep.attemptEpoch !== undefined ? { attempt_epoch: prep.attemptEpoch } : {}),
+          ...(prep.workspaceDigest ? { workspace_digest: prep.workspaceDigest } : {}),
+        };
+        harnessBinding = prep.harnessBinding;
+        executionWorktreePath = prep.workspacePath;
+        result.worktree_path = executionWorktreePath;
         runLegacyProjection = false;
       }
       // prep.kind === 'legacy' (fail-open BEFORE identity) → fall through unchanged.
@@ -453,14 +522,29 @@ export async function dispatchReviewLoopTurn(
 
     // Reviewer turns must carry the verdict contract; author-fix turns must not
     // (an author lane has no verdict — it's mapped by scope+slot instead).
-    const briefTask = isReviewer ? input.task + REVIEW_VERDICT_BRIEF_SUFFIX : input.task;
+    const briefTask = isReviewer
+      ? input.task + REVIEW_VERDICT_BRIEF_SUFFIX
+      : input.task + AUTHOR_RESPONSE_BRIEF_SUFFIX;
     const brief = generateDispatchBrief({
       task: briefTask,
       agent,
       claimId: claimResult.claimId,
       scope,
-      worktreePath: claimResult.worktreePath,
+      worktreePath: executionWorktreePath,
       assignmentId,
+      executionContractRef: turnEcho?.contract_hash && turnEcho.capability_snapshot_hash ? {
+        version: 1,
+        hash: turnEcho.contract_hash,
+        snapshot_hash: turnEcho.capability_snapshot_hash,
+        turn_id: turnEcho.turn_id,
+      } : undefined,
+      attemptFence: turnEcho?.attempt_epoch !== undefined && turnEcho.workspace_digest ? {
+        turn_id: turnEcho.turn_id,
+        run_id: turnEcho.run_id,
+        nonce: turnEcho.nonce,
+        attempt_epoch: turnEcho.attempt_epoch,
+        workspace_digest: turnEcho.workspace_digest,
+      } : undefined,
       cwd, // pln#638 PR-6b — the context envelope reads the store
     });
 
@@ -486,7 +570,7 @@ export async function dispatchReviewLoopTurn(
           scope,
           claim_id: claimResult.claimId,
           ...(assignmentId ? { assignment_id: assignmentId } : {}),
-          worktree_path: claimResult.worktreePath,
+          worktree_path: executionWorktreePath,
         },
       },
       cwd,
@@ -496,23 +580,30 @@ export async function dispatchReviewLoopTurn(
     if (assignmentId) {
       try {
         attachAssignmentMessageToClaim(claimResult.claimId, msg.id, cwd);
-        linkClaimToAssignment(claimResult.claimId, assignmentId, cwd);
-        transitionAssignment(assignmentId, 'offered', { actor: input.dispatcherAgent }, cwd);
+        if (turnEcho) ensureClaimAssignmentBinding(claimResult.claimId, assignmentId, cwd);
+        else linkClaimToAssignment(claimResult.claimId, assignmentId, cwd);
+        const logicalAssignment = loadAssignment(assignmentId, cwd);
+        if (logicalAssignment?.status === 'created' || logicalAssignment?.status === 'retrying') {
+          transitionAssignment(assignmentId, 'offered', { actor: input.dispatcherAgent }, cwd);
+        } else if (turnEcho?.attempt_epoch === undefined || logicalAssignment?.status !== 'started') {
+          transitionAssignment(assignmentId, 'offered', { actor: input.dispatcherAgent }, cwd);
+        }
         patchAssignmentMessageId(assignmentId, msg.id, cwd);
       } catch (linkErr) {
         result.error = `assignment linkage failed: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`;
       }
     }
 
-    const invoke = buildInvokeCommand(agent, brief, {
+    const invoke = buildHarnessInvocation(agent, brief, {
       mode: 'worker',
       model: resolveModel(agent, { override: input.model }),
-    });
+      binding: harnessBinding,
+    })?.invoke;
 
-    const execResult = await attemptExecution(invoke, {
+    const execResult = await (input.executionAttempt ?? attemptExecution)(invoke, {
       agent,
       autoExecute: true,
-      worktreePath: claimResult.worktreePath,
+      worktreePath: executionWorktreePath,
       claimId: claimResult.claimId,
       assignmentId,
       dispatcherAgent: input.dispatcherAgent,
@@ -525,6 +616,9 @@ export async function dispatchReviewLoopTurn(
     result.command = execResult.command;
     result.shell = execResult.shell;
     if (execResult.error && !result.error) result.error = execResult.error;
+    if (execResult.execution_status === 'delivered_and_started') {
+      turnProjectionFaultPoint(input, 'after_spawn');
+    }
 
     // pln#630 PR2c-b — a turn-owned run was preallocated `created`; once the
     // worker actually spawned, move it to `running` so it leaves the PR2c-lease

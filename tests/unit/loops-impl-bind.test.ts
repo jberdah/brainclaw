@@ -15,12 +15,9 @@ import { persistState } from '../../src/core/state.js';
 import type { PlanItem, Sequence } from '../../src/core/schema.js';
 
 /**
- * pln#632 impl-loop bind — runImplBind dispatches an implementation loop's LINKED
- * sequence (by id, no active-sequence hijack) and advances bind→execute. dryRun previews
- * without spawning or advancing; a wrong-kind / no-linked-sequence loop is rejected.
- *
- * Every test dispatches with dryRun:true or autoExecute:false, so NO worker process is
- * ever spawned — only the loop-state + delivery paths are exercised.
+ * P0C implementation bind — runImplBind validates an implementation loop's linked
+ * sequence and advances bind→execute without dispatching. Worker launch belongs to the
+ * common turn(dispatch=true) AttemptAuthority path.
  */
 
 function createStore(): string {
@@ -104,7 +101,7 @@ describe('pln#632 runImplBind', () => {
   beforeEach(() => { cwd = createStore(); seedAgents(cwd); });
   afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
 
-  it('dryRun → previews the dispatch, does NOT advance, loop stays in bind, sequence NOT activated', async () => {
+  it('dryRun validates the link, does NOT advance, and never dispatches', async () => {
     const seqId = seedReadySequence(cwd);
     const loopId = openImplLoop(cwd, [seqId]);
     const res = await runImplBind({ loop_id: loopId, dispatcherAgent: 'coord', dryRun: true }, cwd);
@@ -113,28 +110,38 @@ describe('pln#632 runImplBind', () => {
     assert.equal(getLoop(loopId, cwd)!.current_phase, 'bind', 'dryRun does not advance');
     assert.equal(getActiveSequence(cwd), undefined, 'dryRun never activates the linked sequence');
     assert.equal(res.advanced_to, undefined);
+    assert.equal(res.dispatch, null);
+    assert.equal(res.messages_sent, 0);
+    assert.match(res.warnings.join(' '), /engine-only/);
   });
 
-  it('real bind (autoExecute:false, no spawn) → dispatches + advances bind→execute; no active-sequence hijack', async () => {
+  it('real bind is engine-only: validates + advances bind→execute with zero delivery side effects', async () => {
     const seqId = seedReadySequence(cwd);
     const loopId = openImplLoop(cwd, [seqId]);
+    // Historical launch options remain accepted during rollout, but are inert.
     const res = await runImplBind({ loop_id: loopId, dispatcherAgent: 'coord', autoExecute: false }, cwd);
     assert.equal(res.action, 'bound');
     assert.equal(res.advanced_to, 'execute');
     assert.equal(res.sequence_id, seqId);
-    assert.ok(res.dispatch, 'a dispatch result is attached');
-    // Strong assertion (review Finding 4): a real assignment was actually delivered — a
-    // regression that dispatched nothing must fail here, not slip past a typeof check.
-    assert.ok(res.messages_sent >= 1, `bind delivered at least one assignment (got ${res.messages_sent})`);
-    assert.equal(res.dispatch!.messages_sent.length, res.messages_sent, 'reported count matches the dispatch result');
+    assert.equal(res.dispatch, null, 'bind cannot bypass the common loop-turn driver');
+    assert.equal(res.messages_sent, 0, 'bind never delivers an assignment');
+    assert.match(res.warnings.join(' '), /launch options are retained but ignored/);
     const loop = getLoop(loopId, cwd)!;
     assert.equal(loop.current_phase, 'execute', 'bind advanced the loop into the execute↔verify cycle');
-    // The KEY isolation guarantee: dispatching the loop's sequence never mutated the
-    // project-wide active-sequence pointer.
     assert.equal(getActiveSequence(cwd), undefined, 'the linked sequence stays draft — no global active-sequence hijack');
+    assert.equal(
+      fs.existsSync(path.join(cwd, '.brainclaw', 'coordination', 'assignments')),
+      false,
+      'engine-only bind creates no assignment store',
+    );
+    assert.deepEqual(
+      fs.readdirSync(path.join(cwd, '.brainclaw', 'coordination', 'inbox')),
+      [],
+      'engine-only bind sends no worker message',
+    );
   });
 
-  it('is idempotent — a second bind on a loop already past bind is a noop (no re-dispatch)', async () => {
+  it('is idempotent — a second bind on a loop already past bind is a noop', async () => {
     const seqId = seedReadySequence(cwd);
     const loopId = openImplLoop(cwd, [seqId]);
     await runImplBind({ loop_id: loopId, dispatcherAgent: 'coord', autoExecute: false }, cwd);
@@ -144,19 +151,17 @@ describe('pln#632 runImplBind', () => {
     assert.equal(getLoop(loopId, cwd)!.current_phase, 'execute', 'still in execute, not cycled');
   });
 
-  it('rejects a PAUSED loop WITHOUT dispatching (review Finding 1 — no spawn on a held loop)', async () => {
+  it('rejects a PAUSED loop without advancing', async () => {
     const seqId = seedReadySequence(cwd);
     const loopId = openImplLoop(cwd, [seqId]);
     pause({ id: loopId, actor: 'coord', reason: 'operator hold' }, cwd);
     const paused = getLoop(loopId, cwd)!;
     assert.equal(paused.status, 'paused');
     assert.equal(paused.current_phase, 'bind', 'pause keeps the loop in the bind phase (the trap)');
-    // Must throw BEFORE any dispatch — a paused loop still sitting in `bind` must not spawn.
     await assert.rejects(
       () => runImplBind({ loop_id: loopId, dispatcherAgent: 'coord', autoExecute: false }, cwd),
       /requires an open loop/,
     );
-    // Proof no side effect fired: no active sequence, loop untouched, still paused in bind.
     assert.equal(getActiveSequence(cwd), undefined);
     const after = getLoop(loopId, cwd)!;
     assert.equal(after.status, 'paused');
@@ -200,22 +205,31 @@ describe('pln#632 runImplBind', () => {
   });
 });
 
-describe('pln#632 bclaw_loop(intent="bind") facade — async handler wiring', () => {
+describe('P0C bclaw_loop(intent="bind") facade — engine-only handler wiring', () => {
   let cwd: string;
   beforeEach(() => { cwd = createStore(); seedAgents(cwd); });
   afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
 
-  it('drives bind through the async handler → ok, loop advanced to execute', async () => {
+  it('advances to execute, reports zero dispatch, and points to turn(dispatch=true)', async () => {
     const seqId = seedReadySequence(cwd);
     const loopId = openImplLoop(cwd, [seqId]);
     const handled = await handleBclawLoop({
       args: { intent: 'bind', loop_id: loopId, auto_execute: false, agent: 'coord' }, cwd,
     });
     assert.equal(handled.response.status, 'ok');
-    const result = handled.response.result as { action: string; advanced_to: string | null; loop: { current_phase: string } };
+    const result = handled.response.result as {
+      action: string;
+      advanced_to: string | null;
+      dispatched: number;
+      dispatch: unknown;
+      loop: { current_phase: string };
+    };
     assert.equal(result.action, 'bound');
     assert.equal(result.advanced_to, 'execute');
     assert.equal(result.loop.current_phase, 'execute');
+    assert.equal(result.dispatched, 0);
+    assert.equal(result.dispatch, null);
+    assert.match(handled.response.warnings.join(' '), /turn.*dispatch=true/);
   });
 
   it('dryRun through the facade previews without advancing', async () => {

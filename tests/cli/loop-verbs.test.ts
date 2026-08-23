@@ -204,7 +204,7 @@ describe('runLoopCommand', () => {
     assert.equal(result.current_phase, 'revision');
   });
 
-  it('add-artifact attaches a fresh artifact and the loop reflects it', async () => {
+  it('add-artifact attaches a fresh artifact and ignores caller-spoofed producer identity', async () => {
     const loop = openReview(workspace.dir);
     await runLoopCommand(
       'add-artifact',
@@ -222,7 +222,8 @@ describe('runLoopCommand', () => {
     assert.equal(onDisk.artifacts.length, 1);
     assert.equal(onDisk.artifacts[0].type, 'note');
     assert.equal(onDisk.artifacts[0].body, '{"summary":"small doc"}');
-    assert.equal(onDisk.artifacts[0].produced_by, 'codex');
+    assert.equal(onDisk.artifacts[0].produced_by, 'bclaw_loop');
+    assert.notEqual(onDisk.artifacts[0].produced_by, 'codex');
   });
 
   it('--json emits parseable JSON with expected fields', async () => {

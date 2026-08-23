@@ -1,15 +1,39 @@
 # Loop engine
 
-brainclaw coordinates many agents against shared state.
-The Loop engine turns repetitive multi-turn workflows
-— review, ideation, implementation, research, and debugging —
-into **first-class, persistable, automatable objects**.
+brainclaw coordinates many agents against shared state. The Loop engine
+turns repetitive multi-turn workflows — review, ideation, implementation,
+research, and debug — into **first-class, persistable, automatable objects**
+sharing one common runtime.
 
 Status: **shipped**. `bclaw_loop` exposes the persistent engine and its five
 built-in protocols; `bclaw_coordinate` and `bclaw_dispatch` add ergonomic
 shortcuts for ideation and review. This document retains the RFC-level
 concurrency contract and implementation history where it explains an
 invariant, but its operational sections describe the surface available today.
+
+**How this doc is organised.** It starts with the shared engine — authority,
+phases, artifacts, lifecycle verbs, gates, recovery, observability — and
+then points at five per-protocol guides. Each protocol has its own page in
+[`docs/loops/`](../loops/); this page is not a review guide. The five
+protocols are equal citizens of the engine, and this is not a review feature
+with a few extensions.
+
+- [Review](../loops/review.md) — validate a change against a reviewer.
+- [Ideation](../loops/ideation.md) — pressure-test a proposal against
+  project memory.
+- [Implementation](../loops/implementation.md) — drive a plan+sequence to a
+  green verify.
+- [Research](../loops/research.md) — converge open-ended investigation to
+  a synthesis.
+- [Debug](../loops/debug.md) — drive a broken system back to green.
+
+Identity, dispatch decisions and spawn authority live in a separate façade
+over the reservation core — see
+[Attempt authority](./attempt-authority.md). The exact worker, workspace,
+artifact and evidence expectations for each physical turn are frozen by the
+[Execution contract and capability snapshot](./execution-contract.md).
+Artifacts then cross the server-controlled commit boundary described in
+[Evidence envelopes, attestations, and protocol gates](./evidence-attestations.md).
 
 ## Why
 
@@ -38,6 +62,72 @@ A Loop is a **persistent thread of structured work** with:
 A Loop stores *references* to existing objects — it never duplicates them.
 Claims, handoffs, and candidates remain the source of truth for their own data.
 
+## Attempt authority
+
+Every dispatched turn crosses several boundaries — the loop mints identity,
+an assignment must be persisted, a run must be launched, evidence must
+eventually be accepted. `AttemptAuthority` owns those execution decisions while
+the Loop Engine owns phases, artifacts, gates, and convergence. It is common to
+all five kinds and adds no event journal.
+
+`prepareTurnExecution` applies the same projections-before-crossing path to
+every worker phase and refuses `engine` or `manual` phases before reservation.
+The first worker phase for a `(loop_id, slot_id, iteration)` keeps the legacy
+deterministic `turn_id`. If that same reusable slot enters another worker phase
+without an iteration bump, the resolver derives a versioned identity from
+`(loop_id, slot_id, phase, iteration)` instead. Replays of the same phase still
+adopt one cell, while compatible legacy reservations remain adoptable during
+crash recovery and upgrades. This rule is kind-neutral: it prevents one phase
+from inheriting another phase's already-consumed launch authority in review,
+ideation, research, debug, or any future multi-phase protocol.
+The first physical generation follows `reserve → commit → durable projections
+→ launch(0)`. A fenced takeover keeps the same `turn_id` and `assignment_id`,
+but creates a new epoch, run, nonce, contract, and isolated workspace. Re-entry
+through the same common path projects that successor and races
+`launch(next_epoch)` immediately before spawn.
+
+Completion is accepted only on the full generation fence. Settlement and
+takeover contend on one immutable `close(epoch)` decision, so an old worker
+cannot settle after a successor wins. Mutable AgentRun and head records are
+replayable projections, not authority. See [Attempt authority](./attempt-authority.md)
+for the Windows-safe publish protocol, two-release activation, and recovery.
+
+Before reservation, that common adapter resolves the selected agent against a
+typed capability requirement and hashes an immutable ExecutionContract. The
+full contract lives on TurnReservation; Assignment and AgentRun carry the same
+hash/reference and capability snapshot before crossing. This is one shared
+dispatch substrate for all five protocols, not protocol-specific review
+metadata. See
+[Execution contract and capability snapshot](./execution-contract.md).
+
+The contracted attempt then passes through a
+[Harness adapter](./harness-adapters.md). That adapter binds a concrete agent
+harness and normalizes its output, while the existing `ExecutionAdapter` owns
+the process transport. Neither layer owns phases, artifacts, evidence, gates,
+or convergence: those remain here in the shared engine. The same boundary is
+used for every worker phase in the five-kind table below.
+
+Phase-specific execution metadata lives in `LOOP_KIND_POLICIES`; phase graphs,
+gates, iteration and stop conditions remain exclusively in `DEFAULT_PROTOCOLS`.
+The current execution split is deliberately visible here for all five protocols:
+
+| Kind | Worker phases | Engine phases | Manual phases | Integration required before convergence |
+|---|---|---|---|---|
+| `review` | `findings`, `author_response`, `followup_review` | `verdict` | `change_summary` | `author_response` |
+| `ideation` | `critique`, `revision`, `synthesis` | — | `proposal` | — |
+| `implementation` | `execute` | `bind`, `verify` | `handoff_ready` | `execute` |
+| `research` | `investigate`, `synthesize` | `conclude` | — | — |
+| `debug` | `reproduce`, `hypothesize`, `isolate`, `fix` | — | `handoff` | `fix` |
+
+Every worker result must carry the phase's explicit `artifact_type`. A summary
+is useful observability, but it is never proof that opens a gate. Report harvest
+may reconcile read-only phases; mutating phases keep their claim until
+`harvest --integrate` has integrated the worktree.
+The concurrency and recovery contract lives in the dedicated document —
+see [Attempt authority](./attempt-authority.md) for the full model,
+identity matrix, ordered dispatch and invariants I1–I18. This page assumes
+that contract without restating it.
+
 ## Data model
 
 ```ts
@@ -64,6 +154,10 @@ interface LoopThread {
   artifacts: LoopArtifact[];
   linked?: LoopLinks;                   // top-level context only (plan/sequence). Other refs live on artifacts/slots.
   stop_condition?: StopCondition;
+  evidence_policy?: {                    // absent only on explicit/pre-policy threads
+    version: 'gate-policy-v1';
+    mode: 'shadow' | 'strict';
+  };
 
   created_at: string;                   // ISO
   updated_at: string;
@@ -75,12 +169,19 @@ type LoopStatus = 'open' | 'paused' | 'completed' | 'blocked' | 'cancelled';
 type ReviewMode = 'asymmetric' | 'symmetric';
 
 interface LoopProtocolConfig {
-  review_mode?: ReviewMode;             // review loops persist their selected mode so resume/turn handlers are deterministic
+  review_mode?: ReviewMode;
+  iteration?: { cycle: string[]; max_iterations: number; exit_when: 'critic_signal' | 'no_new_critique_artifacts' | 'command_green' };
+  verify?: { command: string[]; timeout_ms?: number };
+  preset?: string;
+  max_operator_questions?: number;
+  max_pause_duration?: string;           // ISO-8601 duration
 }
 
 interface LoopPhase {
   name: string;
   advance_when?: 'all' | 'any';         // default 'all' — every slot turn in this phase must be `done` before advance
+  context_filter?: LoopContextCategory[];
+  advance_gate?: StopCondition;
 }
 
 interface LoopSlot {
@@ -91,7 +192,8 @@ interface LoopSlot {
   assignment_id?: string;               // set when a turn is dispatched
   claim_id?: string;                    // for execution loops, the claim held by this slot
   phase?: string;                       // which phase this slot currently participates in (supports parallel slots per phase)
-  status: 'open' | 'assigned' | 'working' | 'done';
+  status: 'open' | 'assigned' | 'working' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
+  current_turn_id?: string;             // immutable attempt currently owning this reusable slot
 }
 
 interface LoopArtifact {
@@ -100,8 +202,9 @@ interface LoopArtifact {
   type: string;                         // "finding" | "synthesis" | "verdict" | "plan_draft" | ...
   ref?: LoopRef;                        // preferred: link to an existing primitive
   body?: string;                        // inline content ≤ 4 KB; else force `ref`
-  produced_by?: SlotId;
+  produced_by?: string;                 // derived server-side from slot/engine/coordinator context
   produced_at: string;
+  evidence?: EvidenceEnvelope;           // server-sealed; never caller-authored
 }
 
 type LoopRef =
@@ -123,7 +226,10 @@ type AtomicStopCondition =
   | { kind: 'phase_reached'; phase: string }
   | { kind: 'reviewer_green' }                          // an `accepted` verdict artifact in any phase
   | { kind: 'max_iterations'; n: number }               // hard cap; on hit, close with status=blocked
+  | { kind: 'min_iterations'; n: number }
   | { kind: 'artifact_produced'; phase: string; type: string }
+  | { kind: 'min_artifacts_by_type'; type: string; n: number; scope: 'phase' | 'loop' }
+  | { kind: 'no_open_questions' }
   | { kind: 'manual' };                                 // only closes on explicit close
 
 type StopCondition =
@@ -132,6 +238,9 @@ type StopCondition =
   | { kind: 'all'; conditions: StopCondition[] };       // AND — every clause must match
 
 // LoopEvent is a discriminated union with typed per-kind payloads (no loose `payload` map).
+// The excerpt below shows the base lifecycle. The shipped union also includes
+// turn_reserved, phase_advance_blocked, max_iterations_reached, input/file-apply,
+// and slot-status events. Gate-driving transitions carry GateDecision.
 interface LoopEventBase {
   event_id: string;                                     // ULID
   loop_id: LoopId;
@@ -146,6 +255,7 @@ type LoopEvent =
   | (LoopEventBase & { kind: 'phase_advanced'; from_phase: string; to_phase: string; iteration: number; reason?: string })
   | (LoopEventBase & { kind: 'turn_assigned'; slot_id: SlotId; phase: string; assignment_id?: string; input?: string; retry_of?: string /* prior event_id */ })
   | (LoopEventBase & { kind: 'turn_completed'; slot_id: SlotId; phase: string; artifact_id?: string; outcome: 'done' | 'failed' | 'cancelled'; failure_reason?: string })
+  | (LoopEventBase & { kind: 'attempt_generation_changed'; slot_id: SlotId; turn_id: string; assignment_id: string; from_epoch: number; to_epoch: number; from_run_id: string; to_run_id: string; close_digest: string; cause: string })
   | (LoopEventBase & { kind: 'artifact_added'; artifact_id: string; phase: string; type: string; produced_by?: SlotId })
   | (LoopEventBase & { kind: 'linked'; target: LoopRef })
   | (LoopEventBase & { kind: 'paused'; reason?: string })
@@ -223,18 +333,43 @@ file lists which artifact types are ref-based and which use inline JSON bodies.
 
 ## Lifecycle verbs
 
-The engine exposes four active verbs. Each one mutates state, appends an event, and returns the updated `LoopThread`. **All verbs are strictly synchronous-on-state and asynchronous-on-work**: any downstream dispatch (spawning a CLI, calling another MCP tool) is fire-and-forget from the commit window, so the per-loop lock is always released quickly.
+The engine exposes one shared lifecycle for every protocol. Mutating verbs
+persist state plus causal events and return the updated `LoopThread`.
+**All verbs are strictly synchronous-on-state and asynchronous-on-work**: any
+downstream dispatch continues outside the commit window so the per-loop lock
+is released quickly.
 
 - **open** — create a new loop. Inserts `opened` event; `current_phase` set to `phases[0].name`.
-- **turn** — record that a phase's work is assigned to a slot. Fire-and-forget dispatch: the handler kicks off the downstream call (e.g. `bclaw_coordinate` to spawn a CLI) and returns immediately. `slot.status` flips to `'assigned'` with an `assignment_id`; the actual work continues outside the lock. Inserts `turn_assigned`. The slot reports back later via a separate `complete_turn` call.
+- **turn** — record that a phase's work is assigned to a slot. With
+  `dispatch` absent/false it performs state mutation only and may receive an
+  existing `assignment_id`. Trusted `dispatch: true` routes a worker phase
+  through the common AttemptAuthority preparation/projection/crossing path and
+  launches outside the loop lock; engine/manual phases are refused before
+  reservation. `slot.status` flips to `'assigned'`, and the worker reports back
+  later through harvest/reconciliation or `complete_turn`. Inserts
+  `turn_assigned`.
 - **advance** — evaluate `stop_condition`; if satisfied, `close` with `status=completed`. Otherwise, transition `current_phase` to the next phase (or a specified one). Inserts `phase_advanced`. If `advance` revisits an earlier phase (e.g. a fixup round re-enters `findings`), `iteration_count` increments.
 - **close** — terminal: set `status` to `completed | cancelled | blocked` and `closed_at`. Inserts `closed`.
 
-Two auxiliary verbs cover quality of life:
+Additional shared and engine-owned actions complete the lifecycle:
 
 - **pause** / **resume** — suspend a loop without closing (e.g. waiting on an external input).
 - **add_artifact** — attach an artifact to a phase without moving on.
 - **complete_turn** — close out a previously-assigned turn: flips `slot.status` to `'done'` (or `'failed' | 'cancelled'`), optionally attaches an artifact carrying the outcome. Emitted by the slot agent itself when its dispatched work returns. Separate from `turn` precisely because the dispatch is async. Authorization is strict: the caller's `agentId` must equal that slot's `agent_id`, unless the caller is the loop's `created_by`, which is the only admin override.
+- **takeover** — coordinator-only cross-kind recovery action. It closes the
+  active physical generation, arms a successor in a distinct isolated
+  workspace, and records `attempt_generation_changed`. It does not spawn; the
+  normal turn dispatch must still win the successor's launch cell.
+- **request_input** / **provide_input** — bounded, evidence-backed operator clarification usable by any protocol.
+- **bind** — implementation-loop engine action that validates the linked sequence and advances to `execute`; it never launches a worker.
+- **verify** — implementation/debug engine action that runs the opener-configured command outside the loop lock, then records a verification-attested report.
+
+Artifact authority is sealed at these verb boundaries. `produced_by` is
+derived from the authenticated slot/engine/coordinator context. A narrative
+`accepted` verdict or `{passed:true}` report is stored but cannot open a gate
+unless its envelope carries the policy-specific approval or verification
+attestation. Gate decisions and rejection reasons are persisted on causal
+LoopEvents; RuntimeEvents remain telemetry only.
 
 ## MCP facade: `bclaw_loop(intent)`
 
@@ -250,16 +385,21 @@ interface BclawLoopCallerEnvelope {
 
 // Per-intent payloads. Every mutating intent supports `expected_version` + `client_request_id`.
 type BclawLoopInput = BclawLoopCallerEnvelope & (
-  | { intent: 'open';          kind: LoopKind; title: string; goal?: string; phases?: LoopPhase[]; slots?: Partial<LoopSlot>[]; linked?: LoopLinks; stop_condition?: StopCondition; mode?: ReviewMode /* review only; persisted to loop.protocol.review_mode; default 'asymmetric' */ }
-  | { intent: 'turn';          loop_id: LoopId; slot_id?: SlotId; role?: string; input?: string; dispatch?: boolean; expected_version?: number }
-  | { intent: 'complete_turn'; loop_id: LoopId; slot_id: SlotId; artifact?: Omit<LoopArtifact, 'artifact_id' | 'produced_at'>; outcome?: 'done' | 'failed' | 'cancelled'; failure_reason?: string; expected_version?: number }
+  | { intent: 'open';          kind: LoopKind; title: string; goal?: string; phases?: LoopPhase[]; slots?: Partial<LoopSlot>[]; linked?: LoopLinks; stop_condition?: StopCondition; mode?: ReviewMode /* review only */; verify?: { command: string[]; timeout_ms?: number }; allow_orphan?: boolean }
+  | { intent: 'turn';          loop_id: LoopId; slot_id?: SlotId; role?: string; input?: string; assignment_id?: string; claim_id?: string; dispatch?: boolean; auto_execute?: boolean; model?: string; target_agents?: string[]; expected_version?: number }
+  | { intent: 'complete_turn'; loop_id: LoopId; slot_id: SlotId; assignment_id?: string; turn_id?: string; run_id?: string; nonce?: string; attempt_epoch?: number; execution_contract_hash?: string; workspace_digest?: string; artifact?: Pick<LoopArtifact, 'phase' | 'type' | 'body' | 'ref' | 'addresses_critique'>; outcome?: 'done' | 'failed' | 'cancelled'; failure_reason?: string; expected_version?: number }
+  | { intent: 'takeover';      loop_id: LoopId; slot_id: SlotId; turn_id: string; expected_epoch: number; cause: string; liveness_evidence: string; external_effect_policy: 'none' | 'idempotent' | 'externally_fenced'; next_workspace_path: string; takeover_mode?: 'takeover' | 'retry' }
   | { intent: 'advance';       loop_id: LoopId; to_phase?: string; reason?: string; force?: boolean; expected_version?: number }
-  | { intent: 'add_artifact';  loop_id: LoopId; artifact: Omit<LoopArtifact, 'artifact_id' | 'produced_at'>; expected_version?: number }
+  | { intent: 'add_artifact';  loop_id: LoopId; artifact: Pick<LoopArtifact, 'phase' | 'type' | 'body' | 'ref' | 'addresses_critique'>; expected_version?: number }
   | { intent: 'pause';         loop_id: LoopId; reason?: string; expected_version?: number }
   | { intent: 'resume';        loop_id: LoopId; expected_version?: number }
   | { intent: 'close';         loop_id: LoopId; status: 'completed' | 'cancelled' | 'blocked'; reason?: string; expected_version?: number }
+  | { intent: 'verify';        loop_id: LoopId }
+  | { intent: 'bind';          loop_id: LoopId; dry_run?: boolean; lanes?: string[]; auto_execute?: boolean; model?: string; max_assignments?: number }
+  | { intent: 'request_input'; loop_id: LoopId; slot_id: SlotId; phase: string; question_text: string; evidence: string[]; suggested_default?: string; options?: OperatorQuestionOption[]; pause_scope: 'slot' | 'loop'; on_timeout: 'use_default' | 'cancel_loop' | 'continue_incomplete'; timeout_at?: string; expected_version?: number }
+  | { intent: 'provide_input'; loop_id: LoopId; replies_to: string; resolved_via: 'answer' | 'choose' | 'skip' | 'timeout_default'; answer_text?: string; chosen_option_id?: string; by?: 'operator' | 'system'; expected_version?: number }
   | { intent: 'get';           loop_id: LoopId; include_events?: boolean }
-  | { intent: 'list';          kind?: LoopKind; status?: LoopStatus; linked_plan_id?: string; limit?: number; offset?: number }
+  | { intent: 'list';          kind?: LoopKind; status?: LoopStatus; limit?: number; offset?: number }
 );
 
 // Standard facade envelope, matching bclaw_work / bclaw_coordinate output shape.
@@ -284,6 +424,18 @@ type NextExpectedHint =
   | { action: 'advance'; intent: 'bclaw_loop.advance'; from_phase: string; to_phase: string; blocking_on: SlotId[] }
   | { action: 'close';   intent: 'bclaw_loop.close';   reason: string };
 ```
+
+The `complete_turn` fence fields remain optional in the transport schema for
+legacy turns. When the slot is backed by AttemptAuthority v2, the runtime
+requires the complete tuple — assignment, turn, run, nonce, epoch, execution
+contract hash and workspace digest — and rejects stale or partial evidence
+before mutating the slot or LoopEvent journal.
+
+For `turn(dispatch:true)`, a slot with a frozen agent keeps that identity. An
+unbound slot can instead receive `target_agents`; Brainclaw resolves the
+capability requirement deterministically, independent of array order. A
+pre-cross rejection can therefore exclude that candidate and replay selection
+without minting a second attempt.
 
 **Why a single facade, not `bclaw_loop_open`/`_advance`/`_close` tools.** Consistency beats granularity for agent-facing DX. The two existing facades are intent-based; adding a third in the same style keeps the surface small and predictable. Agents that need low-level control can still go to the underlying store (local file reads, not MCP).
 
@@ -315,8 +467,8 @@ one workflow among the five.
 will drive or dispatch the resulting loop rather than creating an inert thread.
 The shared lifecycle verbs are `turn`, `complete_turn`, `advance`,
 `add_artifact`, `pause`, `resume`, and `close`. Implementation loops additionally
-use `bind` to dispatch their linked sequence and `verify` to run their declared
-command.
+use engine-only `bind` to validate their linked sequence and enter `execute`,
+then `turn(dispatch:true)` for worker slots; `verify` runs their declared command.
 
 ### Clarification is a cross-cutting primitive
 
@@ -341,84 +493,88 @@ The Loop engine is a **control plane**; existing primitives remain the **data pl
 
 A Loop never copies these objects — it links them. Deleting the linked primitive does not break the loop; the reference just becomes dangling, surfaced in diagnostics.
 
-## Review automation (one workflow)
+## Per-protocol guides
 
-Review is the most automated convenience path: manual review round-trips can
-disappear. Its special handling below does not change the general Loop Engine
-model described in [Supported workflows](#supported-workflows).
+Each of the five kinds has its own operator-facing guide with the same
+template — purpose, default protocol, entry points, advance gates, stop
+condition, artifacts, routing, recovery, "when NOT to use", reference
+implementation. Consult them for anything protocol-specific.
 
-The existing `review` intent in `bclaw_coordinate` already creates a review candidate. We extend it — **strictly backward-compatible** — with an optional flag `open_loop?: boolean` that **defaults to `false`**. Every existing `review` call behaves exactly as today; a caller must explicitly opt in by passing `open_loop: true`. The coordinate enum was extended in v1.5.0 to add `ideate` (memory-confrontation ideation_loop driver — see [ideation-loop.md](./ideation-loop.md) for the full design and §[Automation: extending `bclaw_coordinate(intent='ideate')`](#automation-extending-bclaw_coordinateintentideate) below for a summary). The current vocabulary is `assign | consult | review | reroute | summarize | ideate`. A future minor version may flip the `open_loop` default after telemetry confirms adoption, but such a flip will be gated by MCP schema versioning (pln#392) and surfaced in the changelog.
+- [Review](../loops/review.md) — the most automated coordinator shortcut,
+  autonomous fix cycle on `request_changes`, symmetric review-and-fix mode.
+- [Ideation](../loops/ideation.md) — memory-confrontation with a
+  per-phase context filter and a `critique↔revision` iteration block; see
+  also the full RFC in [ideation-loop.md](./ideation-loop.md).
+- [Implementation](../loops/implementation.md) — `bind → execute↔verify →
+  handoff_ready`, deterministic `command_green` exit.
+- [Research](../loops/research.md) — `investigate↔synthesize → conclude`,
+  no `blocked` outcome, `critic_signal` exit.
+- [Debug](../loops/debug.md) — `reproduce → hypothesize↔isolate↔fix →
+  handoff`, mirrors implementation's `command_green` gate on the repro.
 
-When `bclaw_coordinate(intent='review', open_loop: true)` is called, it:
+`bclaw_coordinate` exposes two of these as ergonomic shortcuts today:
+`intent='review'` (with `open_loop: true`) and `intent='ideate'`. Both
+were extended strictly backward-compatibly — every prior call still
+behaves as before. The current coordinate vocabulary is
+`assign | consult | review | reroute | summarize | ideate`.
 
-1. Creates the review candidate as today.
-2. Opens a `review` loop via `bclaw_loop(intent: 'open', kind: 'review', ...)` with slots `{role: 'author', agent: caller}`, `{role: 'reviewer', agent: target}`.
-3. Links the provided handoff/candidate to the loop as an artifact at `change_summary`.
-4. Advances to `findings` and calls `bclaw_loop(intent: 'turn')` to dispatch to the reviewer.
-5. On turn completion with a verdict artifact, auto-advances; `reviewer_green` stop closes.
-6. On a `request_changes` verdict, the fix cycle re-dispatches the reviewer into the same worktree until `approve` or the `max_iterations` cap.
+## Common engine extensions used by protocols
 
-**How the verdict reaches the loop (shipped, pln#628 Focus 4B).** A dispatched reviewer worker does not call `bclaw_loop` itself — it writes its outcome to `LANE-RESULT.json` at the worktree root, including an optional `review_verdict` (`approve` | `request_changes`) and `review_summary`. When the coordinator runs `brainclaw harvest <assignment_id>` (report-only path and `--integrate`), a review lane carrying a `review_verdict` is mapped onto its loop: brainclaw records a `verdict` artifact on the reviewer slot (`approve` → an `accepted…` body) and calls `advance`, which **auto-closes the loop on `reviewer_green` for `approve`** — no human driving `complete_turn`/`advance`.
+Three engine extensions are shared across protocols; per-protocol guides
+reference them rather than re-defining them.
 
-**The autonomous fix cycle (PR2, `--integrate` only).** On `request_changes`, `harvest --integrate` bumps the loop's round counter, **keeps the claim + worktree alive**, and re-dispatches the same reviewer slot into that **same worktree** (symmetric mode) with a findings-aware brief: apply the requested changes in place, then re-review. Commits accumulate on one branch — no fresh worktree per turn, so the branch-per-scope / refuse-unharvested-commits invariants are never tripped. The cycle repeats until `approve` (→ `reviewer_green` close) or the `max_iterations` cap (n=3 → auto-close `blocked`, handed to a human). The report-only harvest path never cycles (it can neither re-dispatch nor retain the claim); it defers `request_changes` to `--integrate` and still closes on `approve`. The mapping is idempotent, resolves the reviewer slot strictly by `assignment_id` (so symmetric multi-reviewer loops target the right slot), and runs the `complete_turn`+`advance` pair under the loop lock so an interrupted pass resumes rather than stalls. Asymmetric (author ≠ reviewer) cross-agent worktree sharing is a planned follow-up.
-
-### Symmetric review-AND-fix mode
-
-By default, the phases `findings` and `author_response` follow the classical asymmetric split — the reviewer identifies issues, the author applies fixes on the next turn. That doubles the number of round-trips: every issue needs one full turn to be identified, then another to be fixed.
-
-When both slots are coding agents with write access to the artifact under review (the common case with `bclaw_coordinate(intent='review', open_loop: true, mode: 'symmetric')`), the protocol collapses those two roles into one behavior per turn: **the reviewer reviews AND applies whatever fixes it can make directly**, then returns a summary artifact of changes applied + a request for the other slot to review those changes. The other slot then takes its turn with the same semantics — review-and-fix on whatever is left — and so on. Exit is reached when a reviewer turn produces a green verdict with no unapplied findings and with `changes_applied` omitted or empty for that turn, or when `max_iterations` is hit.
-
-The phase sequence stays the same (`findings → author_response → followup_review`), but each turn may emit at most one `changes_applied` artifact alongside any `finding` artifacts. That artifact must summarize the concrete edits made in that turn and point at the mutated object via `ref` when one exists (candidate, handoff, message, or other linked primitive); it is a turn summary, not a second source of truth. The next-turn handler always starts from the committed-and-reviewed state of the previous turn, not from the original draft. This halves the round-trip count when fixes are mechanical enough for the reviewer to own, which is the common case for spec work and small-to-mid refactors.
-
-Selector: `mode: 'symmetric' | 'asymmetric'` on the `open_loop` call (or directly on `bclaw_loop(intent='open', kind='review', mode:…)`). Defaults to `asymmetric` for safety. On `open`, the server persists the resolved selection to `loop.protocol.review_mode` so resume/turn handlers do not depend on the original request envelope. If `symmetric` is requested but the active slot is human-operated or lacks write authority to the reviewed artifact, that turn degrades gracefully to asymmetric behavior for that slot: findings/verdicts are still allowed, `changes_applied` is omitted, and the loop proceeds without protocol error. Implementation-loops and security reviews typically stay asymmetric; RFC and doc reviews benefit most from symmetric.
-
-The operator never copy-pastes. They see status in the board (`bclaw_context(kind="board")`) and can `bclaw_loop(intent="get", loop_id=…)` for detail.
-
-## Automation: extending `bclaw_coordinate(intent='ideate')`
-
-Shipped in v1.5.0 (pln#492). The full design — phases, context_filter,
-iteration block, advance_gate, brief assembly, system events,
-single-agent vs multi-agent UX — lives in [ideation-loop.md](./ideation-loop.md).
-Summary for the loop-engine perspective:
-
-- `bclaw_coordinate(intent='ideate', task=…, [targetAgents=[…]])` opens
-  an ideation_loop with the caller as `champion` slot and the targets
-  (when provided) as `critic` slots. The task is stored verbatim as
-  the `proposal` artifact (sliced to the 4 KB body cap).
-- Single-agent mode (no `targetAgents`): the loop opens at the
-  proposal phase and stops there. The champion drives the cycle
-  manually via `bclaw_loop(intent='turn'|'advance')`. Useful when the
-  loop's structure (memory filter, gate, iteration accounting) is
-  what's wanted, not the multi-slot orchestration.
-- Multi-agent mode (explicit `targetAgents`): the driver advances
-  proposal → critique and dispatches a turn per critic with a brief
-  assembled by `buildIdeationBrief` — context-filtered (critic sees
-  only `traps + feedback + runtime_notes + critique_history`),
-  BM25-ranked via `search()`, capped at 48 KB.
-
-The ideation_loop introduces three loop-engine extensions consumed by
-this driver:
-
-- `LoopPhase.context_filter?: LoopContextCategory[]` — closed enum
+- **`LoopPhase.context_filter?: LoopContextCategory[]`** — closed enum
   with `'*'` wildcard. Drives per-phase memory selection at brief
-  assembly time.
-- `LoopPhase.advance_gate?: StopCondition` — re-uses the StopCondition
-  vocabulary as a phase-exit guard. When unmet, the driver emits a
-  `phase_advance_blocked` system event (a non-artifact event in the
-  journal) with a structured `gate_reason` and throws an actionable
-  error. The default ideation `critique` advance_gate is
-  `min_artifacts_by_type { type: 'critique', n: 3, scope: 'phase' }`.
-- `LoopProtocolConfig.iteration?: { cycle, max_iterations, exit_when }`
-  — wraps the inner critique↔revision loop. The FSM
-  (`decideNextPhase` in `iteration-engine.ts`) handles cycle progress,
-  exit_when predicates (`no_new_critique_artifacts` / `critic_signal`),
-  and emits `max_iterations_reached` when the cap fires.
+  assembly time (ideation, implementation, research, debug all use it).
+- **`LoopPhase.advance_gate?: StopCondition`** — re-uses the
+  `StopCondition` vocabulary as a phase-exit guard. When unmet, the driver
+  emits a `phase_advance_blocked` system event with a structured
+  `gate_reason` and throws an actionable error. Every protocol except
+  `review` ships at least one default gate.
+- **`LoopProtocolConfig.iteration?: { cycle, max_iterations, exit_when }`**
+  — wraps an inner cycle. The FSM (`decideNextPhase` in
+  `iteration-engine.ts`) handles cycle progress and the `exit_when`
+  predicates (`no_new_critique_artifacts`, `critic_signal`,
+  `command_green`), and emits `max_iterations_reached` when the cap
+  fires.
 
 Both new event kinds — `phase_advance_blocked` and
 `max_iterations_reached` — live in the same event journal as
 `turn_assigned` / `phase_advanced`. They are intentionally **not**
 artifacts (which would force every consumer to filter `is_system`
 before processing content).
+
+## Recovery and observability
+
+Recovery of a dispatched turn is decision-driven, not marker-driven — a
+recoverer reads the reservation record and acts on its
+`(decision, launch.status, lease_deadline)` triple. The full set of
+transitions and their handling lives in
+[attempt-authority.md#recovery](./attempt-authority.md#recovery). Loop-level
+recovery on top of that:
+
+- **Projection repair before crossing.** The common dispatch choke point
+  replays create-or-validate operations for Assignment, AgentRun, claim and
+  slot while the grant is still armed. It crosses only after all four exist;
+  an already-crossed replay never acquires spawn authority again.
+- **Terminal loop early-return.** Every mutating convergence
+  (`reconcileTurn`, `reconcileFailedTurn`) idempotent no-ops on a closed
+  loop and still releases the coordinator claim.
+- **Journal crash recovery.** `max(event.seq) > thread.version` triggers
+  a synchronous journal replay before any new mutation proceeds (see the
+  commit protocol below).
+- **Superseded-turn guard.** A newer turn taking over a slot binds
+  `slot.current_turn_id`; a late reconcile of the old turn no-ops.
+- **Contradictions.** A turn-keyed completed+failed pair on the same
+  attempt withholds convergence and journals a `run_blocked` runtime
+  event with `status_reason: turn_evidence_contradiction`.
+
+Observability is split across four surfaces — see
+[attempt-authority.md#surfaces-and-their-roles](./attempt-authority.md#surfaces-and-their-roles).
+In short: the `TurnReservation` record + launch decision cell is
+**authoritative**; `LoopEvent` is **causal**; `RuntimeEvent` is
+**telemetry**; the legacy `events.jsonl` stream is **compatibility-only**.
+No consumer looks past its role. There is no fifth journal.
 
 ## Persistence
 
@@ -427,6 +583,7 @@ before processing content).
   threads/<id>.json                                      # main state
   events/<id>.jsonl                                      # append-only journal (seq/version authoritative)
   locks/<id>.lock                                        # per-loop exclusive lock (all intents on an existing loop, and opt-out `open`)
+  locks/<id>.lock.takeovers/<sha256(mutation_id)>.lock  # immutable election claim for reaping one dead lock generation
   locks/open/<agent_id>/<client_request_id>.lock        # idempotent-`open` lock keyed on idempotency scope
   idempotency/<id>/<client_request_id>.json              # 24h cache of completed mutation responses (one loop)
   idempotency-open/<agent_id>/<client_request_id>.json   # 24h cache for `open` intent (no loop_id yet)
@@ -452,24 +609,40 @@ before processing content).
 }
 ```
 
-**Server-owned lease renewal, bounded by a hard deadline.** `lease_until` is set to `acquired_at + 60 s` on lock acquisition. `hard_deadline` is set once at acquisition time to `acquired_at + max_mutation_duration` and **never moves**. The MCP handler spawns an internal heartbeat that rewrites `lease_until = now + 60 s` every 30 s while the mutation is still in flight — but **only as long as `now < hard_deadline`**. Heartbeat updates use the same temp-file + atomic-rename pattern as `thread.json`: write the full lock blob to a sibling temp file, fsync it, atomic-rename over `locks/<id>.lock`, fsync the directory. Readers therefore either see the old blob or the new blob, never a torn partial JSON document. The heartbeat refuses to renew past the deadline, the handler is instructed to abort its mutation, and the lock becomes reclaimable after the next `grace` window.
+**Lease/deadline fields are diagnostic today.** `lease_until` is initialized to
+`acquired_at + 60 s`; `hard_deadline` is initialized from the intent's expected
+maximum duration and never moves. The current synchronous implementation does
+**not** run a lease-renewal heartbeat and does not reap a lock merely because
+either timestamp elapsed. This is deliberate: on Windows, a live process may be
+suspended longer than a deadline and later resume. Until every committing write
+has its own fence check, elapsed time alone is not proof that takeover is safe.
 
 Default `max_mutation_duration` per intent:
 
 | Intent | `max_mutation_duration` | Rationale |
 |---|---|---|
-| `open`, `turn`, `advance`, `pause`, `resume`, `close` | 30 s | Pure state transitions. `turn` is fire-and-forget — the dispatch call is kicked off inside the lock but the handler does not await its completion, so the lock window stays tight. |
+| `open`, `turn`, `advance`, `pause`, `resume`, `close` | 30 s | Short state transitions. A trusted `turn(dispatch:true)` prepares/launches through AttemptAuthority outside the loop commit window, so worker duration never extends this lock. |
 | `add_artifact`, `complete_turn` | 60 s | May write small external ref files. |
 
-The cap is configurable in `config.yaml` under `loops.max_mutation_duration_ms` (per-intent map). A wedged handler therefore cannot hold the lock past its intent-specific deadline; after the deadline, the lock is reclaimable by any recovery pass per the rules below. Callers never interact with the lease or deadline — both are server-internal.
+These values describe the expected mutation window and support diagnostics.
+They are not automatic takeover thresholds. Callers never interact with them.
 
-**Why `turn` is fire-and-forget.** If `turn` awaited the downstream CLI/MCP call synchronously, a single slow agent (e.g. a 5-minute Codex review) would hold the per-loop lock and block every other mutation — a head-of-line-blocking hazard. Instead, the handler issues the dispatch, captures the `assignment_id`, writes `slot.status='assigned'`, commits, and releases the lock. The spawned process reports back later via `complete_turn`, which takes its own (short) lock. This is also consistent with brainclaw's existing dispatch contract: assignments are always async.
+**Why turn dispatch never holds the loop lock while a worker runs.** A single
+slow agent must never block every other loop mutation. Coordination, sequence
+dispatch, and trusted `turn(dispatch:true)` use AttemptAuthority crossing, but
+process preparation/launch happens
+outside the short loop-state commit. The worker reports back later via
+harvest/reconciliation or `complete_turn`, which takes its own short lock.
 
 **Commit protocol (lock-file CAS with intra-lock idempotency):**
 
 Before step 1, for the opt-out `open` path only (no `client_request_id`), the handler **pre-mints** the `loop_id` (ULID). Every other intent already has a `loop_id`; the idempotent `open` path postpones minting to step 3 so the idempotency cache can guard it.
 
-1. **Acquire lock.** Open the appropriate lock path (see *Lock scoping* above) with `O_CREAT | O_EXCL` (POSIX) or `CreateFile` with exclusive share mode (Windows) and write the owner blob. On `EEXIST`, retry with jittered backoff (10 ms base, capped at 500 ms total). After timeout, fail with `lock_timeout`. Start the lease-renewal heartbeat (bounded by `hard_deadline`).
+1. **Acquire lock.** Write the complete owner blob to a unique sibling temp file,
+   then hard-link that file to the lock path. Hard-link creation is the shared
+   create-if-absent primitive on POSIX and Windows; only one contender can win.
+   Remove the temp file after linking. On `EEXIST`, retry with jittered backoff
+   (10 ms base, capped at 500 ms total). After timeout, fail with `lock_timeout`.
 2. **Idempotency short-circuit (inside lock).** If the caller supplied `client_request_id`:
    - For mutations on an existing loop: look up `idempotency/<id>/<client_request_id>.json`.
    - For `open`: look up `idempotency-open/<agent_id>/<client_request_id>.json`.
@@ -480,23 +653,45 @@ Before step 1, for the opt-out `open` path only (no `client_request_id`), the ha
    - After replay/auth, if the caller supplied `expected_version` and `thread.version !== expected_version`: append a `LoopConflictRecord` to `conflicts/<id>.jsonl` (observability only, no `seq`, no `version` bump), release the lock, and return `{ status: 'error', code: 'version_conflict', actual_version }`.
    - For idempotent `open` (locked on the idempotency scope): mint a fresh random `loop_id` (ULID) here. This is the only id-mint point for the idempotent path.
    - For opt-out `open`: `loop_id` was already minted before step 1; nothing to do here.
-4. **Append event** *(fenced)*. Fence check: re-read `locks/<id>.lock` and verify its `mutation_id` still equals the value this handler wrote at step 1. If it differs, the lock has been reaped and a different handler owns the loop — **abort immediately without writing**, return `{ status: 'error', code: 'lock_lost' }`. Otherwise, write the new event to `events/<loop_id>.jsonl` with `seq = prev_seq + 1` (or `seq = 1` for `open`) and the handler's own `mutation_id` (ULID, minted at step 1 into the lock blob). Fsync the file.
-5. **Atomic-rename thread** *(fenced)*. Repeat the same fence check on `locks/<id>.lock`. On mismatch, abort. Otherwise, write the new thread state (with `version = prev_version + 1`, or `version = 1` for `open`, and the same `mutation_id`) to a temp file, atomic-rename over `threads/<loop_id>.json`, fsync the directory.
+4. **Entry fence, then commit.** Immediately before the synchronous verb, re-read
+   the lock and verify its `mutation_id`. On mismatch, abort with `lock_lost`.
+   The verb appends its event and materializes `thread.json`; journal-first
+   recovery catches a crash between those writes. There is currently no second
+   fence between event and thread writes, which is why automatic reaping is
+   restricted to owners proven dead on the local host.
+5. **Atomic-rename thread.** Write the next thread state with `version =
+   prev_version + 1` (or `1` for `open`) and the mutation id associated with the
+   verb, then atomic-rename it over `threads/<loop_id>.json`.
 6. **Persist idempotency record.** If `client_request_id` was supplied, write `{ response, request_hash, stored_at }` to the relevant idempotency path. (For `open`, the stored response includes the minted `loop_id` so retries get the same id back.)
-7. **Release lock.** Stop the lease-renewal heartbeat and remove the lock file.
+7. **Release lock.** Re-read the lock and remove it only when its `mutation_id`
+   still belongs to this handler.
 
-**Fencing token — what the re-read catches.** Every handler writes its own `mutation_id` into the lock blob at step 1. If the handler later blocks on a slow fs call or a dispatch kickoff and the deadline/liveness rules kick in, the recovery pass removes the lock. A different handler can then acquire a fresh lock with a **different** `mutation_id`. The late-unblocking handler's fence re-read at steps 4 and 5 will see the foreign `mutation_id` and abort cleanly — no write, no corruption, no phantom events in the journal. This closes the "late unblock after reap" hole: lock ownership is checked not only at acquisition but at every committing I/O point.
+**Fencing token — current guarantee.** Every handler writes its own `mutation_id`
+into the lock blob and checks it at verb entry. Release also compares that token,
+so an old owner cannot remove a different generation. Because a live local owner
+is never reaped, it cannot resume after takeover inside the synchronous verb.
+Enabling deadline-based, remote-host, or asynchronous takeover in a future slice
+requires propagating the fence check to every journal, projection, thread and
+idempotency commit first.
 
 The `event.seq` and `thread.version` advance in lockstep — a successful commit produces exactly one new event with `seq = new_version`. Conflict records in `conflicts/<id>.jsonl` are out-of-band and never affect `seq` or `version`. The shared `mutation_id` on both committed files pins which event materialized which thread revision. Because step 3 always replays `events/<id>.jsonl` before a new CAS decision, a stale materialized thread cannot cause the next writer to append a journal event "ahead" of `thread.json`; the journal remains authoritative, and each new mutation must first catch the thread up to it.
 
-**Stale-lock recovery (owner-liveness + deadline, not age-based):**
+**Stale-lock recovery (proof-based and generation-fenced):**
 
-- Read the lock blob. If `now > hard_deadline` → the mutation exceeded its intent-specific cap → remove the lock regardless of liveness.
-- Else if `host_id === current_host_id` and no process with `pid` exists (checked via `kill -0` / `OpenProcess`), the owner is dead → remove the lock.
-- Else if `now > lease_until + grace` (default grace = 30 s) and the owner has not renewed, treat as abandoned → remove the lock.
-- Else the lock is considered live; callers keep retrying.
+- If `host_id === current_host_id` and no process with `pid` exists (checked via
+  `kill -0` / `OpenProcess`), the owner is proven dead and its generation is
+  eligible for automatic recovery.
+- A contender first creates
+  `<lock>.takeovers/<sha256(observed_mutation_id)>.lock` with the same hard-link
+  create-if-absent primitive. Only that elected reaper may re-read and unlink the
+  observed generation. This prevents the Windows ABA race where a late reaper
+  deletes a freshly acquired generation.
+- A live local PID, a different host, or elapsed lease/deadline fields fail
+  closed. The caller times out; an operator can inspect the blob before explicit
+  recovery.
 
-The three rules are independent: `hard_deadline` bounds pathological "heartbeat alive but mutation wedged" cases; liveness check bounds crash cases; `lease_until + grace` bounds network/fs stalls. This fully replaces the unsafe "age > 10 s ⇒ reap" rule — a legitimate writer blocked on a slow fs call is no longer killed by age alone, but is still bounded by the intent-specific deadline.
+This preserves short per-loop serialization without a global Loop Engine lock.
+Independent loops and immutable AttemptAuthority cells remain parallel.
 
 **Journal crash recovery:**
 
@@ -555,6 +750,9 @@ table above rather than treating review as the default abstraction.
 
 ## Related
 
+- [attempt-authority.md](./attempt-authority.md) — identity, dispatch decisions and spawn authority for every turn
+- [P0B projection-boundary tests](../../tests/unit/loops-p0b-projections-before-crossing.test.ts) — crash/replay coverage around the common pre-crossing boundary
+- [Per-protocol guides](../loops/) — review / ideation / implementation / research / debug
 - [plans-and-claims.md](plans-and-claims.md)
 - [coordination.md](coordination.md)
 - [dispatch-lifecycle.md](dispatch-lifecycle.md) — entity FSMs (loop / assignment / agent_run / claim), brief-ack semantics, log-file diagnostic playbook
@@ -562,13 +760,4 @@ table above rather than treating review as the default abstraction.
 - pln#394 `feat/loop-engine-mvp`
 - pln#395 `feat/review-loop-protocol`
 - pln#392 `doc/mcp-versioning-and-surface-governance` (prerequisite)
-
-## Review-specific reliability notes
-
-Review loops retain an extra exactly-once fix-cycle implementation because they
-can automatically redispatch after `request_changes`. A reviewer writes
-`review_verdict` and `review_summary` to `LANE-RESULT.json`; harvest maps this
-to the loop, auto-closes on approval, and boundedly redispatches fix work when
-appropriate. This is review-specific automation, not a limit on the other
-workflow kinds. Set `BRAINCLAW_TURN_OWNED_REVIEW=0` (also `false`/`off`/`no`)
-only to fall back to the legacy review finalizer.
+- pln#676 / dec#171 — attempt-authority rollout

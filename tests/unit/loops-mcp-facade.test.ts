@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
+import { handleBclawLoop as handleMcpLoop } from '../../src/commands/mcp-write-coordination.js';
+import { ALL_TOOLS } from '../../src/commands/mcp-catalog.js';
+import type { McpWriteToolContext } from '../../src/commands/mcp-write-support.js';
 import type { LoopThread } from '../../src/core/loops/index.js';
 
 function makeWorkspace(): string {
@@ -27,6 +30,71 @@ function payload(result: unknown): LoopPayload {
 function stableJson<T>(value: T): unknown {
   return JSON.parse(JSON.stringify(value));
 }
+
+describe('published MCP Loop Engine surface', () => {
+  it('publishes and executes direct implementation open, verify, request_input and provide_input', async () => {
+    const cwd = makeWorkspace();
+    try {
+      const loopTool = ALL_TOOLS.find((tool) => tool.name === 'bclaw_loop');
+      const intents = ((loopTool?.inputSchema as unknown as { properties?: { intent?: { enum?: readonly string[] } } })
+        ?.properties?.intent?.enum) ?? [];
+      for (const intent of ['open', 'verify', 'request_input', 'provide_input']) {
+        assert.ok(intents.includes(intent), `${intent} must be published in the real MCP catalog`);
+      }
+      const ctx = { cwd } as McpWriteToolContext;
+      const opened = await handleMcpLoop({
+        intent: 'open',
+        allow_orphan: true,
+        kind: 'implementation',
+        title: 'agent-first implementation',
+        slots: [{ role: 'implementer', agent_id: 'agt_worker' }],
+        verify: { command: [process.execPath, '-e', 'process.exit(0)'] },
+        agentId: 'agt_coord',
+      }, ctx);
+      const openEnvelope = opened.response.structuredContent as unknown as {
+        status: string;
+        result: { loop: LoopThread };
+      };
+      assert.equal(openEnvelope.status, 'ok');
+      const loop = openEnvelope.result.loop;
+      const slot = loop.slots[0]!;
+
+      const verified = await handleMcpLoop({ intent: 'verify', loop_id: loop.id, agentId: 'agt_coord' }, ctx);
+      assert.equal((verified.response.structuredContent as { status?: string })?.status, 'ok');
+
+      await handleMcpLoop({
+        intent: 'turn', loop_id: loop.id, slot_id: slot.slot_id, agentId: 'agt_coord',
+      }, ctx);
+      const requested = await handleMcpLoop({
+        intent: 'request_input',
+        loop_id: loop.id,
+        slot_id: slot.slot_id,
+        phase: loop.current_phase,
+        question_text: 'Which compatibility target should the implementation preserve?',
+        evidence: ['two incompatible targets are present'],
+        pause_scope: 'slot',
+        on_timeout: 'continue_incomplete',
+        agentId: 'agt_worker',
+      }, ctx);
+      const requestEnvelope = requested.response.structuredContent as unknown as {
+        status: string;
+        result: { question_id: string };
+      };
+      assert.equal(requestEnvelope.status, 'ok');
+      const provided = await handleMcpLoop({
+        intent: 'provide_input',
+        loop_id: loop.id,
+        replies_to: requestEnvelope.result.question_id,
+        resolved_via: 'answer',
+        answer_text: 'Preserve the v1 contract.',
+        agentId: 'agt_coord',
+      }, ctx);
+      assert.equal((provided.response.structuredContent as { status?: string })?.status, 'ok');
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('bclaw_loop facade — open / get / list', () => {
   let cwd: string;
@@ -341,17 +409,21 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
         kind: 'review',
         title: 'auto-close',
         agentId: 'agt_a',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
       },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
+    const reviewerSlotId = payload(opened.response.result).loop.slots[0].slot_id;
 
     await handleBclawLoop({
       args: {
-        intent: 'add_artifact',
+        intent: 'complete_turn',
         loop_id: loopId,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
         artifact: { phase: 'verdict', type: 'verdict', body: 'accepted' },
-        agentId: 'agt_a',
+        agentId: 'agt_reviewer',
       },
       cwd,
     });

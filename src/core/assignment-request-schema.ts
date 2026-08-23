@@ -87,6 +87,13 @@ export const AssignmentUpdateRequestSchema = z.object({
   error_message: z.string().describe('Error details (for failed status).').optional(),
   blocker: z.string().describe('Blocker description (for blocked status).').optional(),
   action_required: ActionRequiredSchema.optional(),
+  /** AttemptAuthority v2 fence. Required together once the Assignment has a v2 generation chain. */
+  turn_id: z.string().optional(),
+  run_id: z.string().optional(),
+  nonce: z.string().optional(),
+  attempt_epoch: z.number().int().nonnegative().optional(),
+  execution_contract_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  workspace_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   ...CallerIdentity,
 });
 

@@ -282,6 +282,19 @@ per-phase memory filters. The shared controls are `open`, `turn`,
 implementation also adds `bind` and `verify`. `request_input` /
 `provide_input` are cross-cutting clarification primitives for any workflow.
 
+Every worker-backed phase, across all five workflows, is launched from one
+immutable [execution contract](docs/concepts/execution-contract.md): exact
+identity, artifact expectations, workspace policy, capability snapshot and
+evidence rules are persisted before the launch fence crosses. This reuses the
+existing TurnReservation, Assignment and AgentRun records; it does not add a
+second event journal.
+
+Gate-driving artifacts are also bound to a server-sealed
+[evidence envelope](docs/concepts/evidence-attestations.md). Review approval,
+command verification, claim binding, and ordinary observations are separate
+attestations rather than one confidence score; the same policy mechanism
+protects every workflow above.
+
 Review is a useful specialized path, not the definition of the engine. It has
 asymmetric and symmetric modes and can auto-close on an approved verdict; the
 other workflows use the same lifecycle to converge on a plan, synthesis,

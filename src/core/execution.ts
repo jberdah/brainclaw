@@ -9,11 +9,12 @@
  */
 import fs from 'node:fs';
 import { resolveConcurrencyLimit, resolveResourceKey, type InvokeCommand } from './agent-capability.js';
-import { getRuntimeSignalPath } from './runtime-signals.js';
+import { getRuntimeSignalPath, readContractAck } from './runtime-signals.js';
 import { appendAuditEntry } from './audit.js';
 import { loadAllSessions } from './identity.js';
 import { loadConfig } from './config.js';
 import { loadAssignment } from './assignments.js';
+import { recordExecutionContractAnomaly } from './agentruns.js';
 import {
   defaultExecutionAdapter,
   type ExecutionAdapter,
@@ -31,7 +32,7 @@ export interface ExecutionResult {
   shell?: string;
   started_at?: string;
   error?: string;
-  failure_kind?: 'spawn_no_handshake' | 'spawn_failed' | 'spawn_capacity' | 'spawn_no_worktree' | 'not_spawnable';
+  failure_kind?: 'spawn_no_handshake' | 'spawn_failed' | 'spawn_capacity' | 'spawn_no_worktree' | 'not_spawnable' | 'contract_acceptance_anomaly';
   /**
    * Machine-readable reason this execution ended in its status (pln#626
    * Phase 1). Set on every non-`delivered_and_started` outcome so a
@@ -47,6 +48,7 @@ export interface ExecutionResult {
     | 'spawn_capacity'
     | 'spawn_no_handshake'
     | 'spawn_failed'
+    | 'contract_acceptance_anomaly'
     | 'no_invoke_command'
     | 'intent_inbox_only';
 }
@@ -66,13 +68,16 @@ function sleep(ms: number): Promise<void> {
  * bclaw_assignment_update; the ack file lets us recognize a healthy
  * spawn anyway).
  */
-export function getAssignmentAckPath(cwd: string, assignmentId: string): string {
-  return getRuntimeSignalPath(cwd, assignmentId, 'ack');
+export function getAssignmentAckPath(cwd: string, assignmentId: string, runId?: string): string {
+  return getRuntimeSignalPath(cwd, assignmentId, 'ack', runId);
 }
 
-function isAssignmentAcked(assignmentId: string, cwd: string): boolean {
+function isAssignmentAcked(assignmentId: string, cwd: string, runId?: string): boolean {
   // Fast path: the brief-ack sentinel was written by the worker shell.
-  if (fs.existsSync(getAssignmentAckPath(cwd, assignmentId))) return true;
+  if (fs.existsSync(getAssignmentAckPath(cwd, assignmentId, runId))) return true;
+  // A v2 generation must acknowledge its own run-scoped bootstrap. The stable
+  // Assignment may already be running/completed because of a prior epoch.
+  if (runId) return false;
   // Standard path: the worker called bclaw_assignment_update via MCP and
   // moved the assignment past the offered/created state.
   const assignment = loadAssignment(assignmentId, cwd);
@@ -83,13 +88,43 @@ async function waitForAssignmentHandshake(
   assignmentId: string,
   cwd: string,
   timeoutMs: number,
+  runId?: string,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (isAssignmentAcked(assignmentId, cwd)) return true;
+    if (isAssignmentAcked(assignmentId, cwd, runId)) return true;
     await sleep(100);
   }
-  return isAssignmentAcked(assignmentId, cwd);
+  return isAssignmentAcked(assignmentId, cwd, runId);
+}
+
+function normalizeWorkspacePath(value: string): string | undefined {
+  try {
+    const resolved = fs.realpathSync.native(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return undefined;
+  }
+}
+
+function contractAckMatches(
+  assignmentId: string,
+  cwd: string,
+  turnEcho: TurnEcho,
+  expectedWorkspacePath?: string,
+): boolean {
+  if (!turnEcho.contract_hash || !turnEcho.capability_snapshot_hash) return true;
+  const parsed = readContractAck(cwd, assignmentId, turnEcho.run_id);
+  const expectedWorkspace = expectedWorkspacePath ? normalizeWorkspacePath(expectedWorkspacePath) : undefined;
+  return parsed?.status === 'accepted'
+    && parsed.turn_id === turnEcho.turn_id
+    && parsed.run_id === turnEcho.run_id
+    && parsed.nonce === turnEcho.nonce
+    && parsed.contract_hash === turnEcho.contract_hash
+    && parsed.capability_snapshot_hash === turnEcho.capability_snapshot_hash
+    && (turnEcho.attempt_epoch === undefined || parsed.attempt_epoch === turnEcho.attempt_epoch)
+    && (turnEcho.workspace_digest === undefined || parsed.workspace_digest === turnEcho.workspace_digest)
+    && (!expectedWorkspace || parsed.cwd === expectedWorkspace);
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -242,9 +277,41 @@ export async function attemptExecution(
   },
 ): Promise<ExecutionResult> {
   const adapter = options.adapter ?? defaultExecutionAdapter;
+  const contracted = Boolean(options.turnEcho?.contract_hash && options.turnEcho.capability_snapshot_hash);
+  const fenceContractedGeneration = (
+    reason: string,
+    processInfo?: { pid?: number; started_at?: string },
+  ): ExecutionResult => {
+    if (options.turnEcho) {
+      try {
+        recordExecutionContractAnomaly(options.turnEcho.run_id, {
+          source: 'bootstrap_ack',
+          reason,
+        }, options.cwd);
+      } catch { /* a rejected/missing ack remains the fallback fence */ }
+    }
+    return {
+      execution_status: processInfo?.pid ? 'delivered_and_started' : 'inbox_only',
+      pid: processInfo?.pid,
+      started_at: processInfo?.started_at,
+      error: `${reason}; contracted generation is fenced and MUST NOT be respawned`,
+      failure_kind: 'contract_acceptance_anomaly',
+      execution_reason: 'contract_acceptance_anomaly',
+    };
+  };
+  const prepareManual = (): ReturnType<ExecutionAdapter['prepareManualCommand']> | undefined => {
+    // A custom adapter cannot self-attest that its opaque command contains the
+    // native bootstrap/env/sentinel fence. Until the adapter contract becomes
+    // declarative, only the core adapter may emit contracted manual launches.
+    if (contracted && adapter !== defaultExecutionAdapter) return undefined;
+    const manual = adapter.prepareManualCommand(invoke!, { ...options, ackRoot: options.cwd });
+    if (contracted && !manual.contractWrapped) return undefined;
+    return manual;
+  };
 
   // No invoke command available (IDE-only agents, etc.)
   if (!invoke) {
+    if (contracted) return fenceContractedGeneration('no contract-capable invoke command is available after crossing');
     return { execution_status: 'inbox_only', execution_reason: 'no_invoke_command' };
   }
 
@@ -259,7 +326,8 @@ export async function attemptExecution(
   // (1) autoExecute explicitly disabled: a deliberate manual handoff, NOT a
   // failure. Prepend BRAINCLAW_CLAIM_ID so manual copy-paste still routes.
   if (!options.autoExecute) {
-    const manual = adapter.prepareManualCommand(invoke, options);
+    const manual = prepareManual();
+    if (!manual) return fenceContractedGeneration('execution adapter cannot produce a contract-wrapped manual command');
     return {
       execution_status: 'command_ready_manual',
       command: manual.command,
@@ -272,7 +340,8 @@ export async function attemptExecution(
   // failure of the caller's intent. Surface spawnCheck.reason (previously
   // dropped) instead of returning a bare manual command.
   if (!spawnCheck.canSpawn) {
-    const manual = adapter.prepareManualCommand(invoke, options);
+    const manual = prepareManual();
+    if (!manual) return fenceContractedGeneration(`agent is not spawnable and the adapter cannot produce a contract-wrapped manual command: ${spawnCheck.reason}`);
     return {
       execution_status: 'command_ready_manual',
       command: manual.command,
@@ -299,7 +368,8 @@ export async function attemptExecution(
       scope: options.agent,
       after: { reason: 'no_worktree', refused: true },
     }, options.cwd);
-    const manual = adapter.prepareManualCommand(invoke, options);
+    const manual = prepareManual();
+    if (!manual) return fenceContractedGeneration('worktree is missing and the adapter cannot produce a contract-wrapped manual command');
     return {
       execution_status: 'command_ready_manual',
       command: manual.command,
@@ -324,7 +394,8 @@ export async function attemptExecution(
         after: { reason: instanceCheck.reason, active_sessions: instanceCheck.activeSessions, skipped: true },
       }, options.cwd);
 
-      const manual = adapter.prepareManualCommand(invoke, options);
+      const manual = prepareManual();
+      if (!manual) return fenceContractedGeneration(`capacity is exhausted and the adapter cannot produce a contract-wrapped manual command: ${instanceCheck.reason}`);
       return {
         execution_status: 'command_ready_manual',
         command: manual.command,
@@ -355,7 +426,12 @@ export async function attemptExecution(
       const handshakeTimeoutMs =
         options.handshakeTimeoutMs ??
         (Number.isFinite(parsedEnvTimeout) && parsedEnvTimeout > 0 ? parsedEnvTimeout : 30_000);
-      const handshakeOk = await waitForAssignmentHandshake(options.assignmentId, options.cwd, handshakeTimeoutMs);
+      const handshakeOk = await waitForAssignmentHandshake(
+        options.assignmentId,
+        options.cwd,
+        handshakeTimeoutMs,
+        options.turnEcho?.run_id,
+      );
       if (!handshakeOk) {
         appendAuditEntry({
           actor: options.dispatcherAgent,
@@ -367,7 +443,13 @@ export async function attemptExecution(
           after: { reason: `No assignment handshake within ${handshakeTimeoutMs}ms`, pid: result.pid, command: invoke.bashCommand },
         }, options.cwd);
 
-        const manual = adapter.prepareManualCommand(invoke, options);
+        if (contracted) {
+          return fenceContractedGeneration(
+            `spawn launched but contract bootstrap did not acknowledge within ${handshakeTimeoutMs}ms`,
+            { pid: result.pid, started_at: result.started_at },
+          );
+        }
+        const manual = prepareManual()!;
         return {
           execution_status: 'command_ready_manual',
           command: manual.command,
@@ -376,6 +458,47 @@ export async function attemptExecution(
           failure_kind: 'spawn_no_handshake',
           execution_reason: 'spawn_no_handshake',
           pid: result.pid,
+        };
+      }
+      if (options.turnEcho && !contractAckMatches(
+        options.assignmentId,
+        options.cwd,
+        options.turnEcho,
+        options.worktreePath,
+      )) {
+        const accepted = readContractAck(options.cwd, options.assignmentId, options.turnEcho.run_id);
+        let anomalyPersistenceError: string | undefined;
+        try {
+          recordExecutionContractAnomaly(options.turnEcho.run_id, {
+            source: 'bootstrap_ack',
+            reason: 'bootstrap rejected, omitted or changed the immutable execution contract',
+            accepted_contract_hash: accepted?.contract_hash,
+            accepted_capability_snapshot_hash: accepted?.capability_snapshot_hash,
+          }, options.cwd);
+        } catch (error) {
+          anomalyPersistenceError = error instanceof Error ? error.message : String(error);
+        }
+        appendAuditEntry({
+          actor: options.dispatcherAgent,
+          actor_id: options.dispatcherAgentId,
+          action: 'spawn_failed',
+          item_id: options.assignmentId,
+          item_type: 'agent_run',
+          scope: options.agent,
+          after: {
+            reason: 'post-crossing execution-contract acceptance mismatch or missing ack; respawn=false',
+            pid: result.pid,
+            accepted,
+            anomaly_persistence_error: anomalyPersistenceError,
+          },
+        }, options.cwd);
+        return {
+          execution_status: 'delivered_and_started',
+          started_at: result.started_at,
+          pid: result.pid,
+          error: `Worker/bootstrap did not acknowledge execution contract ${options.turnEcho.contract_hash ?? 'legacy'} exactly; run is anomalous and MUST NOT be respawned`,
+          failure_kind: 'contract_acceptance_anomaly',
+          execution_reason: 'contract_acceptance_anomaly',
         };
       }
     }
@@ -411,8 +534,12 @@ export async function attemptExecution(
       after: { error: errorMsg, command: invoke.bashCommand },
     }, options.cwd);
 
-    // Graceful fallback — include BRAINCLAW_CLAIM_ID for manual routing
-    const manual = adapter.prepareManualCommand(invoke, options);
+    // Once a contracted generation crossed, an uncertain spawn outcome can
+    // never degrade to a second/manual launch. Legacy dispatch keeps fallback.
+    if (contracted) {
+      return fenceContractedGeneration(`spawn failed after the launch fence crossed (${errorMsg})`);
+    }
+    const manual = prepareManual()!;
     return {
       execution_status: 'command_ready_manual',
       command: manual.command,

@@ -25,14 +25,17 @@ import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capabilit
 import { commitWorktreeOnBehalf, worktreesBaseDir, resolveGitToplevel } from '../core/worktree.js';
 import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult, type ReviewLoopNextTurn } from '../core/review-loop-close.js';
 import { closeIdeationLoopFromLaneResult } from '../core/ideation-loop-close.js';
-import { dispatchReviewLoopTurn, turnOwnedReviewEnabled } from '../core/review-loop-turn-dispatch.js';
+import { dispatchReviewLoopTurn, turnOwnedLoopEnabled } from '../core/review-loop-turn-dispatch.js';
 import { reconcileTurn, type ReconcileTurnResult } from '../core/loops/reconcile-turn.js';
 import { findReservationByAssignmentId, type TurnReservation } from '../core/loops/attempt-reservation.js';
+import { resolveTurnGenerationChain } from '../core/loops/attempt-generations.js';
 import { getLoop } from '../core/loops/store.js';
+import { phasePolicy } from '../core/loops/kind-policies.js';
 import { readCompletionSignals } from '../core/runtime-signals.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
 import { toWarningDetail } from '../core/warnings.js';
 import type { WarningDetail } from '../core/facade-schema.js';
+import { harvestHarnessObservation } from '../core/harness-adapters/index.js';
 
 /**
  * pln#630 PR3a — finalize a TURN-OWNED review lane via the exactly-once `reconcileTurn`
@@ -65,18 +68,36 @@ import type { WarningDetail } from '../core/facade-schema.js';
  * double-spawn; and a sentinel that lands after a legacy close makes a later reconcile a
  * terminal-loop idempotent no-op.
  */
-function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): { reservation: TurnReservation; nonce: string } | undefined {
-  const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
-  if (!reservation) return undefined; // legacy lane (no reservation)
-  const nonce = lane.nonce ?? readCompletionSignals(cwd, reservation.child_ids.assignment_id).completed?.nonce;
-  if (!nonce) return undefined; // reservation but NO turn-keyed evidence → legacy finalization
-  return { reservation, nonce };
+interface TurnOwnedLaneEvidence {
+  reservation: TurnReservation;
+  nonce?: string;
+  contract_hash?: string;
+  capability_snapshot_hash?: string;
 }
 
-function reconcileTurnOwnedReviewLane(
+function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): TurnOwnedLaneEvidence | undefined {
+  const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
+  if (!reservation) return undefined; // legacy lane (no reservation)
+  const chain = resolveTurnGenerationChain(cwd, reservation.turn_id);
+  const completion = readCompletionSignals(
+    cwd,
+    reservation.child_ids.assignment_id,
+    chain?.latest_generation.run_id,
+  ).completed;
+  const nonce = lane.nonce ?? completion?.nonce;
+  if (!nonce && !reservation.execution_contract_ref) return undefined;
+  return {
+    reservation,
+    nonce,
+    contract_hash: lane.execution_contract_hash ?? completion?.contract_hash,
+    capability_snapshot_hash: lane.capability_snapshot_hash ?? completion?.capability_snapshot_hash,
+  };
+}
+
+function reconcileTurnOwnedLane(
   lane: LaneResult,
   cwd: string,
-  evidence?: { reservation: TurnReservation; nonce: string },
+  evidence?: TurnOwnedLaneEvidence,
 ): { reservation: TurnReservation; result: ReconcileTurnResult } | undefined {
   const ev = evidence ?? turnOwnedLaneEvidence(lane, cwd);
   if (!ev) return undefined; // legacy lane OR no turn-keyed evidence — caller runs the legacy path
@@ -86,8 +107,17 @@ function reconcileTurnOwnedReviewLane(
     turn_id: lane.turn_id ?? reservation.turn_id,
     run_id: lane.run_id ?? reservation.child_ids.run_id,
     nonce,
+    execution_contract_hash: lane.execution_contract_hash ?? ev.contract_hash,
+    capability_snapshot_hash: lane.capability_snapshot_hash ?? ev.capability_snapshot_hash,
   };
-  const result = reconcileTurn({ turn_id: reservation.turn_id, lane: enrichedLane, cwd });
+  const loop = getLoop(reservation.loop_id, cwd);
+  const critiques = loop?.kind === 'ideation'
+    && reservation.phase === 'critique'
+    && lane.artifact_type === 'critique'
+    && (lane.body ?? '').trim().length > 0
+    ? [{ body: lane.body!.trim() }]
+    : undefined;
+  const result = reconcileTurn({ turn_id: reservation.turn_id, lane: enrichedLane, cwd, critiques });
   return { reservation, result };
 }
 
@@ -484,14 +514,28 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
 
   for (const worktreePath of worktreePaths) {
     const file = getLaneResultPath(worktreePath);
-    if (!fs.existsSync(file)) continue;
+    const fileExists = fs.existsSync(file);
+    let nativeObservation: ReturnType<typeof harvestHarnessObservation>;
+    if (options.assignmentId) {
+      try {
+        nativeObservation = harvestHarnessObservation(options.assignmentId, cwd, !options.dryRun);
+      } catch (err) {
+        result.errors.push(`Failed to harvest native harness output for ${options.assignmentId}: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+    }
+    if (!fileExists && !nativeObservation) continue;
 
     let lane: LaneResult;
-    try {
-      lane = LaneResultSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
-    } catch (err) {
-      result.errors.push(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
-      continue;
+    if (fileExists) {
+      try {
+        lane = LaneResultSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
+      } catch (err) {
+        result.errors.push(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+    } else {
+      lane = nativeObservation!.lane;
     }
 
     // Assignment filter (when harvesting a specific lane).
@@ -509,7 +553,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // (no re-dispatch, no claim retention). `harvest --integrate` owns the cycle.
     // Hoisted for the catch below (PR #171 review P2-2): if turn-owned evidence was
     // found before a throw, the swallowed failure must still surface as a warning.
-    let turnEvidenceForCatch: { reservation: TurnReservation; nonce: string } | undefined;
+    let turnEvidenceForCatch: TurnOwnedLaneEvidence | undefined;
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
       if (laneAssignment) {
@@ -530,13 +574,65 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
         // Kill-switch (=0), a legacy lane (no reservation), OR a reservation WITHOUT evidence
         // (review Finding 1: an inbox_only/non-ack-wrapped dispatch that never wrote a
         // sentinel) → the lane takes the unchanged legacy close so it still converges.
-        // Ideation stays legacy (review-only).
-        const laneTurnEvidence = turnOwnedReviewEnabled() ? turnOwnedLaneEvidence(lane, cwd) : undefined;
-        turnEvidenceForCatch = laneTurnEvidence;
+        // P0C: the same evidence gate now serves every LoopKind. Review keeps
+        // its report-only request_changes deferral because that path cannot
+        // re-dispatch a fix cycle; other kinds can safely record their result.
+        const candidateEvidence = turnOwnedLaneEvidence(lane, cwd);
+        // Set before reading the loop: a corrupt loop store may throw below,
+        // and the catch must still know this was a turn-owned lane to warn.
+        turnEvidenceForCatch = candidateEvidence;
+        const candidateLoop = candidateEvidence ? getLoop(candidateEvidence.reservation.loop_id, cwd) : undefined;
+        const laneTurnEvidence = candidateEvidence && candidateLoop && turnOwnedLoopEnabled(candidateLoop.kind)
+          ? candidateEvidence
+          : undefined;
+        turnEvidenceForCatch = laneTurnEvidence ?? candidateEvidence;
+        const ownedLoop = laneTurnEvidence ? candidateLoop : undefined;
+        const ownedPhasePolicy = ownedLoop
+          ? phasePolicy(ownedLoop.kind, laneTurnEvidence!.reservation.phase)
+          : undefined;
         if (!laneTurnEvidence) {
           closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
+        } else if (ownedPhasePolicy?.finalization === 'integrate') {
+          result.warnings.push(toWarningDetail({
+            code: 'loop_turn_not_converged',
+            message: `Turn-owned ${ownedLoop?.kind ?? 'loop'} lane ${lane.assignment_id} requires harvest --integrate before convergence; claim retained.`,
+            data: {
+              assignment_id: lane.assignment_id,
+              loop_id: laneTurnEvidence.reservation.loop_id,
+              turn_id: laneTurnEvidence.reservation.turn_id,
+              phase: laneTurnEvidence.reservation.phase,
+            },
+          }));
+        } else if (ownedLoop?.kind !== 'review') {
+          const rr = reconcileTurnOwnedLane(lane, cwd, laneTurnEvidence);
+          if (
+            ownedLoop?.kind === 'ideation'
+            && laneTurnEvidence.reservation.phase === 'critique'
+            && (lane.artifact_type !== 'critique' || !(lane.body ?? '').trim())
+          ) {
+            result.warnings.push(toWarningDetail({
+              code: 'loop_turn_not_converged',
+              message: `Ideation critique lane ${lane.assignment_id} did not provide artifact_type='critique' with a non-empty body; no critique artifact was accepted.`,
+              data: { assignment_id: lane.assignment_id, loop_id: laneTurnEvidence.reservation.loop_id, turn_id: laneTurnEvidence.reservation.turn_id },
+            }));
+          }
+          if (rr && !rr.result.reconciled && !/superseded/.test(rr.result.reason ?? '')) {
+            result.warnings.push(toWarningDetail({
+              code: 'loop_turn_not_converged',
+              message: `Turn-owned ${ownedLoop?.kind ?? 'loop'} lane ${lane.assignment_id} did not converge: ${rr.result.reason}.`,
+              data: { assignment_id: lane.assignment_id, loop_id: laneTurnEvidence.reservation.loop_id, turn_id: laneTurnEvidence.reservation.turn_id },
+            }));
+          }
+          if (ownedLoop?.kind === 'ideation' && rr) {
+            ideationLoop = {
+              loop_id: laneTurnEvidence.reservation.loop_id,
+              action: rr.result.auto_closed ? 'closed' : rr.result.reconciled ? 'advanced' : 'noop',
+              reason: rr.result.reason,
+              loop_status: rr.result.loop_status,
+            };
+          }
         } else if (lane.review_verdict === 'approve') {
-          const rr = reconcileTurnOwnedReviewLane(lane, cwd, laneTurnEvidence);
+          const rr = reconcileTurnOwnedLane(lane, cwd, laneTurnEvidence);
           // Reason-based quietness (PR #171 review P2-1 refinement): a terminal loop
           // returns reconciled:true (idempotent no-op) and a superseded turn is the one
           // healthy decline (`harvest --all` over a prior round's lane) — everything
@@ -557,7 +653,9 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
         }
         // pln#521 P2-bis — the ideation analog: a critic lane records its critique +
         // advances the ideation loop. Returns undefined for non-ideate scopes (no-op here).
-        ideationLoop = closeIdeationLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+        if (!laneTurnEvidence) {
+          ideationLoop = closeIdeationLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+        }
 
         // pln#636 C2 (review F3) — the universal net's most important trigger.
         // A file-fallback worker declares its own footprint in `files_changed`,
@@ -618,6 +716,8 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
             ideation_loop: ideationLoop ?? null,
             files_changed: lane.files_changed ?? [],
             source_worktree: worktreePath,
+            harness_stdout_log: nativeObservation?.stdout_log ?? null,
+            harness_stderr_log: nativeObservation?.stderr_log ?? null,
           },
         }, cwd);
         fs.mkdirSync(path.dirname(marker), { recursive: true });
@@ -843,14 +943,19 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         // next_turn) unless the iteration cap is hit. This is the --integrate
         // path, so it MAY cycle (it can re-dispatch AND retain the claim). No-op
         // for non-review lanes / lanes without a verdict; never throws.
-        // pln#521 P2-bis — the ideation analog (record critique + advance the ideation
-        // loop). Turn-owned is REVIEW-ONLY (pln#630), so ideation always uses the legacy
-        // path. It is independent of the review-loop close (a lane's scope is review-loop
-        // XOR ideate-loop), so it runs once here regardless of the branch below.
-        const ideationClose = closeIdeationLoopFromLaneResult(assignment, lane, actor, cwd);
-        if (ideationClose) {
-          reasons.push(`ideate-loop ${ideationClose.loop_id}: ${ideationClose.action} — ${ideationClose.reason}`);
-          entry.ideation_loop = ideationClose;
+        // Legacy ideation lanes still use the historical closer. A turn-owned
+        // lane of any kind is finalized exactly once by reconcileTurn below.
+        const candidateEvidence = turnOwnedLaneEvidence(lane, cwd);
+        const ownedLoop = candidateEvidence ? getLoop(candidateEvidence.reservation.loop_id, cwd) : undefined;
+        const turnOwnedEvidence = candidateEvidence && ownedLoop && turnOwnedLoopEnabled(ownedLoop.kind)
+          ? candidateEvidence
+          : undefined;
+        if (!turnOwnedEvidence) {
+          const ideationClose = closeIdeationLoopFromLaneResult(assignment, lane, actor, cwd);
+          if (ideationClose) {
+            reasons.push(`ideate-loop ${ideationClose.loop_id}: ${ideationClose.action} — ${ideationClose.reason}`);
+            entry.ideation_loop = ideationClose;
+          }
         }
 
         // pln#630 PR3a — a TURN-OWNED review lane finalizes via the exactly-once
@@ -858,13 +963,26 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         // (exactly-one finalizer per lane). Kill-switch (=0), a legacy (non-reserved) lane, OR a
         // reservation with NO turn-keyed evidence (review Finding 1) → `turnOwned` is undefined
         // and the unchanged legacy `else` block runs so the loop still converges.
-        const turnOwned = turnOwnedReviewEnabled()
-          ? reconcileTurnOwnedReviewLane(lane, cwd)
+        const turnOwned = turnOwnedEvidence
+          ? reconcileTurnOwnedLane(lane, cwd, turnOwnedEvidence)
           : undefined;
         if (turnOwned) {
           const { reservation, result: rr } = turnOwned;
-          entry.review_loop = reconcileToReviewLoopResult(reservation, rr, lane);
-          reasons.push(`turn-owned reconcile ${reservation.loop_id}: ${entry.review_loop.action} — ${rr.reason}${rr.conflict ? ' [CONFLICT — held]' : ''}`);
+          if (ownedLoop?.kind === 'review') {
+            entry.review_loop = reconcileToReviewLoopResult(reservation, rr, lane);
+            reasons.push(`turn-owned reconcile ${reservation.loop_id}: ${entry.review_loop.action} — ${rr.reason}${rr.conflict ? ' [CONFLICT — held]' : ''}`);
+          } else {
+            const action = rr.auto_closed ? 'closed' : rr.reconciled ? 'advanced' : 'noop';
+            reasons.push(`turn-owned ${ownedLoop?.kind ?? 'loop'} reconcile ${reservation.loop_id}: ${action} — ${rr.reason}${rr.conflict ? ' [CONFLICT — held]' : ''}`);
+            if (ownedLoop?.kind === 'ideation') {
+              entry.ideation_loop = {
+                loop_id: reservation.loop_id,
+                action,
+                reason: rr.reason,
+                loop_status: rr.loop_status,
+              };
+            }
+          }
           // pln#630 PR3b — a symmetric request_changes bumped the round + retained the claim
           // and handed back the next fix-cycle turn. Push it exactly like the legacy path so
           // the existing async re-dispatch loop spawns round N+1 into the reused worktree. The

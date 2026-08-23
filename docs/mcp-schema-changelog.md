@@ -408,7 +408,16 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:b8dbb80bae8f6e36`
+- MCP public surface fingerprint: `sha256:81243f3d507c274e`
+  (updated 2026-08-23 for the common Loop Engine worker driver: `turn` exposes
+  real dispatch/model/candidate controls and `complete_turn` exposes the full
+  AttemptAuthority fence; bind remains engine-only with compatibility inputs.)
+  Previous: `sha256:47fa4e8a66fae55d`
+  (updated 2026-08-23 for AttemptAuthority v2: the public Loop Engine surface
+  exposes `open`, `verify`, `request_input`, and `provide_input`; Assignment and
+  Claim mutations carry the complete attempt fence and coordinator override is
+  explicit.)
+  Previous: `sha256:b8dbb80bae8f6e36`
   (updated 2026-08-10 for pln#665: `bclaw_code_export` — additive Tier-B read tool for a required, bounded local Code Map subgraph. Its target, direction, depth, node/edge caps, confidence threshold, and optional Mermaid projection are explicit; JSON retains each relation's kind/source/confidence and never defaults to a whole-graph export.)
   Previous: `sha256:9ed35ed6cc49ea9a`
   (updated 2026-08-10 for pln#661: `bclaw_code_impact` — additive Tier-B read tool
@@ -420,10 +429,10 @@ will still succeed. A follow-up PR will strip the dead handler code.
   source-ordered symbols of one indexed file from the existing shard; no reparse,
   no mutation, bounded output. Purely additive.)
   (updated 2026-07-25 for pln#632: `bclaw_loop` gains the `bind` intent — an
-  implementation loop dispatches its linked sequence and advances bind→execute — plus
-  its typed inputSchema properties `dry_run`, `lanes`, `auto_execute`, `model`, and
-  `max_assignments`. Additive — no tool added/removed/renamed; the new enum value + the
-  new properties move the fingerprint.)
+  implementation loop validates its linked sequence and advances bind→execute.
+  Historical launch-shaped properties `lanes`, `auto_execute`, `model`, and
+  `max_assignments` remain accepted but are ignored; worker launch now goes through
+  `turn(dispatch=true)` and AttemptAuthority. Additive — no tool removed/renamed.)
   Previous: `sha256:f3d49b28d2d366bb`
   (updated 2026-07-24 for pln#630 PR2b-a: `LoopSlotSchema` gains an optional
   `current_turn_id`, which flows through the zod-derived `LoopSlotInput` into

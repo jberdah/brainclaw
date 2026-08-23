@@ -209,12 +209,13 @@ bclaw_coordinate(intent='ideate', task='Should we extract the dispatcher into a 
 - Opens a loop with one `champion` slot = caller.
 - Stores `task` as a `proposal` artifact (sliced to fit the 4 KB
   artifact body cap).
-- Stops at the proposal phase. The champion drives the loop manually
-  via `bclaw_loop(intent='turn'|'advance')`.
+- Stops at the manual `proposal` phase. The champion drives lifecycle with
+  `bclaw_loop(intent='turn'|'advance')`; `critique`, `revision`, and
+  `synthesis` are worker phases, so a trusted caller uses `turn(dispatch=true)`
+  when it wants Brainclaw to launch them.
 - Returns `{loop_id, proposal_artifact_id, mode: 'single_agent',
   dispatched_critics: 0, current_phase: 'proposal'}`.
-- Surfaces a single-agent warning so the caller knows dispatch is
-  manual.
+- Surfaces a single-agent warning so the caller knows dispatch is not automatic.
 
 This is the right mode when you want the loop's structure (memory
 filter, gate, iteration accounting) but want to drive each turn

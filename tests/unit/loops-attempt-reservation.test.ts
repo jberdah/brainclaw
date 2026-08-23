@@ -15,7 +15,6 @@ import {
   deriveChildIds,
   attemptStatus,
   currentNonce,
-  TurnReservationSchema,
   ReservationStateError,
   type ReserveInput,
   type TurnReservation,
@@ -82,13 +81,18 @@ describe('attempt-reservation — PR2b-a additive foundation (pln#630 §13)', ()
     assert.equal(reserve(reserveInput(cwd, { turn_id: 'tat_cm2', completion_mode: 'either' }), cwd).completion_mode, 'either');
   });
 
-  it('a PR1 on-disk record (no expected_artifacts) still parses (default [])', () => {
+  it('a PR1 on-disk record still loads through the public readers with additive defaults', () => {
     const r = reserve(reserveInput(cwd, { turn_id: 'tat_legacy' }), cwd);
     const legacy = { ...r } as Record<string, unknown>;
-    delete legacy.expected_artifacts; // simulate a record written before the field existed
-    const parsed = TurnReservationSchema.parse(legacy);
-    assert.deepEqual(parsed.expected_artifacts, []);
-    assert.equal(parsed.completion_mode, 'file');
+    delete legacy.expected_artifacts;
+    delete legacy.completion_mode;
+    const reservationPath = path.join(cwd, '.brainclaw', 'loops', 'reservations', 'tat_legacy.json');
+    fs.writeFileSync(reservationPath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    const loaded = getReservation('tat_legacy', cwd)!;
+    assert.deepEqual(loaded.expected_artifacts, []);
+    assert.equal(loaded.completion_mode, 'file');
+    assert.deepEqual(listReservations({}, cwd), [loaded], 'listing uses the same legacy-compatible reader');
   });
 
   it('attemptStatus projects the two shipped axes (+ optional run status)', () => {
@@ -219,6 +223,24 @@ describe('attempt-reservation — fault-injection (crash windows)', () => {
     assert.throws(() => abortReservation('tat_0001', 'recovery confusion', cwd), (e: unknown) =>
       e instanceof ReservationStateError && e.code === 'committed_not_abortable');
     assert.equal(assertDispatchable('tat_0001', cwd).decision, 'committed');
+  });
+
+  it('terminal decisions are observable after a crash/replay and idempotent replay preserves their first metadata', () => {
+    reserve(reserveInput(cwd, { turn_id: 'tat_commit_replay' }), cwd);
+    const committed = commitReservation('tat_commit_replay', cwd);
+    const committedOnDisk = getReservation('tat_commit_replay', cwd)!;
+    assert.deepEqual(committedOnDisk, committed, 'commit is durably observable through a fresh public read');
+    assert.deepEqual(commitReservation('tat_commit_replay', cwd), committedOnDisk, 'commit replay adopts the durable terminal record');
+
+    reserve(reserveInput(cwd, { turn_id: 'tat_abort_replay' }), cwd);
+    const aborted = abortReservation('tat_abort_replay', 'recoverer decision', cwd);
+    const abortedOnDisk = getReservation('tat_abort_replay', cwd)!;
+    assert.deepEqual(abortedOnDisk, aborted, 'abort is durably observable through a fresh public read');
+    assert.deepEqual(
+      abortReservation('tat_abort_replay', 'stale replay reason', cwd),
+      abortedOnDisk,
+      'abort replay keeps the first decided_at and abort_reason',
+    );
   });
 
   it('guards on a missing reservation throw reservation_not_found (no silent dispatch)', () => {

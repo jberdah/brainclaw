@@ -2,7 +2,7 @@ import { memoryExists } from '../core/io.js';
 import { handleBclawLoop } from './loops-handlers.js';
 import type { NextExpectedHint } from '../core/loops/index.js';
 
-export type LoopSubcommand = 'turn' | 'complete-turn' | 'advance' | 'add-artifact';
+export type LoopSubcommand = 'turn' | 'complete-turn' | 'takeover' | 'advance' | 'add-artifact';
 
 export interface LoopCommandArgs {
   loop_id?: string;
@@ -13,6 +13,11 @@ export interface LoopCommandOptions {
   input?: string;
   role?: string;
   assignmentId?: string;
+  runId?: string;
+  nonce?: string;
+  attemptEpoch?: string | number;
+  executionContractHash?: string;
+  workspaceDigest?: string;
   outcome?: 'done' | 'failed' | 'cancelled';
   failureReason?: string;
   artifact?: string;
@@ -25,6 +30,14 @@ export interface LoopCommandOptions {
   producedBy?: string;
   ref?: string;
   json?: boolean;
+  turnId?: string;
+  expectedEpoch?: string | number;
+  cause?: string;
+  livenessEvidence?: string;
+  externalEffectPolicy?: 'none' | 'idempotent' | 'externally_fenced';
+  nextWorkspacePath?: string;
+  mode?: 'takeover' | 'retry';
+  agent?: string;
 }
 
 export interface LoopCommandResult {
@@ -100,6 +113,13 @@ function parseOutcome(opts: LoopCommandOptions): 'done' | 'failed' | 'cancelled'
   return outcome;
 }
 
+function parseOptionalEpoch(value: string | number | undefined, opts: LoopCommandOptions): number | undefined {
+  if (value === undefined) return undefined;
+  const epoch = Number(value);
+  if (!Number.isInteger(epoch) || epoch < 0) fail('--attempt-epoch must be a non-negative integer', 1, opts);
+  return epoch;
+}
+
 function formatNextExpected(hint: NextExpectedHint | null): string {
   if (!hint) return '  (loop has no further expected action)';
   const bits: string[] = [`  next: ${hint.action} (${hint.intent})`];
@@ -135,9 +155,35 @@ function buildRequest(
         intent: 'complete_turn',
         loop_id: loopId,
         slot_id: requireOption(opts.slot, '--slot <slot_id>', opts),
+        assignment_id: opts.assignmentId,
+        turn_id: opts.turnId,
+        run_id: opts.runId,
+        nonce: opts.nonce,
+        attempt_epoch: parseOptionalEpoch(opts.attemptEpoch, opts),
+        execution_contract_hash: opts.executionContractHash,
+        workspace_digest: opts.workspaceDigest,
         outcome: parseOutcome(opts),
         failure_reason: opts.failureReason,
         artifact,
+      };
+    }
+
+    case 'takeover': {
+      const epoch = Number(opts.expectedEpoch);
+      if (!Number.isInteger(epoch) || epoch < 0) fail('--expected-epoch must be a non-negative integer', 1, opts);
+      return {
+        intent: 'takeover',
+        loop_id: loopId,
+        slot_id: requireOption(opts.slot, '--slot <slot_id>', opts),
+        turn_id: requireOption(opts.turnId, '--turn-id <turn_id>', opts),
+        expected_epoch: epoch,
+        cause: requireOption(opts.cause, '--cause <text>', opts),
+        liveness_evidence: requireOption(opts.livenessEvidence, '--liveness-evidence <text>', opts),
+        external_effect_policy: requireOption(opts.externalEffectPolicy, '--external-effect-policy <policy>', opts),
+        next_workspace_path: requireOption(opts.nextWorkspacePath, '--next-workspace-path <path>', opts),
+        takeover_mode: opts.mode,
+        agent: opts.agent,
+        agentId: opts.agent,
       };
     }
 

@@ -68,7 +68,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_context` | context | Unified context read for memory, execution, board, board summary, and deltas |
 | `bclaw_coordinate` | coordination | Assign, consult, review, ideate, reroute, or summarize across agents |
 | `bclaw_dispatch` | coordination | Analyze, execute, or review dispatch work through one intent-based entry point |
-| `bclaw_loop` | loops | Drive multi-turn review, ideation, implementation, research, or debug loops |
+| `bclaw_loop` | loops | Drive review, ideation, implementation, research, or debug loops, including fenced physical-run takeover |
 | `bclaw_setup` | session | Agent-driven onboarding wizard |
 
 ### Standard tools
@@ -86,7 +86,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_write_note` | memory | Record a runtime note |
 | `bclaw_quick_capture` | memory | Capture text and classify it locally as a decision, trap, or runtime note |
 | `bclaw_claim` | coordination | Claim a work scope (advisory lock, auto-worktree) |
-| `bclaw_release_claim` | coordination | Release a claim, optionally updating linked plan status |
+| `bclaw_release_claim` | coordination | Release a legacy/unsettled-independent claim, optionally updating linked plan status; v2 loop claims are released by settlement projections or audited coordinator override |
 | `bclaw_session_start` | session | Start a session explicitly (granular workflow) |
 | `bclaw_session_end` | session | End session, optionally auto-reflect notes or handoffs |
 | `bclaw_add_step` | coordination | Add a sub-step to a plan item |
@@ -98,7 +98,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_update_sequence` | coordination | Update a sequence's status, metadata, or items |
 | `bclaw_delete_sequence` | coordination | Delete a sequence by ID |
 | `bclaw_correct_handoff` | coordination | Write an immutable correction handoff that supersedes an earlier one |
-| `bclaw_assignment_update` | coordination | Report assignment lifecycle status |
+| `bclaw_assignment_update` | coordination | Report assignment lifecycle status; v2 logical Assignments require the full generation fence and accept only accepted/started/progress before settlement |
 | `bclaw_assignment_action` | coordination | Resolve or reject a pending ActionRequired item |
 | `bclaw_harvest_candidates` | coordination | Harvest sandboxed worktree candidate files into the main project store |
 | `bclaw_find` | memory | List canonical entities with filters |
@@ -399,7 +399,8 @@ bclaw_context({ kind: 'board_summary' })
 // Review dispatch with structured loop
 bclaw_dispatch({ intent: 'review', openLoop: true, reviewMode: 'symmetric' })
 
-// Open a memory-confrontation ideation loop (single-agent: champion drives manually)
+// Open a single-agent ideation loop. Proposal is manual; critique, revision and
+// synthesis are worker phases available through trusted turn(dispatch:true).
 bclaw_coordinate({ intent: 'ideate', task: 'Should we extract the dispatcher into a separate package?' })
 
 // Multi-agent ideation: critic gets a context-filtered, BM25-ranked brief auto-dispatched
@@ -410,7 +411,8 @@ bclaw_coordinate({
 })
 
 // Open a direct implementation loop. The caller owns subsequent bind/turn
-// actions, which is why allow_orphan is explicit.
+// actions, which is why allow_orphan is explicit. Bind is engine-only; after
+// it advances to execute, turn(dispatch:true) is the worker launch path.
 bclaw_loop({
   intent: 'open',
   kind: 'implementation',
@@ -418,6 +420,52 @@ bclaw_loop({
   allow_orphan: true,
   linked: { plan_ids: ['pln_abc'], sequence_ids: ['seq_abc'] },
   verify: { command: ['npm', 'test'] },
+})
+
+bclaw_loop({ intent: 'bind', loop_id: 'lop_abc' })
+bclaw_loop({
+  intent: 'turn', loop_id: 'lop_abc', slot_id: 'lsl_worker',
+  dispatch: true, target_agents: ['codex', 'claude-code'],
+})
+
+// Direct research/debug loops use the same facade. A plain turn records state;
+// trusted dispatch:true actually prepares, fences and launches a worker.
+bclaw_loop({
+  intent: 'open',
+  kind: 'research',
+  title: 'Determine the safe migration boundary',
+  goal: 'Produce a sourced synthesis',
+  allow_orphan: true,
+})
+bclaw_loop({
+  intent: 'turn',
+  loop_id: 'lop_research',
+  slot_id: 'lsl_investigator',
+  dispatch: true,
+  target_agents: ['codex', 'claude-code'], // only used when the slot is unbound
+})
+
+bclaw_loop({
+  intent: 'open',
+  kind: 'debug',
+  title: 'Reproduce and fix the Windows dispatch failure',
+  allow_orphan: true,
+})
+bclaw_loop({ intent: 'turn', loop_id: 'lop_debug', slot_id: 'lsl_reproducer', dispatch: true })
+
+// Fence a stale physical generation without changing the logical turn or Assignment.
+// This arms the successor; dispatch the same turn afterwards to contend on launch.
+bclaw_loop({
+  intent: 'takeover',
+  loop_id: 'lop_abc',
+  slot_id: 'lsl_abc',
+  turn_id: 'tat_abc',
+  expected_epoch: 0,
+  cause: 'heartbeat and process evidence are stale',
+  liveness_evidence: 'no heartbeat for 30m; wrapper exited',
+  external_effect_policy: 'idempotent',
+  next_workspace_path: 'C:\\worktrees\\brainclaw-retry-1',
+  agent: 'coordinator',
 })
 
 // Correct a handoff instead of mutating it
@@ -430,6 +478,12 @@ advance gate, brief assembly, single vs multi-agent UX), see
 engine supports the five built-in `review`, `ideation`, `implementation`,
 `research`, and `debug` workflows, plus cross-cutting `request_input` /
 `provide_input`; see [docs/concepts/loop-engine.md](../concepts/loop-engine.md).
+Takeover is likewise cross-cutting, not review-specific. Once a turn has an
+AttemptAuthority v2 generation chain, terminal evidence must echo the complete
+`assignment_id`, `turn_id`, `attempt_epoch`, `run_id`, `nonce`,
+`execution_contract_hash`, and `workspace_digest` fence; a stale generation is
+retained for audit but cannot converge loop state. See
+[docs/concepts/attempt-authority.md](../concepts/attempt-authority.md).
 
 #### Deprecation status
 

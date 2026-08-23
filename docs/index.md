@@ -28,8 +28,11 @@ Use this page as the entry point into the packaged Markdown documentation.
 - [concepts/workspace-bootstrapping.md](concepts/workspace-bootstrapping.md)
 - [concepts/troubleshooting.md](concepts/troubleshooting.md) — runbook for degraded coordination state
 - [concepts/memory-staleness.md](concepts/memory-staleness.md)
-- [concepts/loop-engine.md](concepts/loop-engine.md)
+- [concepts/loop-engine.md](concepts/loop-engine.md) — shared runtime for the five loop protocols
+- [concepts/attempt-authority.md](concepts/attempt-authority.md) — identity, dispatch decisions and spawn authority for every turn
+- [concepts/evidence-attestations.md](concepts/evidence-attestations.md) — server-sealed loop evidence, independent attestations, and protocol gates
 - [concepts/ideation-loop.md](concepts/ideation-loop.md) — memory-confrontation ideation loop (v1.5.0+)
+- Loop protocol guides — [review](loops/review.md), [ideation](loops/ideation.md), [implementation](loops/implementation.md), [research](loops/research.md), [debug](loops/debug.md)
 - [concepts/mcp-governance.md](concepts/mcp-governance.md)
 - [concepts/federation-v2-rfc.md](concepts/federation-v2-rfc.md) — contrat joint core + Cloud pour la fédération chiffrée v2
 

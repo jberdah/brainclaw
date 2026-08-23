@@ -298,8 +298,9 @@ function renderUserWorkflow(): string {
     '',
     'Entities: `plan` (intended outcome) · `step` (unit inside a plan) · `sequence` (optional parallel lanes) · `claim` (advisory scope reservation) · `handoff` (stage snapshot) · `candidate` (proposed memory awaiting review) · `decision`/`constraint`/`trap`/`runtime_note` (context captured along the way).',
     '',
-    'Review & Fix Loop: start with `bclaw_coordinate(intent=review, open_loop=true, review_mode=symmetric|asymmetric, targetAgents=[reviewer])` — opens the loop AND dispatches the first turn. Drive your turns with `bclaw_loop(intent=turn|complete_turn|advance|close)`. Parallelize a sequence\'s lanes with `bclaw_dispatch(intent=execute)`.',
-    'Ideation / Debug / Research loops — *planned* (`docs/product/agent-first-model.md` §3).',
+    'Loop Engine: five shipped protocols share one lifecycle — `review` validates a change, `ideation` pressure-tests a proposal, `implementation` drives a bound plan to green, `research` converges an open question, and `debug` drives a reproducible failure back to green.',
+    'Entry points: start review with `bclaw_coordinate(intent=review, open_loop=true, review_mode=symmetric|asymmetric, targetAgents=[reviewer])`; start ideation with `bclaw_coordinate(intent=ideate, targetAgents=[critic])`. For implementation, research, or debug, direct `bclaw_loop(intent=open, kind=<kind>, allow_orphan=true)` is supported only when the caller will explicitly drive or dispatch the loop.',
+    'Drive turns with `bclaw_loop(intent=turn|complete_turn|advance|close)` and follow each response\'s `next_actions`; on a worker phase, trusted `bclaw_loop(intent=turn, dispatch=true)` runs the common AttemptAuthority dispatch path. Parallelize a sequence\'s independent lanes with `bclaw_dispatch(intent=execute)`. Protocol details: `docs/concepts/loop-engine.md` and `docs/loops/`.',
   ].join('\n');
 }
 

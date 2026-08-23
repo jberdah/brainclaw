@@ -47,9 +47,9 @@ The `--sandbox workspace-write` setting is required, **not `read-only`** — the
 
 ### Prompt delivery: stdin_pipe (preferred)
 
-Since pln#475 (1.0.10+), Codex spawned as a child process receives its prompt via **stdin** rather than as an inline argument. The reason is Windows-specific: `codex.cmd` resolves through `cmd.exe`, where embedded backticks, `#`, or multi-line content can be mis-parsed and raise `unexpected argument`. Reading from stdin avoids that.
+Since pln#475 (1.0.10+), Codex spawned as a child process receives its prompt via **stdin** rather than as an inline argument. The reason is Windows-specific: `codex.cmd` resolves through `cmd.exe`, where embedded backticks, `#`, or multi-line content can be mis-parsed and raise `unexpected argument`. Keeping the prompt out of argv avoids that.
 
-When you (or the dispatcher) calls Codex with no positional `[PROMPT]`, Codex reads stdin until EOF — that's where brainclaw pipes the brief. `inline_arg` remains a fallback for short prompts on POSIX.
+When you (or the dispatcher) calls Codex with no positional `[PROMPT]`, Codex reads stdin until EOF. A direct spawn pipes the brief normally. On Windows, an ack-wrapped spawn writes the brief to a private per-run file, redirects that file to Codex stdin, and deletes it after the terminal sentinel. This is still `stdin_pipe` at the harness contract: the file is a transport detail that guarantees EOF through `cmd.exe` and keeps prompt content out of shell syntax. `inline_arg` remains a fallback for short prompts on POSIX.
 
 ### Brief-ack handshake
 
@@ -89,6 +89,6 @@ The file shape is `{ "hooks": { "<Event>": [ { "matcher": "", "hooks": [ { "type
 ## Caveats
 
 - **Sandbox blocks `git commit`, not MCP** (dec#133): a sandboxed Codex run reaches brainclaw MCP (the server is a separate out-of-sandbox process; `approval_policy=never` auto-approves). What the sandbox *does* block is direct writes to paths outside the worktree root — notably `.git`, so the worker cannot `git commit`. Leave fixes uncommitted; the coordinator integrates + commits the worktree diff at harvest. A LANE-RESULT.json / filesystem-direct candidate write remains a valid fallback for reporting.
-- **Windows quoting**: long prompts containing backticks or `#` fail when passed as inline args through `cmd.exe`. The default stdin_pipe path avoids this.
+- **Windows prompt transport**: long prompts containing backticks or `#` fail when passed as inline args through `cmd.exe`, while a parent stdin pipe can fail to propagate EOF to a native grandchild. The default ack-wrapped path uses a per-run file redirected to stdin and removes it after the terminal sentinel, avoiding both failure modes.
 - **Sandbox vs review parity**: review runs use the same `workspace-write` sandbox as execution runs (older templates forced `read-only` on reviews; that path blocked PowerShell exec on Windows).
 - **No always-allow**: each MCP tool call still respects per-call approval policy unless explicitly set with `-c approval_policy="never"`.

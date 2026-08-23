@@ -15,10 +15,10 @@ import {
   provideInput,
   sweepPauseTimeouts,
   writeThreadFile,
-  type LoopArtifact,
   type LoopEvent,
   type LoopThread,
 } from '../../src/core/loops/index.js';
+import { sealArtifactEvidence } from '../../src/core/loops/evidence.js';
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { writeFileAtomic } from '../../src/core/io.js';
 
@@ -83,7 +83,7 @@ function setupBootstrapLoop(opts: { finalContent?: string } = {}): Fixture {
   fs.writeFileSync(refPath, finalContent, 'utf8');
 
   const sha = crypto.createHash('sha256').update(finalContent, 'utf8').digest('hex');
-  const finalArtifact: LoopArtifact = {
+  const finalArtifact = sealArtifactEvidence(loop, {
     artifact_id: finalArtifactId,
     phase: 'converge',
     type: 'project_md_final',
@@ -92,8 +92,15 @@ function setupBootstrapLoop(opts: { finalContent?: string } = {}): Fixture {
       byte_count: Buffer.byteLength(finalContent, 'utf8'),
       sha256: sha,
     }),
-    produced_at: '2026-05-22T00:00:00.000Z',
-  };
+    produced_at: loop.created_at,
+  }, {
+    channel: 'complete_turn',
+    producer_kind: 'slot',
+    producer_id: 'agt_champion',
+    agent_id: 'agt_champion',
+    slot_id: loop.slots[0]!.slot_id,
+    slot_role: loop.slots[0]!.role,
+  });
 
   // Re-save the loop with the artifact attached and current_phase=converge
   // so the close path matches a realistic bootstrap end-state.

@@ -52,6 +52,13 @@ describe('buildAckWrapCommand (pln#520 step 4)', () => {
     assert.ok(cmd.includes('&& type nul > "/r/signal/a.completed" || type nul > "/r/signal/a.failed"'), `completion: ${cmd}`);
   });
 
+  it('Windows: redirects a prompt file into the worker and removes it after the terminal sentinel', () => {
+    const paths = { ...PATHS, stdinFilePath: 'C:/runtime/asgn.stdin' };
+    const cmd = buildAckWrapCommand('codex exec --json', paths, true);
+    assert.ok(cmd.includes('codex exec --json < "C:/runtime/asgn.stdin" > '), `stdin redirect: ${cmd}`);
+    assert.ok(cmd.endsWith(' & del /q "C:/runtime/asgn.stdin" > nul 2>&1'), `prompt cleanup: ${cmd}`);
+  });
+
   it('keeps the agent command inside a group so stdin is inherited (only stdout/stderr redirected)', () => {
     const cmd = buildAckWrapCommand('printf x | claude -p', PATHS, false);
     // The pipe stays intact ahead of the redirect — prompt delivery preserved.
@@ -68,6 +75,18 @@ function nodeInvoke(snippet: string): InvokeCommand {
     args: ['-e', snippet],
     bashCommand: `node -e "${escaped}"`,
     promptDelivery: 'inline_arg',
+    shell: false,
+  } as InvokeCommand;
+}
+
+function stdinNodeInvoke(): InvokeCommand {
+  const snippet = "process.stdin.setEncoding('utf8');let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(s))";
+  return {
+    executable: 'node',
+    args: ['-e', snippet],
+    bashCommand: `node -e "${snippet}"`,
+    promptDelivery: 'stdin_pipe',
+    promptText: 'prompt-through-stdin',
     shell: false,
   } as InvokeCommand;
 }
@@ -117,6 +136,21 @@ describe('ack-wrap spawn round-trip (pln#520 step 4)', () => {
       { agent: 'node-test', assignmentId: id, ackRoot: workspace, worktreePath: workspace },
     );
     assert.ok(await waitFor(() => fs.existsSync(getRuntimeSignalPath(workspace, id, 'ack')), 5000), 'ack written');
+  });
+
+  it('delivers stdin through an EOF-safe file in the Windows ack wrapper', async () => {
+    const id = 'asgn_stdin';
+    defaultExecutionAdapter.start(stdinNodeInvoke(), {
+      agent: 'codex', claimId: 'clm_stdin', assignmentId: id,
+      worktreePath: workspace, ackRoot: workspace,
+    });
+    const completed = getRuntimeSignalPath(workspace, id, 'completed');
+    assert.equal(await waitFor(() => fs.existsSync(completed), 5000), true);
+    assert.equal(fs.readFileSync(getRuntimeLogPath(workspace, id, 'stdout'), 'utf8'), 'prompt-through-stdin');
+    if (process.platform === 'win32') {
+      const promptPath = `${getRuntimeSignalPath(workspace, id, 'ack')}.stdin`;
+      assert.equal(fs.existsSync(promptPath), false, 'wrapper removes the per-run prompt file');
+    }
   });
 });
 

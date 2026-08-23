@@ -19,6 +19,11 @@ import type {
   LoopPhase,
   LoopThread,
 } from './types.js';
+import {
+  evaluateCommandGreen,
+  evaluateCriticSignal,
+  evaluateNoNewCritique,
+} from './gate-policy.js';
 
 export interface IterationProtocol {
   phases: LoopPhase[];
@@ -66,6 +71,7 @@ export type NextPhaseDecision =
 export function decideNextPhase(
   thread: LoopThread,
   protocol: IterationProtocol,
+  cwd?: string,
 ): NextPhaseDecision {
   const phaseNames = protocol.phases.map((p) => p.name);
   const currentIndex = phaseNames.indexOf(thread.current_phase);
@@ -98,6 +104,29 @@ export function decideNextPhase(
   //       exit by max_iterations.
   const cycleIndex = cycle.indexOf(thread.current_phase);
   const atCycleEnd = cycleIndex === cycle.length - 1;
+
+  // A saturation exit is a negative observation: after at least one full
+  // cycle, a settled critique phase with no eligible new critique exits
+  // directly. Waiting until the revision boundary made this condition
+  // unreachable because the critique phase's quantitative gate refused the
+  // very zero-artifact round the exit condition needs to observe.
+  if (
+    cycleIndex === 0 &&
+    thread.iteration_count > 0 &&
+    protocol.iteration?.exit_when === 'no_new_critique_artifacts' &&
+    noNewCritiqueInIteration(thread, thread.iteration_count, cwd)
+  ) {
+    const lastCyclePhaseIndex = phaseNames.indexOf(cycle[cycle.length - 1]);
+    if (lastCyclePhaseIndex < 0 || lastCyclePhaseIndex + 1 >= phaseNames.length) {
+      throw new Error(`decideNextPhase: cycle's last phase "${cycle[cycle.length - 1]}" has no post-cycle successor`);
+    }
+    return {
+      kind: 'exit_cycle',
+      target: phaseNames[lastCyclePhaseIndex + 1],
+      iteration: thread.iteration_count,
+      reason: 'no_new_critique_artifacts',
+    };
+  }
 
   if (!atCycleEnd) {
     return {
@@ -136,7 +165,7 @@ export function decideNextPhase(
   // yet incremented).
   if (
     iterationBlock.exit_when === 'critic_signal' &&
-    hasCriticSignalInIteration(thread, thread.iteration_count)
+    hasCriticSignalInIteration(thread, thread.iteration_count, cwd)
   ) {
     return {
       kind: 'exit_cycle',
@@ -148,7 +177,7 @@ export function decideNextPhase(
 
   if (
     iterationBlock.exit_when === 'no_new_critique_artifacts' &&
-    noNewCritiqueInIteration(thread, thread.iteration_count)
+    noNewCritiqueInIteration(thread, thread.iteration_count, cwd)
   ) {
     return {
       kind: 'exit_cycle',
@@ -160,7 +189,7 @@ export function decideNextPhase(
 
   if (
     iterationBlock.exit_when === 'command_green' &&
-    hasPassingVerifyReportInIteration(thread, thread.iteration_count)
+    hasPassingVerifyReportInIteration(thread, thread.iteration_count, cwd)
   ) {
     return {
       kind: 'exit_cycle',
@@ -212,10 +241,9 @@ export function artifactsInIteration(
 export function noNewCritiqueInIteration(
   thread: LoopThread,
   iteration: number,
+  cwd?: string,
 ): boolean {
-  return !thread.artifacts.some(
-    (a) => (a.iteration ?? 0) === iteration && a.type === 'critique',
-  );
+  return evaluateNoNewCritique(thread, iteration, cwd).passed;
 }
 
 /**
@@ -226,10 +254,9 @@ export function noNewCritiqueInIteration(
 export function hasCriticSignalInIteration(
   thread: LoopThread,
   iteration: number,
+  cwd?: string,
 ): boolean {
-  return thread.artifacts.some(
-    (a) => (a.iteration ?? 0) === iteration && a.type === 'critic_signal',
-  );
+  return evaluateCriticSignal(thread, iteration, cwd).passed;
 }
 
 /**
@@ -243,13 +270,7 @@ export function hasCriticSignalInIteration(
 export function hasPassingVerifyReportInIteration(
   thread: LoopThread,
   iteration: number,
+  cwd?: string,
 ): boolean {
-  return artifactsInIteration(thread, iteration).some((a) => {
-    if (a.type !== 'verify_report') return false;
-    try {
-      return (JSON.parse(a.body ?? '{}') as { passed?: unknown }).passed === true;
-    } catch {
-      return false;
-    }
-  });
+  return evaluateCommandGreen(thread, iteration, cwd).passed;
 }

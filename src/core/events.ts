@@ -71,6 +71,10 @@ export interface RuntimeEventFilter {
   event_type?: RuntimeEvent['event_type'];
   assignment_id?: string;
   run_id?: string;
+  turn_id?: string;
+  nonce?: string;
+  attempt_epoch?: number;
+  workspace_digest?: string;
   claim_id?: string;
   plan_id?: string;
   sequence_id?: string;
@@ -131,6 +135,10 @@ export interface CreateRuntimeEventOptions {
   tags?: string[];
   assignment_id?: string;
   run_id?: string;
+  turn_id?: string;
+  nonce?: string;
+  attempt_epoch?: number;
+  workspace_digest?: string;
   claim_id?: string;
   message_id?: string;
   plan_id?: string;
@@ -173,6 +181,10 @@ export function createRuntimeEvent(options: CreateRuntimeEventOptions, cwd?: str
     tags: options.tags ?? [],
     assignment_id: options.assignment_id,
     run_id: options.run_id,
+    turn_id: options.turn_id,
+    nonce: options.nonce,
+    attempt_epoch: options.attempt_epoch,
+    workspace_digest: options.workspace_digest,
     claim_id: options.claim_id,
     message_id: options.message_id,
     plan_id: options.plan_id,

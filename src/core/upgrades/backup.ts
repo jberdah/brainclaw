@@ -8,6 +8,30 @@ export const BACKUP_MANIFEST_FILENAME = 'backup.json';
 export const ROLLBACK_PARKED_PREFIX = '.brainclaw.rollback-';
 export const ROLLBACK_STAGING_PREFIX = '.brainclaw.restoring-';
 
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_ATTEMPTS = 6;
+const RENAME_RETRY_DELAY_MS = 25;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** NTFS/Defender can transiently deny an otherwise valid directory rename. */
+function renameWithRetry(from: string, to: string): void {
+  for (let attempt = 0; attempt < RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error: unknown) {
+      const code = error instanceof Error && 'code' in error
+        ? (error as NodeJS.ErrnoException).code
+        : undefined;
+      if (!code || !RETRYABLE_RENAME_CODES.has(code) || attempt === RENAME_ATTEMPTS - 1) throw error;
+      sleepSync(RENAME_RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+}
+
 export const BackupManifestSchema = z.object({
   schema_version: z.literal(1),
   created_at: z.string().datetime(),
@@ -98,7 +122,7 @@ export function createBackup(options: CreateBackupOptions): BackupHandle {
   );
 
   try {
-    fs.renameSync(stagingPath, finalPath);
+    renameWithRetry(stagingPath, finalPath);
   } catch (error: unknown) {
     try { fs.rmSync(stagingPath, { recursive: true, force: true }); } catch { /* best effort */ }
     throw new BackupError('rename_failed', `Could not finalise backup: ${(error as Error).message}`);
@@ -242,7 +266,7 @@ export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
   let parked = false;
   if (fs.existsSync(storePath)) {
     try {
-      fs.renameSync(storePath, parkedPath);
+      renameWithRetry(storePath, parkedPath);
       parked = true;
     } catch (error: unknown) {
       cleanupRestoreStaging(stagingPath);
@@ -253,7 +277,7 @@ export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
   // Step 4: swap staging → live. On failure, un-park so the store
   // is never left missing; staging dir is cleaned.
   try {
-    fs.renameSync(stagingPath, storePath);
+    renameWithRetry(stagingPath, storePath);
   } catch (error: unknown) {
     const swapMessage = (error as Error).message;
     if (!parked) {
@@ -262,7 +286,7 @@ export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
     }
 
     try {
-      fs.renameSync(parkedPath, storePath);
+      renameWithRetry(parkedPath, storePath);
     } catch (unparkError: unknown) {
       throw new BackupError(
         'restore_catastrophic',

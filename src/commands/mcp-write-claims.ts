@@ -323,8 +323,9 @@ export async function handleBclawReleaseClaim(payload: McpToolExecutionPayload, 
   }
   const cwd = located.location?.cwd ?? payload.cwd;
 
+  let routedClaim;
   try {
-    loadClaim(claimId, cwd); // validate existence before delegating
+    routedClaim = loadClaim(claimId, cwd); // validate existence before delegating
   } catch {
     const scope = located.enumeration_incomplete
       ? `${located.probed.length} reachable project(s), and the search hit its depth ceiling so deeper projects were NOT examined`
@@ -370,6 +371,37 @@ export async function handleBclawReleaseClaim(payload: McpToolExecutionPayload, 
           `coordinator_override:true requires trust_level 'trusted' or higher — caller is '${trustLevel}'. Ask a curator to elevate the agent, or have the claim owner release it.`,
         ),
       };
+    }
+  }
+  if (routedClaim.assignment_id) {
+    const { findReservationByAssignmentId } = await import('../core/loops/attempt-reservation.js');
+    const { resolveTurnGenerationChain } = await import('../core/loops/attempt-generations.js');
+    const reservation = findReservationByAssignmentId(routedClaim.assignment_id, cwd);
+    const chain = reservation
+      ? resolveTurnGenerationChain(reservation.store_root, reservation.turn_id)
+      : undefined;
+    if (reservation && chain) {
+      if (coordinatorOverrideRequested) {
+        const { getLoop } = await import('../core/loops/store.js');
+        const loop = getLoop(reservation.loop_id, cwd);
+        if (!loop || loop.created_by !== releaseIdentity.identity.agent_id) {
+          return {
+            response: createToolErrorResponse(
+              'trust_error',
+              `AttemptAuthority v2 coordinator override requires the authenticated loop creator (${loop?.created_by ?? 'unknown'}); caller is ${releaseIdentity.identity.agent_id}`,
+              { claim_id: claimId, loop_id: reservation.loop_id },
+            ),
+          };
+        }
+      } else {
+        return {
+          response: createToolErrorResponse(
+            'validation_error',
+            `Claim ${claimId} belongs to a logical AttemptAuthority v2 Assignment and is released only after immutable settlement; worker release is refused`,
+            { claim_id: claimId, active_epoch: chain.latest_generation.attempt_epoch },
+          ),
+        };
+      }
     }
   }
   const releaseAuth = {
@@ -756,6 +788,115 @@ export async function handleBclawAssignmentUpdate(payload: McpToolExecutionPaylo
     const callerAgent = resolved.identity!.agent_name;
     if (assignment.agent !== callerAgent) {
       return { response: createToolErrorResponse('trust_error', `Agent ${callerAgent} cannot update assignment owned by ${assignment.agent}`) };
+    }
+
+    // AttemptAuthority v2 keeps Assignment stable across physical generations.
+    // Therefore agent ownership alone is insufficient: a late epoch-0 worker
+    // still owns the same Assignment. Require its complete current fence before
+    // ANY progress/status mutation, AgentRun synchronization, or claim cascade.
+    const { findReservationByAssignmentId, evidenceMatchesAttempt } = await import('../core/loops/attempt-reservation.js');
+    const { resolveTurnGenerationChain } = await import('../core/loops/attempt-generations.js');
+    const reservation = findReservationByAssignmentId(assignmentId, cwd);
+    const generationChain = reservation
+      ? resolveTurnGenerationChain(reservation.store_root, reservation.turn_id)
+      : undefined;
+    if (reservation && generationChain) {
+      const matches = evidenceMatchesAttempt(reservation, {
+        assignment_id: assignmentId,
+        turn_id: typeof args.turn_id === 'string' ? args.turn_id : undefined,
+        run_id: typeof args.run_id === 'string' ? args.run_id : undefined,
+        nonce: typeof args.nonce === 'string' ? args.nonce : undefined,
+        attempt_epoch: typeof args.attempt_epoch === 'number' ? args.attempt_epoch : undefined,
+        contract_hash: typeof args.execution_contract_hash === 'string' ? args.execution_contract_hash : undefined,
+        workspace_digest: typeof args.workspace_digest === 'string' ? args.workspace_digest : undefined,
+      });
+      if (!matches) {
+        return {
+          response: createToolErrorResponse(
+            'validation_error',
+            `Assignment ${assignmentId} mutation rejected: missing or stale AttemptAuthority v2 generation fence`,
+            { assignment_id: assignmentId, active_epoch: generationChain.latest_generation.attempt_epoch },
+          ),
+        };
+      }
+    }
+
+    // A v2 Assignment is the stable LOGICAL identity shared by every physical
+    // generation. Worker lifecycle reports therefore drive only the current
+    // AgentRun; terminal Assignment/Claim convergence is reserved for
+    // reconcileTurn after close(epoch)=settled. This also lets a successor
+    // acknowledge/start while the stable Assignment is already `started`.
+    if (generationChain) {
+      const generation = generationChain.latest_generation;
+      if (!['accepted', 'started', 'progress'].includes(status)) {
+        return {
+          response: createToolErrorResponse(
+            'validation_error',
+            `AttemptAuthority v2 Assignment ${assignmentId} is logical and cannot transition to '${status}' from a worker; submit full-fence LANE-RESULT evidence for settlement`,
+            { assignment_id: assignmentId, run_id: generation.run_id, attempt_epoch: generation.attempt_epoch },
+          ),
+        };
+      }
+      if (status === 'accepted') {
+        if (assignment.status === 'offered') {
+          transitionAsgn(assignmentId, 'accepted', {
+            session_id: effectiveSessionId,
+            actor: callerAgent,
+            actor_id: resolved.identity!.agent_id,
+          }, cwd);
+        } else if (assignment.status !== 'accepted' && assignment.status !== 'started') {
+          return { response: createToolErrorResponse('operation_error', `Logical Assignment ${assignmentId} is ${assignment.status}, expected offered/accepted/started`) };
+        }
+        if (assignment.message_id) {
+          try {
+            const { ackMessage } = await import('../core/messaging.js');
+            ackMessage(assignment.message_id, callerAgent, cwd, { claimId: assignment.claim_id });
+          } catch { /* best-effort */ }
+        }
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Attempt generation ${generation.attempt_epoch} accepted for logical Assignment ${assignmentId}` }],
+            assignment_id: assignmentId,
+            status: assignment.status === 'offered' ? 'accepted' : assignment.status,
+            run_id: generation.run_id,
+            attempt_epoch: generation.attempt_epoch,
+          }),
+        };
+      }
+      if (status === 'started') {
+        if (assignment.status === 'accepted') {
+          transitionAsgn(assignmentId, 'started', {
+            session_id: effectiveSessionId,
+            actor: callerAgent,
+            actor_id: resolved.identity!.agent_id,
+          }, cwd);
+        } else if (assignment.status !== 'started') {
+          return { response: createToolErrorResponse('operation_error', `Logical Assignment ${assignmentId} is ${assignment.status}, expected accepted/started`) };
+        }
+        const { transitionAgentRun } = await import('../core/agentruns.js');
+        transitionAgentRun(generation.run_id, 'running', {
+          actor: callerAgent,
+          actor_id: resolved.identity!.agent_id,
+          session_id: effectiveSessionId,
+        }, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Attempt generation ${generation.attempt_epoch} started for logical Assignment ${assignmentId}` }],
+            assignment_id: assignmentId,
+            status: 'started',
+            run_id: generation.run_id,
+            attempt_epoch: generation.attempt_epoch,
+          }),
+        };
+      }
+      const { recordAgentRunProgress } = await import('../core/agentruns.js');
+      recordAgentRunProgress(generation.run_id, {
+        message,
+        artifacts,
+        actor: callerAgent,
+        actor_id: resolved.identity!.agent_id,
+        session_id: effectiveSessionId,
+      }, cwd);
     }
 
     if (status === 'progress') {

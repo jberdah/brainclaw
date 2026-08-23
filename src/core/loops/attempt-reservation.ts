@@ -6,7 +6,26 @@ import { z } from 'zod';
 
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
+import {
+  CapabilitySnapshotSchema,
+  assertExecutionContractIntegrity,
+  ExecutionContractRefSchema,
+  ExecutionContractSchema,
+  type CapabilitySnapshot,
+  type ExecutionContract,
+  type ExecutionContractRef,
+} from '../execution-contract.js';
+import { ExpectedArtifactSchema, type ExpectedArtifact } from './artifact-contract.js';
 import { acquireLock } from './lock.js';
+import {
+  readLaunchDecision as readV2LaunchDecision,
+  readInitialGeneration,
+  listAttemptGenerations,
+  resolveTurnGenerationChain,
+  type AttemptGeneration,
+} from './attempt-generations.js';
+
+export { ExpectedArtifactSchema, type ExpectedArtifact } from './artifact-contract.js';
 
 /**
  * Turn-attempt reservation authority (pln#630, spec v2 §1/§3).
@@ -23,10 +42,10 @@ import { acquireLock } from './lock.js';
  * attempt is dispatchable ONLY when `committed`. Absent-commit therefore means
  * "never dispatch", which is what closes the double-spawn / phantom-launch class.
  *
- * SCOPE (review-only slice): this module owns the reservation record + its
- * decision CAS + the dispatch guard. Wiring the real assignment/run/slot
- * projections onto a committed reservation is a later PR; the child ids are
- * derived deterministically here so that repair is idempotent when it lands.
+ * SCOPE: this module owns the kind-neutral reservation record + its decision
+ * CAS + launch guard. `attempt-authority.ts` is the functional facade and
+ * `turn-execution.ts` materializes Assignment/Run/claim/slot projections before
+ * crossing. The child ids stay deterministic so repair is idempotent.
  */
 
 export type ReservationDecision = 'prepared' | 'committed' | 'aborted';
@@ -37,16 +56,6 @@ export type ReservationDecision = 'prepared' | 'committed' | 'aborted';
  * MUST be realpath-containment-validated before any read (invariant #7, wired in
  * a later PR). `sha256` is filled at harvest and validated before state mutation.
  */
-export const ExpectedArtifactSchema = z.object({
-  logical_name: z.string().min(1),
-  worker_path: z.string().min(1),
-  loop_artifact_type: z.string().min(1),
-  schema_id: z.string().optional(),
-  completion_policy: z.enum(['required', 'optional']).default('required'),
-  sha256: z.string().optional(),
-});
-export type ExpectedArtifact = z.infer<typeof ExpectedArtifactSchema>;
-
 export const TurnReservationSchema = z.object({
   turn_id: z.string().min(1),
   epoch: z.number().int().nonnegative(),
@@ -70,6 +79,10 @@ export const TurnReservationSchema = z.object({
   // pln#630 PR2b-a (§13 R1): artifacts this attempt's worker must produce.
   // Default [] so PR1 on-disk records (which predate the field) still parse.
   expected_artifacts: z.array(ExpectedArtifactSchema).default([]),
+  /** P1: complete immutable launch contract. Optional for pre-P1 reservations. */
+  execution_contract: ExecutionContractSchema.optional(),
+  execution_contract_ref: ExecutionContractRefSchema.optional(),
+  capability_snapshot: CapabilitySnapshotSchema.optional(),
   store_root: z.string().min(1),
   cwd: z.string().min(1),
   lease_deadline: z.string().min(1),
@@ -117,6 +130,10 @@ export interface ReserveInput {
   expected_artifacts?: ExpectedArtifact[];
   /** pln#630 PR2b-a — effective completion policy for this attempt (default 'file'). */
   completion_mode?: 'file' | 'mcp' | 'either';
+  /** P1 immutable contract fields. Omitted only by legacy/direct callers. */
+  execution_contract?: ExecutionContract;
+  execution_contract_ref?: ExecutionContractRef;
+  capability_snapshot?: CapabilitySnapshot;
 }
 
 /** Raised when a decision CAS is attempted from an incompatible terminal state. */
@@ -127,6 +144,7 @@ export class ReservationStateError extends Error {
       | 'reservation_not_found'
       | 'reservation_exists'
       | 'invalid_lease_deadline'
+      | 'invalid_execution_contract'
       | 'committed_not_abortable'
       | 'aborted_not_committable'
       | 'not_dispatchable',
@@ -261,6 +279,80 @@ export function deriveTurnId(loopId: string, slotId: string, iteration: number):
   return `tat_${h}`;
 }
 
+/**
+ * Versioned identity used only when the legacy `(loop, slot, iteration)` cell
+ * is already owned by another phase. Keeping this a separate derivation makes
+ * existing turn ids and crash-replay fixtures stable while allowing one slot
+ * to execute several worker phases in the same protocol iteration.
+ */
+export function derivePhaseQualifiedTurnId(
+  loopId: string,
+  slotId: string,
+  phase: string,
+  iteration: number,
+): string {
+  const identity = JSON.stringify(['brainclaw-turn-identity-v2', loopId, slotId, phase, iteration]);
+  const h = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 16);
+  return `tat_${h}`;
+}
+
+export interface ResolveTurnIdInput {
+  loop_id: string;
+  slot_id: string;
+  phase: string;
+  iteration: number;
+  /** Persisted slot pointer, when projection already crossed or needs repair. */
+  current_turn_id?: string;
+}
+
+function reservationMatchesTurnIdentity(
+  reservation: TurnReservation | undefined,
+  input: ResolveTurnIdInput,
+): reservation is TurnReservation {
+  return reservation !== undefined
+    && reservation.loop_id === input.loop_id
+    && reservation.slot_id === input.slot_id
+    && reservation.phase === input.phase
+    && reservation.iteration === input.iteration;
+}
+
+/**
+ * Resolve the durable turn cell without breaking pre-phase-qualified stores.
+ *
+ * Resolution order is deliberately conservative:
+ *  1. adopt the slot's current compatible reservation (projection/crash replay),
+ *  2. preserve the compatible legacy three-tuple reservation,
+ *  3. adopt an existing compatible phase-qualified reservation,
+ *  4. use the legacy id while that cell is absent,
+ *  5. only then fall back to the phase-qualified id for a real phase collision.
+ *
+ * Compatibility intentionally covers identity fields only. Agent/claim/contract
+ * mismatches remain the responsibility of prepareAttempt's fail-closed checks;
+ * they must never cause this resolver to mint a parallel authority cell.
+ */
+export function resolveTurnId(input: ResolveTurnIdInput, cwd?: string): string {
+  const legacyTurnId = deriveTurnId(input.loop_id, input.slot_id, input.iteration);
+  const phaseTurnId = derivePhaseQualifiedTurnId(
+    input.loop_id,
+    input.slot_id,
+    input.phase,
+    input.iteration,
+  );
+
+  if (input.current_turn_id) {
+    const current = getReservation(input.current_turn_id, cwd);
+    if (reservationMatchesTurnIdentity(current, input)) return input.current_turn_id;
+  }
+
+  const legacy = getReservation(legacyTurnId, cwd);
+  if (reservationMatchesTurnIdentity(legacy, input)) return legacyTurnId;
+
+  const phaseQualified = getReservation(phaseTurnId, cwd);
+  if (reservationMatchesTurnIdentity(phaseQualified, input)) return phaseTurnId;
+
+  return legacy === undefined ? legacyTurnId : phaseTurnId;
+}
+
 /* ============================ persistence ================================= */
 
 function readReservation(turnId: string, cwd?: string): TurnReservation | undefined {
@@ -277,8 +369,9 @@ function writeReservation(record: TurnReservation, cwd?: string): void {
 
 /**
  * Run `fn` under the per-reservation exclusive lock. Reuses the loop lock
- * primitive (stale-reaping, O_EXCL, fencing) so the decision CAS is atomic
- * across processes — two racing writers cannot both mutate the decision.
+ * primitive (generation-fenced dead-owner reaping, exclusive hard-link
+ * creation, fencing) so the decision CAS is atomic across processes — two
+ * racing writers cannot both mutate the decision.
  */
 function withReservationLock<R>(turnId: string, agentId: string, fn: (fence: () => void) => R, cwd?: string): R {
   ensureDirs(cwd);
@@ -290,10 +383,10 @@ function withReservationLock<R>(turnId: string, agentId: string, fn: (fence: () 
   });
   try {
     // PR2a review (BLOCKING): the callback MUST invoke `fence()` immediately
-    // before any durable write. If this lock was reaped (holder suspended past
-    // the hard deadline) and re-acquired by another writer, fenceCheck throws
-    // LockLostError so a stale holder can never overwrite the other terminal
-    // transition — the consume-XOR-revoke fence stays durable across recovery.
+    // before any durable write. If a proven-dead owner's generation was reaped
+    // and re-acquired by another writer, fenceCheck throws LockLostError so a
+    // stale holder can never overwrite the other terminal transition — the
+    // consume-XOR-revoke fence stays durable across recovery.
     return fn(lock.fenceCheck);
   } finally {
     lock.release();
@@ -317,6 +410,34 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
   // garbage lease that the armLaunch dispatch-lease gate would then skip.
   if (!Number.isFinite(Date.parse(input.lease_deadline))) {
     throw new ReservationStateError(input.turn_id, 'invalid_lease_deadline', `reserve: lease_deadline "${input.lease_deadline}" is not a parseable timestamp`);
+  }
+  const contractFieldCount = [
+    input.execution_contract,
+    input.execution_contract_ref,
+    input.capability_snapshot,
+  ].filter((value) => value !== undefined).length;
+  if (contractFieldCount !== 0 && contractFieldCount !== 3) {
+    throw new ReservationStateError(
+      input.turn_id,
+      'invalid_execution_contract',
+      'reserve: execution_contract, execution_contract_ref and capability_snapshot must be supplied together',
+    );
+  }
+  if (input.execution_contract && input.execution_contract_ref && input.capability_snapshot) {
+    try {
+      assertExecutionContractIntegrity(
+        input.execution_contract,
+        input.execution_contract_ref,
+        input.capability_snapshot,
+        { agent: input.agent, agent_id: input.agent_id },
+      );
+    } catch (error) {
+      throw new ReservationStateError(
+        input.turn_id,
+        'invalid_execution_contract',
+        `reserve: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   return withReservationLock(
     input.turn_id,
@@ -345,6 +466,9 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
         iteration: input.iteration,
         completion_mode: input.completion_mode ?? 'file',
         expected_artifacts: input.expected_artifacts ?? [],
+        execution_contract: input.execution_contract,
+        execution_contract_ref: input.execution_contract_ref,
+        capability_snapshot: input.capability_snapshot,
         store_root: input.store_root,
         cwd: input.cwd,
         lease_deadline: input.lease_deadline,
@@ -473,7 +597,16 @@ export function listReservations(filter: { decision?: ReservationDecision } = {}
  * or legacy (→ presence-based acceptance). Returns undefined for legacy runs.
  */
 export function findReservationByRunId(runId: string, cwd?: string): TurnReservation | undefined {
-  return listReservations({}, cwd).find((r) => r.child_ids.run_id === runId);
+  return listReservations({}, cwd).find((reservation) => {
+    if (reservation.child_ids.run_id === runId) return true;
+    try {
+      const root = cwd ?? reservation.store_root;
+      const initial = readInitialGeneration(root, reservation.turn_id);
+      return initial ? listAttemptGenerations(root, initial).some((generation) => generation.run_id === runId) : false;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -491,6 +624,13 @@ export function findReservationByAssignmentId(assignmentId: string, cwd?: string
   // the turn-owned discriminator explicit — a `prepared`/`aborted` reservation must never
   // route a lane to reconcileTurn (it has no live launch generation to accept evidence for).
   return listReservations({ decision: 'committed' }, cwd).find((r) => r.child_ids.assignment_id === assignmentId);
+}
+
+/** Run-scoping key for runtime evidence; undefined preserves legacy assignment-scoped paths. */
+export function currentAttemptRunIdForAssignment(assignmentId: string, cwd?: string): string | undefined {
+  const reservation = findReservationByAssignmentId(assignmentId, cwd);
+  if (!reservation) return undefined;
+  return resolveTurnGenerationChain(reservation.store_root, reservation.turn_id)?.latest_generation.run_id;
 }
 
 /* ============================ launch-grant fence (PR2a, dec#138) ========== */
@@ -583,33 +723,89 @@ export interface ConsumeResult {
   wonTransition: boolean;
 }
 
+function consumeLaunchGrantLocked(
+  turnId: string,
+  record: TurnReservation,
+  token: string,
+  epoch: number,
+  fence: () => void,
+  cwd?: string,
+): ConsumeResult {
+  const g = record.launch;
+  if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrant: turn_id ${turnId} has no launch grant`);
+  // Epoch/token/lease validated against the immutable grant fields (set once
+  // at arm). Epoch BEFORE token so a stale generation reports epoch_mismatch.
+  if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
+  if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
+  // Expiry is inclusive (now >= deadline) — the SAME rule the sweep uses. This
+  // is intentionally evaluated after projection callbacks as well: a slow repair
+  // cannot cross a generation whose lease expired while it was materializing.
+  if (Date.parse(nowISO()) >= Date.parse(g.lease_deadline)) {
+    throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrant: grant for ${turnId} expired at ${g.lease_deadline}`);
+  }
+  if (g.status === 'revoked') {
+    throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
+  }
+  // Validate that this reservation-lock holder was not reaped while a projection
+  // callback performed local I/O. The fence check MUST precede the irreversible
+  // decision-cell create, not merely the record projection write that follows it.
+  fence();
+  // ATOMIC XOR — claim the decision via exclusive-create. If a revoke already
+  // won (even from a newer holder after this one was reaped), we LOSE here and
+  // must not spawn. No TOCTOU: the create, not a prior check, is the commit.
+  const { decision: committed, won } = claimLaunchDecision(turnId, { decision: 'crossed', token, epoch, at: nowISO() }, cwd);
+  if (committed.decision === 'revoked') {
+    throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
+  }
+  // Won → this call crossed (may spawn). Adopted (won=false) → already crossed
+  // by another invocation: launch_attempted_unknown, caller MUST NOT spawn.
+  const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: committed.at } };
+  fence();
+  writeReservation(next, cwd);
+  return { reservation: next, wonTransition: won };
+}
+
 export function consumeLaunchGrant(turnId: string, token: string, epoch: number, cwd?: string, agentId = 'system'): ConsumeResult {
   return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrant: unknown turn_id ${turnId}`);
+    return consumeLaunchGrantLocked(turnId, record, token, epoch, fence, cwd);
+  }, cwd);
+}
+
+/**
+ * Consume a launch generation only after its deterministic local projections are durable.
+ *
+ * Lock order is intentionally reservation -> store -> loop. `project` must remain a short,
+ * synchronous, local-I/O callback and this API must never be entered while the caller already
+ * holds the store or loop lock. If projection throws, the crossed decision is not created and
+ * an identical replay can repair/adopt the same Assignment, AgentRun and slot binding.
+ */
+export function consumeLaunchGrantWithProjection(
+  turnId: string,
+  token: string,
+  epoch: number,
+  project: (reservation: TurnReservation) => void,
+  cwd?: string,
+  agentId = 'system',
+): ConsumeResult {
+  return withReservationLock(turnId, agentId, (fence) => {
+    const record = readReservation(turnId, cwd);
+    if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrantWithProjection: unknown turn_id ${turnId}`);
+
+    // Validate the immutable generation before allowing it to materialize anything.
     const g = record.launch;
-    if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrant: turn_id ${turnId} has no launch grant`);
-    // Epoch/token/lease validated against the immutable grant fields (set once
-    // at arm). Epoch BEFORE token so a stale generation reports epoch_mismatch.
-    if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
-    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
-    // Expiry is inclusive (now >= deadline) — the SAME rule the sweep uses.
+    if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrantWithProjection: turn_id ${turnId} has no launch grant`);
+    if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrantWithProjection: epoch ${epoch} != grant epoch ${g.epoch}`);
+    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrantWithProjection: token mismatch for ${turnId}`);
+    if (g.status === 'revoked') throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrantWithProjection: grant for ${turnId} was revoked — MUST NOT project or spawn`);
+    if (g.status === 'crossed') return { reservation: record, wonTransition: false };
     if (Date.parse(nowISO()) >= Date.parse(g.lease_deadline)) {
-      throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrant: grant for ${turnId} expired at ${g.lease_deadline}`);
+      throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrantWithProjection: grant for ${turnId} expired at ${g.lease_deadline}`);
     }
-    // ATOMIC XOR — claim the decision via exclusive-create. If a revoke already
-    // won (even from a newer holder after this one was reaped), we LOSE here and
-    // must not spawn. No TOCTOU: the create, not a prior check, is the commit.
-    const { decision: committed, won } = claimLaunchDecision(turnId, { decision: 'crossed', token, epoch, at: nowISO() }, cwd);
-    if (committed.decision === 'revoked') {
-      throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
-    }
-    // Won → this call crossed (may spawn). Adopted (won=false) → already crossed
-    // by another invocation: launch_attempted_unknown, caller MUST NOT spawn.
-    const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: committed.at } };
-    fence();
-    writeReservation(next, cwd);
-    return { reservation: next, wonTransition: won };
+
+    project(record);
+    return consumeLaunchGrantLocked(turnId, record, token, epoch, fence, cwd);
   }, cwd);
 }
 
@@ -661,6 +857,16 @@ export function launchGrant(turnId: string, cwd?: string): TurnReservation['laun
  * read-strict acceptance path (PR2b-c) matches on. `undefined` until armed.
  */
 export function currentNonce(reservation: TurnReservation): string | undefined {
+  try {
+    const resolved = resolveTurnGenerationChain(reservation.store_root, reservation.turn_id);
+    if (resolved && (resolved.status === 'active' || resolved.status === 'settled')) {
+      const generation = resolved.latest_generation;
+      const launch = readV2LaunchDecision(reservation.store_root, reservation.turn_id, generation.attempt_epoch);
+      return launch?.decision === 'crossed' ? generation.launch_nonce : undefined;
+    }
+  } catch {
+    return undefined;
+  }
   // Only a LIVE generation (armed or crossed) has a current nonce. A revoked
   // grant means the worker never crossed → never spawned, so its token is a
   // dead generation and must not be reported as current (review PR2b-a #1).
@@ -679,8 +885,36 @@ export function currentNonce(reservation: TurnReservation): string | undefined {
  */
 export function evidenceMatchesAttempt(
   reservation: TurnReservation,
-  evidence: { turn_id?: string; run_id?: string; nonce?: string },
+  evidence: {
+    assignment_id?: string;
+    turn_id?: string;
+    run_id?: string;
+    nonce?: string;
+    attempt_epoch?: number;
+    contract_hash?: string;
+    workspace_digest?: string;
+  },
 ): boolean {
+  try {
+    const resolved = resolveTurnGenerationChain(reservation.store_root, reservation.turn_id);
+    if (resolved && (resolved.status === 'active' || resolved.status === 'settled')) {
+      const generation: AttemptGeneration = resolved.latest_generation;
+      const launch = readV2LaunchDecision(reservation.store_root, reservation.turn_id, generation.attempt_epoch);
+      if (launch?.decision !== 'crossed') return false;
+      return (
+        evidence.assignment_id === generation.assignment_id
+        && evidence.turn_id === generation.turn_id
+        && evidence.run_id === generation.run_id
+        && evidence.nonce === generation.launch_nonce
+        && evidence.attempt_epoch === generation.attempt_epoch
+        && evidence.contract_hash === generation.contract_hash
+        && evidence.workspace_digest === generation.workspace_digest
+      );
+    }
+    if (resolved) return false;
+  } catch {
+    return false;
+  }
   const nonce = currentNonce(reservation);
   if (!nonce) return false;
   return (

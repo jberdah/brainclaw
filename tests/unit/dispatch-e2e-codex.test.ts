@@ -153,7 +153,7 @@ describe('dispatch-e2e-codex/profile', () => {
     assert.equal(profile.runtime.canBeSpawnedCli, true);
     assert.equal(profile.hasMcp, true);
     assert.equal(profile.hasAutoApprove, false);
-    assert.deepEqual(profile.role_capabilities, ['execute', 'review']);
+    assert.deepEqual(profile.role_capabilities, ['execute', 'review', 'consult']);
   });
 
   it('brief mode is full (codex has MCP — pln#496 Phase 1.b)', () => {

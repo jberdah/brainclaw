@@ -88,14 +88,14 @@ describe('loops verbs — advance', () => {
 
   it('auto-closes as completed when reviewer_green fires after adding a verdict', () => {
     const loop = openReview(cwd);
-    add_artifact(
-      {
-        id: loop.id,
-        actor: 'agt_reviewer',
-        artifact: { phase: 'verdict', type: 'verdict', body: 'accepted' },
-      },
-      cwd,
-    );
+    const reviewer = loop.slots.find((slot) => slot.role === 'reviewer')!;
+    complete_turn({
+      id: loop.id,
+      slot_id: reviewer.slot_id,
+      actor: 'agt_reviewer',
+      caller_agent_id: 'agt_reviewer',
+      artifact: { phase: 'verdict', type: 'verdict', body: 'accepted' },
+    }, cwd);
     const result = advance({ id: loop.id, actor: 'agt_test' }, cwd);
     assert.equal(result.auto_closed, true);
     assert.equal(result.loop.status, 'completed');

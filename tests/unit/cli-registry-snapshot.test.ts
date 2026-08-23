@@ -281,6 +281,7 @@ describe('CLI registry baseline (pln#622 campaign freeze)', () => {
       // leur ordre d'enregistrement. Ce qui est gelé ici est le PRÉFIXE hérité du
       // monolithe, pas l'interdiction d'ajouter une commande.
       'confirm', // pln#620 — surface d'applicabilité de la mémoire
+      'attempt-authority', // P4 — activation gardée de l'autorité multi-run
       'cloud', // pln#651 étape 3 — fédération v2 (`cloud status`)
     ];
     const { topLevelOrder } = dumpRegistry();

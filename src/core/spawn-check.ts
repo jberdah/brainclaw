@@ -19,11 +19,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  buildInvokeCommand,
   getSpawnableAgents,
   getCapabilityProfile,
   type InvokeCommand,
 } from './agent-capability.js';
+import { buildHarnessInvocation } from './harness-adapters/index.js';
 import { defaultExecutionAdapter, resolveBinaryOnPath } from './execution-adapters.js';
 import { signalExists, readLogTail } from './runtime-signals.js';
 import { recognizeStderrSignature } from './dispatch-status.js';
@@ -116,7 +116,7 @@ export async function checkAgentSpawn(agent: string, options: SpawnCheckOptions 
   }
 
   const invoke = options.probeFor?.(agent)
-    ?? buildInvokeCommand(agent, options.probePrompt ?? DEFAULT_PROBE_PROMPT, { mode: 'consult' });
+    ?? buildHarnessInvocation(agent, options.probePrompt ?? DEFAULT_PROBE_PROMPT, { mode: 'consult' })?.invoke;
   if (!invoke) {
     return { agent, binary, status: 'no_template', delivered: false, completed: false, duration_ms: 0, detail: 'could not build invoke command' };
   }

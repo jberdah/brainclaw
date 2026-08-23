@@ -5,11 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  add_artifact,
   advance,
+  complete_turn,
   listLoopEvents,
   openLoop,
+  turn,
 } from '../../src/core/loops/index.js';
+import { addArtifactWithEvidence } from '../../src/core/loops/verbs.js';
 
 /**
  * pln#492 phase 2.b — advance() integration with the iteration engine.
@@ -45,6 +47,22 @@ function openIdeation(cwd: string) {
   );
 }
 
+function addCritique(loopId: string, slotId: string, cwd: string, body: string) {
+  addArtifactWithEvidence({
+    id: loopId,
+    actor: 'agt_c',
+    evidence_context: {
+      channel: 'complete_turn',
+      producer_kind: 'slot',
+      producer_id: 'agt_c',
+      agent_id: 'agt_c',
+      slot_id: slotId,
+      slot_role: 'critic',
+    },
+    artifact: { phase: 'critique', type: 'critique', body },
+  }, cwd);
+}
+
 describe('advance() — phase_advance_blocked on unmet gate (pln#492 phase 2.b)', () => {
   let cwd: string;
   before(() => {
@@ -78,14 +96,7 @@ describe('advance() — phase_advance_blocked on unmet gate (pln#492 phase 2.b)'
     const loop = openIdeation(cwd);
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique
     for (let i = 0; i < 3; i++) {
-      add_artifact(
-        {
-          id: loop.id,
-          actor: 'agt_test',
-          artifact: { phase: 'critique', type: 'critique', body: 'critique content' },
-        },
-        cwd,
-      );
+      addCritique(loop.id, loop.slots[0]!.slot_id, cwd, `critique content ${i}`);
     }
     const result = advance({ id: loop.id, actor: 'agt_test' }, cwd);
     assert.equal(result.loop.current_phase, 'revision');
@@ -114,10 +125,7 @@ describe('advance() — iteration cycle (pln#492 phase 2.b)', () => {
     const loop = openIdeation(cwd);
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique
     for (let i = 0; i < 3; i++) {
-      add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
-        cwd,
-      );
+      addCritique(loop.id, loop.slots[0]!.slot_id, cwd, `critique content ${i}`);
     }
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision
     // From revision (end of cycle): iterate back to critique.
@@ -130,17 +138,11 @@ describe('advance() — iteration cycle (pln#492 phase 2.b)', () => {
     const loop = openIdeation(cwd);
     advance({ id: loop.id, actor: 'agt_test' }, cwd);
     for (let i = 0; i < 3; i++) {
-      add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
-        cwd,
-      );
+      addCritique(loop.id, loop.slots[0]!.slot_id, cwd, `critique content ${i}`);
     }
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // iterate → critique, iteration=1
-    add_artifact(
-      { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
-      cwd,
-    );
+    addCritique(loop.id, loop.slots[0]!.slot_id, cwd, 'critique content');
     const events = listLoopEvents(loop.id, cwd);
     const lastArtifactEvent = [...events].reverse().find((e) => e.kind === 'artifact_added');
     assert.ok(lastArtifactEvent);
@@ -165,25 +167,22 @@ describe('advance() — max_iterations event (pln#492 phase 2.b)', () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  function fillCritique(loopId: string, cwd: string, n: number) {
+  function fillCritique(loopId: string, slotId: string, cwd: string, n: number) {
     for (let i = 0; i < n; i++) {
-      add_artifact(
-        { id: loopId, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
-        cwd,
-      );
+      addCritique(loopId, slotId, cwd, `critique content ${i}`);
     }
   }
 
   it('emits max_iterations_reached then phase_advanced when cap hits', () => {
     const loop = openIdeation(cwd);
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique iter 0
-    fillCritique(loop.id, cwd, 3);
+    fillCritique(loop.id, loop.slots[0]!.slot_id, cwd, 3);
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision iter 0
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // iterate → critique iter 1
-    fillCritique(loop.id, cwd, 3);
+    fillCritique(loop.id, loop.slots[0]!.slot_id, cwd, 3);
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision iter 1
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // iterate → critique iter 2
-    fillCritique(loop.id, cwd, 3);
+    fillCritique(loop.id, loop.slots[0]!.slot_id, cwd, 3);
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision iter 2
     // From revision iter 2 (end of cycle): iteration_count + 1 = 3 = max → exit_cycle via max_iterations.
     const result = advance({ id: loop.id, actor: 'agt_test' }, cwd);
@@ -222,20 +221,14 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     const loop = openIdeation(cwd);
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique iter 0
     for (let i = 0; i < 3; i++) {
-      add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
-        cwd,
-      );
+      addCritique(loop.id, loop.slots[0]!.slot_id, cwd, `critique content ${i}`);
     }
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision iter 0
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // iterate → critique iter 1
     // Iteration 1: produce 3 critiques (gate met) but they are required
     // to leave critique → advance to revision still works.
     for (let i = 0; i < 3; i++) {
-      add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
-        cwd,
-      );
+      addCritique(loop.id, loop.slots[0]!.slot_id, cwd, `critique content ${i}`);
     }
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → revision iter 1
     // No NEW critiques in iteration 1's revision phase. The exit_when
@@ -248,10 +241,44 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     // step of iteration 2 to bypass the gate so we can exercise exit_when.
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // iterate → critique iter 2
     // No critiques produced in iteration 2.
-    advance({ id: loop.id, actor: 'agt_test', force: true }, cwd); // forced → revision iter 2
-    // From revision iter 2 (end of cycle): exit_when fires because no
-    // critique-typed artifact was produced in iteration 2.
+    // Absence cannot be observed while the critic turn is still live.
+    turn({ id: loop.id, slot_id: loop.slots[0]!.slot_id, actor: 'agt_test' }, cwd);
+    assert.throws(
+      () => advance({ id: loop.id, actor: 'agt_test' }, cwd),
+      /phase_advance_blocked/,
+      'an assigned critic turn cannot manufacture saturation by silence',
+    );
+    // Completing the critic turn with no critique emits the engine-owned
+    // critique_window_closed marker for this exact iteration.
+    complete_turn({
+      id: loop.id,
+      slot_id: loop.slots[0]!.slot_id,
+      actor: 'agt_c',
+      caller_agent_id: 'agt_c',
+      outcome: 'done',
+    }, cwd);
     const result = advance({ id: loop.id, actor: 'agt_test' }, cwd);
     assert.equal(result.loop.current_phase, 'synthesis');
+    assert.ok(result.loop.artifacts.some((artifact) =>
+      artifact.type === 'critique_window_closed' && artifact.iteration === 2));
+  });
+
+  it('a failed critic turn cannot close the critique window or manufacture saturation', () => {
+    const loop = openIdeation(cwd);
+    advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique
+    turn({ id: loop.id, slot_id: loop.slots[0]!.slot_id, actor: 'agt_test' }, cwd);
+    const failed = complete_turn({
+      id: loop.id,
+      slot_id: loop.slots[0]!.slot_id,
+      actor: 'agt_c',
+      caller_agent_id: 'agt_c',
+      outcome: 'failed',
+    }, cwd);
+    assert.equal(failed.slots[0]?.status, 'failed');
+    assert.equal(failed.artifacts.some((artifact) => artifact.type === 'critique_window_closed'), false);
+    assert.throws(
+      () => advance({ id: loop.id, actor: 'agt_test' }, cwd),
+      /phase_advance_blocked/,
+    );
   });
 });

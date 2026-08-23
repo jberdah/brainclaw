@@ -16,6 +16,8 @@ import { loadState, persistState } from './state.js';
 import { createRuntimeEvent } from './events.js';
 import { latestActivityMs, readHeartbeat } from './runtime-signals.js';
 import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
+import { loadAssignment } from './assignments.js';
+import { currentAttemptRunIdForAssignment } from './loops/attempt-reservation.js';
 
 /** Parse duration string like '4h', '30m' to ms. */
 function parseTtl(value: string): number {
@@ -834,6 +836,7 @@ const FUTURE_EVIDENCE_TOLERANCE_MS = 5 * 60_000;
 function freshestEvidenceAgeMs(claim: Claim, nowMs: number, cwd?: string): number | undefined {
   if (!claim.assignment_id) return undefined;
   const root = cwd ?? process.cwd();
+  const runId = currentAttemptRunIdForAssignment(claim.assignment_id, cwd);
   let freshest: number | undefined;
   const consider = (ms: number | undefined): void => {
     if (ms === undefined) return;
@@ -846,11 +849,11 @@ function freshestEvidenceAgeMs(claim: Claim, nowMs: number, cwd?: string): numbe
     if (freshest === undefined || normalised < freshest) freshest = normalised;
   };
   try {
-    const hb = readHeartbeat(root, claim.assignment_id, claim.worktree_path);
+    const hb = readHeartbeat(root, claim.assignment_id, claim.worktree_path, runId);
     if (hb.exists) consider(hb.mtimeMs);
   } catch { /* evidence is best-effort */ }
   try {
-    consider(latestActivityMs(root, claim.assignment_id, claim.worktree_path));
+    consider(latestActivityMs(root, claim.assignment_id, claim.worktree_path, runId));
   } catch { /* evidence is best-effort */ }
   return freshest;
 }
@@ -1312,6 +1315,61 @@ export function linkClaimToAssignment(claimId: string, assignmentId: string, cwd
     const claim = loadClaim(claimId, cwd);
     claim.assignment_id = assignmentId;
     saveClaimUnlocked(claim, cwd);
+  });
+}
+
+export class ClaimAssignmentConflictError extends Error {
+  constructor(public readonly claimId: string, detail: string) {
+    super(`Claim/Assignment projection conflict for ${claimId}: ${detail}`);
+    this.name = 'ClaimAssignmentConflictError';
+  }
+}
+
+/**
+ * Idempotently bind an active claim to the deterministic Assignment of its turn.
+ * Unlike the legacy patch helper, this never overwrites a divergent binding.
+ */
+export function ensureClaimAssignmentBinding(
+  claimId: string,
+  assignmentId: string,
+  cwd?: string,
+  options: { worktreePath?: string } = {},
+): Claim {
+  return mutate({ cwd }, () => {
+    const claim = loadClaim(claimId, cwd);
+    if (claim.status !== 'active') {
+      throw new ClaimAssignmentConflictError(claimId, `claim is ${claim.status}, expected active`);
+    }
+    if (claim.assignment_id !== undefined && claim.assignment_id !== assignmentId) {
+      // Symmetric review/fix cycles intentionally retain one active coordinator
+      // claim across rounds. A later deterministic turn may advance that pointer,
+      // but only after the previous Assignment is durably terminal.
+      const prior = loadAssignment(claim.assignment_id, cwd);
+      const priorTerminal = prior && [
+        'completed', 'cancelled', 'expired', 'rerouted',
+      ].includes(prior.status);
+      if (!priorTerminal) {
+        throw new ClaimAssignmentConflictError(
+          claimId,
+          `already bound to non-terminal ${claim.assignment_id}, cannot bind ${assignmentId}`,
+        );
+      }
+    }
+    let changed = false;
+    if (claim.assignment_id !== assignmentId) {
+      claim.assignment_id = assignmentId;
+      changed = true;
+    }
+    // AttemptAuthority keeps one logical Assignment/claim across physical
+    // generations. Rebind the claim's liveness and GC root to the current
+    // generation workspace in the SAME mutation as its Assignment pointer.
+    if (options.worktreePath !== undefined && claim.worktree_path !== options.worktreePath) {
+      claim.worktree_path = options.worktreePath;
+      changed = true;
+    }
+    if (!changed) return claim;
+    saveClaimUnlocked(claim, cwd);
+    return claim;
   });
 }
 

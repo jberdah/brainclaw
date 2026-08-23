@@ -47,6 +47,9 @@ import { loadAllSessions } from './identity.js';
 import { loadInstructions } from './instructions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
+import { currentAttemptRunIdForAssignment } from './loops/attempt-reservation.js';
+import { findReservationByAssignmentId } from './loops/attempt-reservation.js';
+import { getLoop } from './loops/store.js';
 import { reconcileAgentRun, reconcileDeadPidRunningAgentRunAtRead, reconcileStrandedFailureClaimAtRead, TERMINAL_STATUSES } from './agentrun-reconciler.js';
 import { isObserverMode } from './observer-mode.js';
 import {
@@ -915,6 +918,9 @@ export function updateEntity(
     case 'assignment': {
       const assignment = loadAssignment(id, cwd);
       if (!assignment) throw new EntityNotFoundError(name, id);
+      if (currentAttemptRunIdForAssignment(id, cwd)) {
+        throw new Error(`assignment '${id}' is managed by AttemptAuthority v2; generic update is fenced until authoritative loop settlement/recovery`);
+      }
       const patched = { ...assignment, ...patch } as typeof assignment;
       saveAssignment(patched, cwd);
       return { entity: name, id };
@@ -1101,6 +1107,9 @@ export function removeEntity(
     case 'assignment': {
       const assignment = loadAssignment(id, cwd);
       if (!assignment) throw new EntityNotFoundError(name, id);
+      if (currentAttemptRunIdForAssignment(id, cwd)) {
+        throw new Error(`assignment '${id}' is managed by AttemptAuthority v2; remove is fenced until authoritative loop settlement/recovery`);
+      }
       if (purge) {
         const deleted = deleteAssignment(id, cwd);
         if (!deleted) throw new EntityNotFoundError(name, id);
@@ -1217,6 +1226,9 @@ export function transitionEntity(
       throw new InvalidTransitionError(name, from, to);
     }
     case 'assignment': {
+      if (currentAttemptRunIdForAssignment(id, cwd)) {
+        throw new Error(`assignment '${id}' is managed by AttemptAuthority v2; use full-fence bclaw_assignment_update or loop reconciliation`);
+      }
       transitionAssignment(id, to as AssignmentStatus, {
         actor: 'brainclaw',
         status_reason: _reason,
@@ -1230,6 +1242,14 @@ export function transitionEntity(
       return { entity: name, id, from, to, side_effects: sideEffects };
     }
     case 'claim': {
+      const claim = loadClaim(id, cwd);
+      if (claim.assignment_id && currentAttemptRunIdForAssignment(claim.assignment_id, cwd)) {
+        const reservation = findReservationByAssignmentId(claim.assignment_id, cwd);
+        const loop = reservation ? getLoop(reservation.loop_id, cwd) : undefined;
+        if (!auth?.override || !loop || auth.agent_id !== loop.created_by) {
+          throw new Error(`claim '${id}' belongs to an AttemptAuthority v2 assignment; override requires authenticated loop creator ${loop?.created_by ?? 'unknown'}`);
+        }
+      }
       // trp#928 — the entity registry advertised `active → released|stale` but
       // transitionEntity never routed for entity=claim. The isValidTransition
       // check above passed for anyone calling `bclaw_transition(entity='claim',

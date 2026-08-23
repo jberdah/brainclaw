@@ -1003,6 +1003,54 @@ brainclaw run claude-code        # run the claude-code profile
 brainclaw run claude-code --dry  # preview the resolved command
 ```
 
+### `brainclaw loop <subcommand>`
+
+Operator wrappers for the state-changing Loop verbs most useful from a shell.
+They drive the same shared runtime for review, ideation, implementation,
+research, and debug; they are not a review-only command group.
+
+| Subcommand | Required arguments/options | Purpose |
+|---|---|---|
+| `turn <loop_id>` | `--slot <slot_id>` | Record a turn assignment. The CLI wrapper is state-only; MCP `turn` additionally supports trusted `dispatch:true`. |
+| `complete-turn <loop_id>` | `--slot <slot_id> --outcome <done\|failed\|cancelled>` | Complete a manually driven slot turn; optional `--artifact <json>`. AttemptAuthority v2 workers must also pass the full fence: `--assignment-id`, `--turn-id`, `--run-id`, `--nonce`, `--attempt-epoch`, `--execution-contract-hash`, and `--workspace-digest`. |
+| `takeover <loop_id>` | slot, turn, expected epoch, cause, liveness evidence, external-effect policy, next workspace and coordinator identity | Fence one physical generation and arm a successor without changing the logical Assignment. |
+| `advance <loop_id>` | — | Advance through the protocol; optional `--to-phase`, `--force`, `--reason`. |
+| `add-artifact <loop_id>` | `--phase --type --body` | Attach a typed artifact; optional producer and ref. |
+
+```bash
+brainclaw loop advance lop_abc --json
+brainclaw loop takeover lop_abc \
+  --slot lsl_abc --turn-id tat_abc --expected-epoch 0 \
+  --cause "worker is no longer live" \
+  --liveness-evidence "wrapper exited; heartbeat stale" \
+  --external-effect-policy idempotent \
+  --next-workspace-path ../brainclaw-retry --agent coordinator
+```
+
+The full public lifecycle (`open`, `get`, `list`, `pause`, `resume`, `close`,
+`bind`, `verify`, `request_input`, `provide_input`, and the verbs above) is the
+MCP `bclaw_loop(intent)` facade. Direct MCP `open` requires
+`allow_orphan=true`; review and ideation normally start through
+`bclaw_coordinate` so opening and dispatch stay one operation. See the
+[Loop Engine](concepts/loop-engine.md) and its five [protocol guides](loops/).
+
+### `brainclaw attempt-authority <subcommand>`
+
+Two-release activation surface for AttemptAuthority v2 writers:
+
+| Subcommand | Purpose |
+|---|---|
+| `status [--json]` | Inspect writer version, local authority home and active membership. |
+| `prepare --writers <agent_ids...>` | Publish a Release-A membership guard; optional epoch and audited actor. |
+| `ack --membership-epoch <n> --agent-id <id>` | Publish the named writer's signed immutable ACK. Writers may ACK in parallel. |
+| `activate --membership-epoch <n>` | Activate a fully acknowledged membership epoch. |
+
+Do not use `activate` as the first rollout step. Drain old writers, create and
+verify a private store snapshot, complete every ACK, then canary Release B on
+the authority home. After the first v2 generation cell, direct downgrade is
+refused; use the controlled export/restore procedure in
+[Attempt authority](concepts/attempt-authority.md#migration-and-rollout-runbook).
+
 ### `brainclaw plan create <text>`
 
 Create a shared work item.
@@ -1984,7 +2032,7 @@ The default catalog is intentionally small and centred on the canonical grammar.
 |---|---|
 | `bclaw_coordinate(intent)` | Assign, consult, review, reroute, or summarize across agents. Pass `open_loop: true` on `intent="review"` to also dispatch the reviewer turn. |
 | `bclaw_dispatch(intent)` | Parallelize execute across a sequence's lanes (analysis / execute / review). |
-| `bclaw_loop(intent)` | Open, inspect, or drive a multi-turn loop. The public lifecycle is `open`, `get`, `list`, `turn`, `complete_turn`, `advance`, `add_artifact`, `pause`, `resume`, and `close`; implementation loops also add `bind` and `verify`, and any kind may use `request_input` / `provide_input`. `bclaw_coordinate` / `bclaw_dispatch` remain the ergonomic review and ideation shortcuts. A direct `open` must include `allow_orphan: true` to acknowledge that the caller will dispatch or drive it. |
+| `bclaw_loop(intent)` | Open, inspect, or drive a multi-turn loop. The public lifecycle is `open`, `get`, `list`, `turn`, `complete_turn`, `advance`, `add_artifact`, `pause`, `resume`, and `close`; implementation loops also add engine-only `bind` (validate the linked sequence and enter `execute`, never spawn) and `verify`, and any kind may use `request_input` / `provide_input`. Trusted `turn(dispatch=true)` is the common worker launch path. `bclaw_coordinate` / `bclaw_dispatch` remain ergonomic shortcuts. A direct `open` must include `allow_orphan: true` to acknowledge that the caller will dispatch or drive it. |
 
 **Sequences**:
 

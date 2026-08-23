@@ -1384,6 +1384,7 @@ describe('bclaw_coordinate — turn-owned INITIAL reviewer dispatch (pln#630)', 
     assert.equal(committed.length, 2, 'one reservation per reviewer slot');
     assert.notEqual(committed[0]!.turn_id, committed[1]!.turn_id, 'distinct turn_ids (distinct slot_ids)');
     assert.notEqual(committed[0]!.child_ids.assignment_id, committed[1]!.child_ids.assignment_id, 'distinct assignment ids');
+    assert.notEqual(committed[0]!.claim_id, committed[1]!.claim_id, 'parallel slots own distinct claims');
   });
 
   it('non-regression: assign mints NO reservation (turn-owned is review-open_loop only)', async () => {

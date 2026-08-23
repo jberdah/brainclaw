@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AgentRunSchema, type AgentRun, type AgentRunStatus, type AgentRunTransport, type Assignment, type AssignmentArtifact } from './schema.js';
+import { RuntimeCapabilityObservationSchema, type CapabilitySnapshot, type ExecutionContractRef, type RuntimeCapabilityObservation } from './execution-contract.js';
 import { resolveOwnerProjectId } from './config.js';
 import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
@@ -18,6 +19,49 @@ import { appendAuditEntry } from './audit.js';
 import { appendEvent } from './event-log.js';
 import { createRuntimeEvent } from './events.js';
 import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
+import { findReservationByRunId } from './loops/attempt-reservation.js';
+import { resolveTurnGenerationChain } from './loops/attempt-generations.js';
+
+export class AgentRunFencedError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly activeRunId: string | null,
+    public readonly attemptEpoch: number,
+    public readonly authorityStatus: 'active' | 'settled' | 'cancelled',
+  ) {
+    super(
+      `AgentRun ${runId} is fenced by attempt epoch ${attemptEpoch}`
+      + `${activeRunId ? ` (authoritative run: ${activeRunId})` : ''}`
+      + ` [${authorityStatus}]`,
+    );
+    this.name = 'AgentRunFencedError';
+  }
+}
+
+/**
+ * Refuse late writes from an AgentRun superseded by attempt-authority v2.
+ *
+ * The immutable generation chain is authoritative; assignment status and the
+ * mutable head projection are deliberately not consulted. A settled latest
+ * generation may still finish its replayable projections after publishing its
+ * close cell. Controllers may explicitly override this guard only to project a
+ * terminal state onto the run that they just fenced.
+ */
+function assertAgentRunMutationAllowed(id: string, cwd?: string, allowFencedProjection = false): void {
+  if (allowFencedProjection) return;
+  const reservation = findReservationByRunId(id, cwd);
+  if (!reservation) return;
+  const chain = resolveTurnGenerationChain(reservation.store_root, reservation.turn_id);
+  if (!chain) return; // Legacy attempt authority remains compatible.
+  const latest = chain.latest_generation;
+  if (latest.run_id === id && (chain.status === 'active' || chain.status === 'settled')) return;
+  throw new AgentRunFencedError(
+    id,
+    chain.status === 'active' ? latest.run_id : null,
+    latest.attempt_epoch,
+    chain.status,
+  );
+}
 
 function agentRunsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('runs', cwd, mode);
@@ -50,30 +94,35 @@ function agentRunStoreForDir(dirPath: string): JsonStore<AgentRun> {
 
 export function saveAgentRun(run: AgentRun, cwd?: string): void {
   mutate({ cwd }, () => {
-    ensureAgentRunsDir(cwd);
-    const store = new JsonStore<AgentRun>({
-      dirPath: agentRunsDir(cwd, 'write'),
-      documentType: 'agent_run',
-      getId: (item) => item.id,
-      sort: (a, b) => a.created_at.localeCompare(b.created_at),
-    });
-    const parsed = AgentRunSchema.parse(run);
-    // pln#568 (I2): journal the post-image BEFORE the projection write.
-    const created = !store.exists(parsed.id);
-    emitRegistryPostImage('agent_run', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
-    registryFaultPoint('after_registry_journal');
-    store.save(parsed);
-    // Converge the other layout (mirrors saveClaim / saveAssignment): leaving a legacy copy
-    // holding the stale status is what let a deleted record be resurrected by its own zombie.
-    const writeDir = agentRunsDir(cwd, 'write');
-    for (const dirPath of entityRecordDirs('runs', cwd ?? process.cwd())) {
-      if (dirPath === writeDir) continue;
-      const legacyPath = path.join(dirPath, `${parsed.id}.json`);
-      try {
-        if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
-      } catch { /* best effort — the dual-layout list keeps it visible */ }
-    }
+    saveAgentRunUnlocked(run, cwd);
   });
+}
+
+/** Store-lock caller variant used by create-or-validate projection repair. */
+function saveAgentRunUnlocked(run: AgentRun, cwd?: string): void {
+  ensureAgentRunsDir(cwd);
+  const store = new JsonStore<AgentRun>({
+    dirPath: agentRunsDir(cwd, 'write'),
+    documentType: 'agent_run',
+    getId: (item) => item.id,
+    sort: (a, b) => a.created_at.localeCompare(b.created_at),
+  });
+  const parsed = AgentRunSchema.parse(run);
+  // pln#568 (I2): journal the post-image BEFORE the projection write.
+  const created = !store.exists(parsed.id);
+  emitRegistryPostImage('agent_run', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
+  registryFaultPoint('after_registry_journal');
+  store.save(parsed);
+  // Converge the other layout (mirrors saveClaim / saveAssignment): leaving a legacy copy
+  // holding the stale status is what let a deleted record be resurrected by its own zombie.
+  const writeDir = agentRunsDir(cwd, 'write');
+  for (const dirPath of entityRecordDirs('runs', cwd ?? process.cwd())) {
+    if (dirPath === writeDir) continue;
+    const legacyPath = path.join(dirPath, `${parsed.id}.json`);
+    try {
+      if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+    } catch { /* best effort — the dual-layout list keeps it visible */ }
+  }
 }
 
 export function loadAgentRun(id: string, cwd?: string): AgentRun | undefined {
@@ -96,6 +145,106 @@ export function loadAgentRun(id: string, cwd?: string): AgentRun | undefined {
     } catch { /* not in this layout — try the other */ }
   }
   return undefined;
+}
+
+export interface ExecutionContractAnomalyInput {
+  source: NonNullable<AgentRun['execution_contract_anomaly']>['source'];
+  reason: string;
+  accepted_contract_hash?: string;
+  accepted_capability_snapshot_hash?: string;
+}
+
+/**
+ * Persist the first execution-contract anomaly for a run.
+ *
+ * The field is deliberately monotone: later correct-looking evidence cannot
+ * erase an already-observed post-crossing mismatch and reopen convergence.
+ */
+export function recordExecutionContractAnomaly(
+  id: string,
+  anomaly: ExecutionContractAnomalyInput,
+  cwd?: string,
+): AgentRun {
+  assertAgentRunMutationAllowed(id, cwd);
+  return mutate({ cwd }, () => {
+    const run = loadAgentRun(id, cwd);
+    if (!run) throw new Error(`AgentRun not found: ${id}`);
+    if (run.execution_contract_anomaly) return run;
+    const now = nowISO();
+    run.execution_contract_anomaly = {
+      detected_at: now,
+      source: anomaly.source,
+      reason: anomaly.reason,
+      accepted_contract_hash: anomaly.accepted_contract_hash,
+      accepted_capability_snapshot_hash: anomaly.accepted_capability_snapshot_hash,
+    };
+    run.updated_at = now;
+    run.last_event_at = now;
+    saveAgentRunUnlocked(run, cwd);
+    return run;
+  });
+}
+
+/** Persist a post-start observation without ever rewriting the frozen snapshot. */
+export function recordRuntimeCapabilityObservation(
+  id: string,
+  observation: RuntimeCapabilityObservation,
+  diagnostic?: AgentRun['harness_exit_diagnostic'],
+  cwd?: string,
+): AgentRun {
+  assertAgentRunMutationAllowed(id, cwd);
+  return mutate({ cwd }, () => {
+    const run = loadAgentRun(id, cwd);
+    if (!run) throw new Error(`AgentRun not found: ${id}`);
+    const parsed = RuntimeCapabilityObservationSchema.parse(observation);
+    if (run.runtime_capability_observation) {
+      if (JSON.stringify(run.runtime_capability_observation) !== JSON.stringify(parsed)) {
+        throw new Error(`AgentRun ${id} already has a different runtime capability observation`);
+      }
+      return run;
+    }
+    const now = nowISO();
+    run.runtime_capability_observation = parsed;
+    if (diagnostic) run.harness_exit_diagnostic = diagnostic;
+    const frozenRef = run.execution_contract_ref;
+    const frozenHarness = run.capability_snapshot?.resolved.harness;
+    const resolvedModel = frozenHarness?.resolved_model ?? run.capability_snapshot?.resolved.model;
+    const mismatches: string[] = [];
+    if (frozenRef?.hash !== parsed.contract_hash) {
+      mismatches.push(`observed contract hash '${parsed.contract_hash}' differs from frozen '${frozenRef?.hash ?? 'absent'}'`);
+    }
+    if (frozenRef?.snapshot_hash !== parsed.capability_snapshot_hash) {
+      mismatches.push(`observed capability snapshot hash '${parsed.capability_snapshot_hash}' differs from frozen '${frozenRef?.snapshot_hash ?? 'absent'}'`);
+    }
+    if (parsed.accepted_contract_hash && parsed.accepted_contract_hash !== frozenRef?.hash) {
+      mismatches.push(`accepted contract hash '${parsed.accepted_contract_hash}' differs from frozen '${frozenRef?.hash ?? 'absent'}'`);
+    }
+    if (parsed.accepted_capability_snapshot_hash && parsed.accepted_capability_snapshot_hash !== frozenRef?.snapshot_hash) {
+      mismatches.push(`accepted capability snapshot hash '${parsed.accepted_capability_snapshot_hash}' differs from frozen '${frozenRef?.snapshot_hash ?? 'absent'}'`);
+    }
+    if (frozenHarness && parsed.adapter_id && frozenHarness.adapter_id !== parsed.adapter_id) {
+      mismatches.push(`observed adapter '${parsed.adapter_id}' differs from frozen '${frozenHarness.adapter_id}'`);
+    }
+    if (frozenHarness && parsed.adapter_version && frozenHarness.adapter_version !== parsed.adapter_version) {
+      mismatches.push(`observed adapter version '${parsed.adapter_version}' differs from frozen '${frozenHarness.adapter_version}'`);
+    }
+    if (resolvedModel && parsed.observed_model && resolvedModel !== parsed.observed_model) {
+      mismatches.push(`observed model '${parsed.observed_model}' differs from frozen resolved model '${resolvedModel}'`);
+    }
+    if (mismatches.length > 0 && !run.execution_contract_anomaly) {
+      run.execution_contract_anomaly = {
+        detected_at: now,
+        source: 'reconciler',
+        reason: mismatches.join('; '),
+        accepted_contract_hash: parsed.accepted_contract_hash,
+        accepted_capability_snapshot_hash: parsed.accepted_capability_snapshot_hash,
+      };
+    }
+    run.updated_at = now;
+    run.last_event_at = now;
+    saveAgentRunUnlocked(run, cwd);
+    return run;
+  });
 }
 
 export interface ListAgentRunsFilter {
@@ -201,13 +350,15 @@ export interface CreateAgentRunOptions {
   shell?: string;
   pid?: number;
   provider_run_id?: string;
+  execution_contract_ref?: ExecutionContractRef;
+  capability_snapshot?: CapabilitySnapshot;
   tags?: string[];
 }
 
-export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): AgentRun {
+function buildAgentRun(options: CreateAgentRunOptions, cwd?: string): AgentRun {
   const generated = options.id ? undefined : generateAgentRunId(cwd);
   const now = nowISO();
-  const run: AgentRun = AgentRunSchema.parse({
+  return AgentRunSchema.parse({
     schema_version: 1,
     id: options.id ?? generated!.id,
     // Same landmine as createAssignment: `generated` is undefined when the caller
@@ -235,6 +386,8 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
     shell: options.shell,
     pid: options.pid,
     provider_run_id: options.provider_run_id,
+    execution_contract_ref: options.execution_contract_ref,
+    capability_snapshot: options.capability_snapshot,
     created_at: now,
     updated_at: now,
     last_event_at: now,
@@ -244,8 +397,9 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
     artifacts: [],
     tags: options.tags ?? [],
   });
+}
 
-  saveAgentRun(run, cwd);
+function emitAgentRunCreatedSideEffects(run: AgentRun, options: CreateAgentRunOptions, cwd?: string): void {
   emitAgentRunEvent(run, 'run_created', options.agent, cwd);
   if (run.status !== 'created') {
     emitAgentRunEvent(run, `run_${run.status}` as import('./event-log.js').EventAction, options.agent, cwd);
@@ -260,7 +414,117 @@ export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): Ag
     scope: run.scope,
     session_id: run.session_id,
   }, cwd);
+}
+
+export function createAgentRun(options: CreateAgentRunOptions, cwd?: string): AgentRun {
+  const run = buildAgentRun(options, cwd);
+
+  saveAgentRun(run, cwd);
+  emitAgentRunCreatedSideEffects(run, options, cwd);
   return run;
+}
+
+export class AgentRunProjectionConflictError extends Error {
+  constructor(public readonly runId: string, detail: string) {
+    super(`AgentRun projection conflict for ${runId}: ${detail}`);
+    this.name = 'AgentRunProjectionConflictError';
+  }
+}
+
+export interface EnsureAgentRunProjectionResult {
+  run: AgentRun;
+  created: boolean;
+  repaired?: boolean;
+}
+
+const RECOVERABLE_PROJECTION_RUN_STATUSES = new Set<AgentRunStatus>([
+  'created', 'launching', 'waiting_input', 'running',
+]);
+
+function assertAgentRunProjectionMatches(
+  existing: AgentRun,
+  expected: AgentRun,
+): void {
+  const fields: Array<keyof AgentRun> = [
+    'id', 'assignment_id', 'claim_id', 'agent', 'agent_id', 'transport', 'scope',
+    'worktree_path', 'attempt_index',
+  ];
+  for (const field of fields) {
+    if (existing[field] !== expected[field]) {
+      throw new AgentRunProjectionConflictError(
+        expected.id,
+        `${String(field)} differs (existing=${String(existing[field])}, expected=${String(expected[field])})`,
+      );
+    }
+  }
+  if (existing.project_id !== undefined && existing.project_id !== expected.project_id) {
+    throw new AgentRunProjectionConflictError(expected.id, 'project_id differs');
+  }
+  if (
+    existing.execution_contract_ref !== undefined
+    && expected.execution_contract_ref !== undefined
+    && JSON.stringify(existing.execution_contract_ref) !== JSON.stringify(expected.execution_contract_ref)
+  ) {
+    throw new AgentRunProjectionConflictError(expected.id, 'execution_contract_ref differs');
+  }
+  if (
+    existing.capability_snapshot !== undefined
+    && expected.capability_snapshot !== undefined
+    && JSON.stringify(existing.capability_snapshot) !== JSON.stringify(expected.capability_snapshot)
+  ) {
+    throw new AgentRunProjectionConflictError(expected.id, 'capability_snapshot differs');
+  }
+  if (!RECOVERABLE_PROJECTION_RUN_STATUSES.has(existing.status)) {
+    throw new AgentRunProjectionConflictError(expected.id, `existing status is terminal (${existing.status})`);
+  }
+}
+
+/**
+ * Create-or-validate a deterministic AgentRun projection for one physical
+ * generation of a logical turn. P0 callers omit `attempt_index` and therefore
+ * keep the legacy value 1; AttemptAuthority v2 supplies the immutable
+ * generation index. Recovery never changes an existing run's generation and
+ * never resets an existing live run to `created`.
+ */
+export function ensureAgentRunProjection(
+  options: CreateAgentRunOptions & { id: string },
+  cwd?: string,
+): EnsureAgentRunProjectionResult {
+  const normalized: CreateAgentRunOptions & { id: string } = {
+    ...options,
+    attempt_index: options.attempt_index ?? 1,
+  };
+  const expected = buildAgentRun(normalized, cwd);
+  let created = false;
+  let repaired = false;
+  const run = mutate({ cwd }, () => {
+    const existing = loadAgentRun(options.id, cwd);
+    if (existing) {
+      const requiredTags = normalized.tags ?? [];
+      const missingContractRef = existing.execution_contract_ref === undefined && expected.execution_contract_ref !== undefined;
+      const missingCapabilitySnapshot = existing.capability_snapshot === undefined && expected.capability_snapshot !== undefined;
+      const missingTags = !requiredTags.every((tag) => existing.tags.includes(tag));
+      const enriched = !missingContractRef && !missingCapabilitySnapshot && !missingTags
+        ? existing
+        : {
+          ...existing,
+          ...(missingContractRef ? { execution_contract_ref: expected.execution_contract_ref } : {}),
+          ...(missingCapabilitySnapshot ? { capability_snapshot: expected.capability_snapshot } : {}),
+          tags: [...new Set([...existing.tags, ...requiredTags])],
+        };
+      assertAgentRunProjectionMatches(enriched, expected);
+      if (enriched !== existing) {
+        saveAgentRunUnlocked(enriched, cwd);
+        repaired = true;
+      }
+      return enriched;
+    }
+    saveAgentRunUnlocked(expected, cwd);
+    created = true;
+    return expected;
+  });
+  if (created) emitAgentRunCreatedSideEffects(run, normalized, cwd);
+  return { run, created, ...(repaired ? { repaired: true } : {}) };
 }
 
 export interface TransitionAgentRunOptions {
@@ -272,6 +536,8 @@ export interface TransitionAgentRunOptions {
   actor_id?: string;
   pid?: number;
   provider_run_id?: string;
+  /** Controller-only projection after an immutable close cell fenced this run. */
+  allow_fenced_projection?: boolean;
 }
 
 export interface AgentRunTransitionResult {
@@ -286,6 +552,7 @@ export function transitionAgentRun(
   options: TransitionAgentRunOptions = {},
   cwd?: string,
 ): AgentRunTransitionResult {
+  assertAgentRunMutationAllowed(id, cwd, options.allow_fenced_projection);
   const run = loadAgentRun(id, cwd);
   if (!run) throw new Error(`AgentRun not found: ${id}`);
 
@@ -364,6 +631,7 @@ export function recordAgentRunProgress(
   options: AgentRunProgressOptions = {},
   cwd?: string,
 ): AgentRun {
+  assertAgentRunMutationAllowed(id, cwd);
   const run = loadAgentRun(id, cwd);
   if (!run) throw new Error(`AgentRun not found: ${id}`);
 

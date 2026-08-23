@@ -180,6 +180,9 @@ describe('evaluatePhaseAdvanceGate (pln#492 phase 2.a)', () => {
 
   it('all-of advance_gate: every sub-condition met → advance:true', () => {
     const thread = makeThread({
+      // reviewer_green is intentionally authorized only for review loops;
+      // this test exercises generic all-of composition, not ideation policy.
+      kind: 'review',
       artifacts: [
         critiqueArtifact('a1'),
         critiqueArtifact('a2'),

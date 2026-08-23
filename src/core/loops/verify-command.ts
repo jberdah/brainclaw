@@ -26,8 +26,11 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { getLoop } from './store.js';
 import { withLoopLock } from './lock.js';
-import { add_artifact } from './verbs.js';
+import { addArtifactWithEvidence } from './verbs.js';
 import { artifactsInIteration } from './iteration-engine.js';
+import { evidenceDigest } from './evidence.js';
+import { eligibleArtifactsForPurpose } from './gate-policy.js';
+import { captureWorkspaceDigest } from './workspace-digest.js';
 import {
   VERIFY_DEFAULT_TIMEOUT_MS,
   LOOP_ARTIFACT_BODY_MAX_BYTES,
@@ -142,9 +145,20 @@ function fitBody(report: VerifyReportBody): VerifyReportBody {
   return { ...report, stdout_tail: undefined, stderr_tail: undefined };
 }
 
-export function buildVerifyReportBody(config: VerifyCommandConfig, result: VerifyRunResult): VerifyReportBody {
+interface VerifyEvidenceBindings {
+  command_digest: string;
+  workspace_digest: string;
+  workspace_stable: boolean;
+}
+
+export function buildVerifyReportBody(
+  config: VerifyCommandConfig,
+  result: VerifyRunResult,
+  bindings?: VerifyEvidenceBindings,
+): VerifyReportBody {
   return fitBody({
     command: config.command.join(' '),
+    command_argv: config.command,
     exit_code: result.exit_code,
     passed: result.passed,
     duration_ms: result.duration_ms,
@@ -152,6 +166,7 @@ export function buildVerifyReportBody(config: VerifyCommandConfig, result: Verif
     timed_out: result.timed_out,
     stdout_tail: result.stdout_tail || undefined,
     stderr_tail: result.stderr_tail || undefined,
+    ...bindings,
   });
 }
 
@@ -172,9 +187,10 @@ export interface RunVerifyResult {
   report_artifact_id?: string;
 }
 
-/** True when a verify_report already exists in this iteration (idempotency key = loop+iteration). */
+/** True when an authoritative, still-fresh engine report exists for this iteration. */
 function hasVerifyReportForIteration(thread: LoopThread, iteration: number): boolean {
-  return artifactsInIteration(thread, iteration).some((a) => a.type === 'verify_report');
+  const reports = artifactsInIteration(thread, iteration).filter((artifact) => artifact.type === 'verify_report');
+  return eligibleArtifactsForPurpose(thread, reports, 'command_green').eligible.length > 0;
 }
 
 /**
@@ -218,7 +234,16 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
 
   // --- OUT OF LOCK: run the command (may take minutes). ---
   const { config, iteration, phase } = snapshot;
-  const report = buildVerifyReportBody(config, runner(config));
+  const command_digest = evidenceDigest({ command: config.command });
+  const workspaceBefore = captureWorkspaceDigest(config.cwd);
+  const runResult = runner(config);
+  const workspaceAfter = captureWorkspaceDigest(config.cwd);
+  const workspace_stable = workspaceBefore === workspaceAfter;
+  const reportAfterRun = buildVerifyReportBody(
+    config,
+    { ...runResult, passed: runResult.passed && workspace_stable },
+    { command_digest, workspace_digest: workspaceAfter, workspace_stable },
+  );
 
   // --- Lock scope 2: re-check idempotency (by SNAPSHOT iteration), then append. ---
   return withLoopLock<RunVerifyResult>({
@@ -233,12 +258,29 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
       // landed (a concurrent verify won). Checking the snapshot (not the current)
       // iteration is what makes this correct after a concurrent advance (review F1).
       if (hasVerifyReportForIteration(thread, iteration)) {
-        return { thread, report, deduped: true };
+        return { thread, report: reportAfterRun, deduped: true };
       }
-      const updated = add_artifact(
+      // Close the final out-of-lock race: the bytes verified above must still be the
+      // bytes present at the evidence commit boundary. A later gate independently
+      // repeats this freshness check so a post-commit mutation also fails closed.
+      const workspaceAtCommit = captureWorkspaceDigest(config.cwd);
+      const commitStable = workspace_stable && workspaceAtCommit === workspaceAfter;
+      const report = buildVerifyReportBody(
+        config,
+        { ...runResult, passed: runResult.passed && commitStable },
+        { command_digest, workspace_digest: workspaceAtCommit, workspace_stable: commitStable },
+      );
+      const updated = addArtifactWithEvidence(
         {
           id: input.loop_id,
           actor: input.actor,
+          evidence_context: {
+            channel: 'verify_command',
+            producer_kind: 'engine',
+            producer_id: 'brainclaw:verify-command',
+            command_digest,
+            workspace_digest: workspaceAtCommit,
+          },
           artifact: {
             // Stamp the SNAPSHOT phase + iteration so the report is attributed to the
             // iteration whose code it actually tested — never a later iteration a
@@ -247,7 +289,6 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
             iteration,
             type: 'verify_report',
             body: JSON.stringify(report),
-            produced_by: 'engine',
           },
         },
         cwd,

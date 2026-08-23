@@ -340,4 +340,24 @@ describe('launch-grant fence — atomic XOR survives a reap (deterministic race)
     fs.writeFileSync(decisionPath(t, 1), JSON.stringify({ decision: 'crossed', token: 'tok1', epoch: 1, at: new Date().toISOString() }));
     assert.equal(launchGrant(t, cwd)?.status, 'crossed', 'decision file wins over the stale armed projection');
   });
+  it('consume replay after a crash between decision commit and projection write adopts crossed with wonTransition=false', () => {
+    const t = committed(cwd, 'tat_cross_replay');
+    armLaunch(t, { token: 'tok-replay', epoch: 1, lease_deadline: future() }, cwd);
+    const crossedAt = new Date().toISOString();
+
+    // The first supervisor won the exclusive decision create, then crashed
+    // before it could project `crossed` onto the reservation JSON.
+    fs.writeFileSync(decisionPath(t, 1), JSON.stringify({ decision: 'crossed', token: 'tok-replay', epoch: 1, at: crossedAt }));
+    const rawProjection = JSON.parse(fs.readFileSync(
+      path.join(cwd, '.brainclaw', 'loops', 'reservations', `${t}.json`),
+      'utf8',
+    )) as { launch?: { status?: string } };
+    assert.equal(rawProjection.launch?.status, 'armed', 'the simulated crash leaves the materialized projection stale');
+
+    const replay = consumeLaunchGrant(t, 'tok-replay', 1, cwd);
+    assert.equal(replay.wonTransition, false, 'replay adopts authority already won before the crash and must not spawn');
+    assert.equal(replay.reservation.launch?.status, 'crossed');
+    assert.equal(replay.reservation.launch?.crossed_at, crossedAt);
+    assert.equal(getReservation(t, cwd)?.launch?.status, 'crossed', 'replay repairs the persisted projection');
+  });
 });

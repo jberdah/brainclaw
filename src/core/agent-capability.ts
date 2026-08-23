@@ -287,7 +287,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     // giving Codex the same session-lifecycle wiring as Claude Code.
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
-    role_capabilities: ['execute', 'review'],
+    role_capabilities: ['execute', 'review', 'consult'],
     runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 5,
     // pln#475: prefer stdin_pipe to avoid Windows cmd.exe arg-parsing breaking

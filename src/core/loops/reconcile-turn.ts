@@ -1,17 +1,23 @@
+import fs from 'node:fs';
 import path from 'node:path';
 
-import { getReservation, evidenceMatchesAttempt, currentNonce, deriveTurnId, launchGrant, type TurnReservation } from './attempt-reservation.js';
+import { getReservation, evidenceMatchesAttempt, currentNonce, launchGrant, resolveTurnId, type TurnReservation } from './attempt-reservation.js';
 import { getLoop } from './store.js';
-import { complete_turn, add_artifact, advance } from './verbs.js';
+import { completeTurnWithEvidence, addArtifactWithEvidence, complete_turn, advance } from './verbs.js';
 import { reducerForKind, type ReducerInput } from './result-reducers.js';
-import { loadAgentRun, transitionAgentRun } from '../agentruns.js';
+import { loadAgentRun, recordExecutionContractAnomaly, transitionAgentRun } from '../agentruns.js';
 import { loadAssignment, transitionAssignment } from '../assignments.js';
 import { loadClaim, releaseClaim, releaseClaimIfActive } from '../claims.js';
 import { createRuntimeEvent } from '../events.js';
-import { readCompletionSignals } from '../runtime-signals.js';
+import { readCompletionSignals, readContractAck } from '../runtime-signals.js';
 import { buildFixCycleTask, type ReviewLoopNextTurn } from '../review-loop-close.js';
 import { withLoopLock, LockTimeoutError, LockLostError } from './lock.js';
-import type { AgentRun, LaneResult } from '../schema.js';
+import { validateWorkerContractAcceptance } from '../execution-contract.js';
+import { evidenceDigest } from './evidence.js';
+import { executionContractForGeneration, settleActiveAttemptGenerationV2 } from './attempt-authority.js';
+import { fenceForGeneration, resolveTurnGenerationChain } from './attempt-generations.js';
+import { readLocalAuthorityHome } from './attempt-rollout.js';
+import { LaneResultSchema, type AgentRun, type LaneResult } from '../schema.js';
 
 /**
  * reconcileTurn (pln#630 §8) — the ONE mutating convergence action for a
@@ -34,7 +40,7 @@ export interface ReconcileTurnInput {
   turn_id: string;
   /** The authoritative turn result (LANE-RESULT). Must carry turn_id/run_id/nonce matching the attempt. */
   lane: LaneResult;
-  /** ideation only — critique bodies resolved from the attempt's critique_batch artifact. */
+  /** ideation only — explicitly typed critique bodies resolved from the attempt result. */
   critiques?: Array<{ body: string; addresses_critique?: string[] }>;
   actor?: string;
   cwd?: string;
@@ -45,6 +51,9 @@ export interface ReconcileTurnResult {
   reason: string;
   /** True when a completed+failed contradiction withheld convergence (§13 R4). */
   conflict?: boolean;
+  /** Contract acceptance mismatch after crossing; this generation must not respawn. */
+  contract_anomaly?: boolean;
+  respawn?: false;
   slot_outcome?: 'done' | 'failed';
   artifacts_added?: number;
   auto_closed?: boolean;
@@ -130,9 +139,36 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     return { reconciled: false, reason: `containment: reservation store_root ${reservation.store_root} != operating store ${operatingRoot}` };
   }
 
+  const resolvedGeneration = resolveTurnGenerationChain(cwd ?? reservation.store_root, reservation.turn_id);
+  const activeGeneration = resolvedGeneration && (resolvedGeneration.status === 'active' || resolvedGeneration.status === 'settled')
+    ? resolvedGeneration.latest_generation
+    : undefined;
+  const activeRunId = activeGeneration?.run_id ?? reservation.child_ids.run_id;
+  const activeContractRef = activeGeneration
+    ? executionContractForGeneration(reservation, activeGeneration).ref
+    : reservation.execution_contract_ref;
+  const activeLaunchStatus = activeGeneration ? 'crossed' as const : reservation.launch?.status;
+  const owningRun = loadAgentRun(activeRunId, cwd);
+  if (owningRun?.execution_contract_anomaly) {
+    return {
+      reconciled: false,
+      contract_anomaly: true,
+      respawn: false,
+      reason: `persisted post-crossing execution-contract anomaly (${owningRun.execution_contract_anomaly.source}) — convergence withheld; respawn=false`,
+    };
+  }
+
   // ── §2 read-strict evidence gate: the LANE must be turn-keyed to THIS attempt's
   // current launch generation. A stale/mismatched result never converges the loop. ──
-  if (!evidenceMatchesAttempt(reservation, { turn_id: lane.turn_id, run_id: lane.run_id, nonce: lane.nonce })) {
+  if (!evidenceMatchesAttempt(reservation, {
+    assignment_id: lane.assignment_id,
+    turn_id: lane.turn_id,
+    run_id: lane.run_id,
+    nonce: lane.nonce,
+    attempt_epoch: lane.attempt_epoch,
+    contract_hash: lane.execution_contract_hash,
+    workspace_digest: lane.workspace_digest,
+  })) {
     const nonce = currentNonce(reservation);
     return {
       reconciled: false,
@@ -142,6 +178,82 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     };
   }
 
+  if (activeContractRef) {
+    const completion = readCompletionSignals(
+      cwd ?? process.cwd(),
+      reservation.child_ids.assignment_id,
+      activeGeneration?.run_id,
+    ).completed;
+    const bootstrapAck = readContractAck(
+      cwd ?? process.cwd(),
+      reservation.child_ids.assignment_id,
+      activeGeneration?.run_id,
+    );
+    const accepted = {
+      contract_hash: lane.execution_contract_hash ?? completion?.contract_hash ?? '',
+      capability_snapshot_hash: lane.capability_snapshot_hash ?? completion?.capability_snapshot_hash ?? '',
+    };
+    const bootstrapVerdict = bootstrapAck?.status === 'accepted'
+      && bootstrapAck.turn_id === reservation.turn_id
+      && bootstrapAck.run_id === activeRunId
+      && bootstrapAck.nonce === (activeGeneration?.launch_nonce ?? reservation.launch?.token)
+      && (!activeGeneration
+        || bootstrapAck.cwd === normalizedWorkspace(activeGeneration.workspace_path))
+      && (!activeGeneration || (
+        bootstrapAck.attempt_epoch === activeGeneration.attempt_epoch
+        && bootstrapAck.workspace_digest === activeGeneration.workspace_digest
+      ))
+      ? validateWorkerContractAcceptance(
+        activeContractRef,
+        {
+          contract_hash: bootstrapAck.contract_hash,
+          capability_snapshot_hash: bootstrapAck.capability_snapshot_hash,
+        },
+        activeLaunchStatus,
+      )
+      : undefined;
+    const terminalVerdict = validateWorkerContractAcceptance(
+        activeContractRef,
+      accepted,
+      activeLaunchStatus,
+    );
+    if (bootstrapVerdict?.kind !== 'accepted' || terminalVerdict.kind !== 'accepted') {
+      try {
+        recordExecutionContractAnomaly(activeRunId, {
+          source: bootstrapVerdict?.kind !== 'accepted'
+            ? 'bootstrap_ack'
+            : lane.execution_contract_hash ? 'lane_result' : 'completion_signal',
+          reason: bootstrapVerdict?.kind !== 'accepted'
+            ? 'bootstrap did not accept the immutable execution contract'
+            : 'terminal evidence did not match the immutable execution contract',
+          accepted_contract_hash: bootstrapVerdict?.kind !== 'accepted'
+            ? bootstrapAck?.contract_hash
+            : accepted.contract_hash,
+          accepted_capability_snapshot_hash: bootstrapVerdict?.kind !== 'accepted'
+            ? bootstrapAck?.capability_snapshot_hash
+            : accepted.capability_snapshot_hash,
+        }, cwd);
+      } catch { /* ack/sentinel remains a durable fallback fence */ }
+      try {
+        createRuntimeEvent({
+          agent: actor,
+          event_type: 'run_blocked',
+          text: `reconcileTurn: post-crossing execution-contract acceptance anomaly for ${turn_id}; convergence WITHHELD and respawn=false`,
+          tags: ['loops', 'reconcile', 'contract-anomaly', 'turn-attempt'],
+          assignment_id: reservation.child_ids.assignment_id,
+          run_id: activeRunId,
+          status_reason: 'execution_contract_acceptance_mismatch',
+        }, cwd);
+      } catch { /* anomaly journal best-effort */ }
+      return {
+        reconciled: false,
+        contract_anomaly: true,
+        respawn: false,
+        reason: 'post-crossing execution-contract acceptance mismatch or missing hash — convergence withheld; respawn=false',
+      };
+    }
+  }
+
   // ── §13 R4 contradiction: a turn-keyed FAILED sentinel present alongside a
   // completed result (the lane or a completed sentinel) → WITHHOLD convergence,
   // journal a conflict (never silently accept). Compared against the LANE's
@@ -149,9 +261,19 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   // LANE-RESULT then exited non-zero (turn-keyed failed sentinel) is a conflict,
   // not a clean close. ──
   try {
-    const bodies = readCompletionSignals(cwd ?? process.cwd(), reservation.child_ids.assignment_id);
-    const matchedCompleted = bodies.completed?.status === 'completed' && evidenceMatchesAttempt(reservation, bodies.completed);
-    const matchedFailed = bodies.failed?.status === 'failed' && evidenceMatchesAttempt(reservation, bodies.failed);
+    const bodies = readCompletionSignals(
+      cwd ?? process.cwd(),
+      reservation.child_ids.assignment_id,
+      activeGeneration?.run_id,
+    );
+    const matchedCompleted = bodies.completed?.status === 'completed' && evidenceMatchesAttempt(reservation, {
+      assignment_id: reservation.child_ids.assignment_id,
+      ...bodies.completed,
+    });
+    const matchedFailed = bodies.failed?.status === 'failed' && evidenceMatchesAttempt(reservation, {
+      assignment_id: reservation.child_ids.assignment_id,
+      ...bodies.failed,
+    });
     if (matchedFailed && (matchedCompleted || lane.status === 'completed')) {
       try {
         createRuntimeEvent({
@@ -160,7 +282,7 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
           text: `reconcileTurn: turn ${turn_id} has a completed(lane/sentinel)+failed(sentinel) contradiction — auto-stop WITHHELD (§13 R4), escalating to human`,
           tags: ['loops', 'reconcile', 'conflict', 'turn-attempt'],
           assignment_id: reservation.child_ids.assignment_id,
-          run_id: reservation.child_ids.run_id,
+          run_id: activeRunId,
           status_reason: 'turn_evidence_contradiction',
         }, cwd);
       } catch { /* conflict-journal best-effort */ }
@@ -203,7 +325,8 @@ function convergeLockedTurn(
   actor: string,
   cwd: string | undefined,
 ): ReconcileTurnResult {
-  const { turn_id, lane } = input;
+  const { turn_id } = input;
+  let lane = input.lane;
   const loop = getLoop(reservation.loop_id, cwd);
   if (!loop) return { reconciled: false, reason: `loop ${reservation.loop_id} not found` };
 
@@ -222,6 +345,66 @@ function convergeLockedTurn(
   if (slot.current_turn_id !== undefined && slot.current_turn_id !== turn_id) {
     return { reconciled: false, reason: `turn ${turn_id} superseded by current turn ${slot.current_turn_id} on slot ${slot.slot_id}` };
   }
+
+  // AttemptAuthority v2 TOCTOU closure: repeat the FULL evidence/fence check
+  // while holding the loop lock, then let settlement and takeover contend on
+  // the same immutable close(epoch) cell. If takeover won after the optimistic
+  // pre-check, settlement observes it here and performs no loop mutation.
+  const generationState = resolveTurnGenerationChain(cwd ?? reservation.store_root, reservation.turn_id);
+  if (generationState) {
+    if (!evidenceMatchesAttempt(reservation, {
+      assignment_id: lane.assignment_id,
+      turn_id: lane.turn_id,
+      run_id: lane.run_id,
+      nonce: lane.nonce,
+      attempt_epoch: lane.attempt_epoch,
+      contract_hash: lane.execution_contract_hash,
+      workspace_digest: lane.workspace_digest,
+    })) {
+      return { reconciled: false, reason: 'attempt generation changed before commit — stale evidence fenced' };
+    }
+    const generation = generationState.latest_generation;
+    const localAuthorityHome = readLocalAuthorityHome(cwd ?? reservation.store_root);
+    if (!localAuthorityHome) {
+      return { reconciled: false, reason: 'AttemptAuthority v2 settlement requires the activated local authority_home' };
+    }
+    const settlement = settleActiveAttemptGenerationV2(
+      turn_id,
+      fenceForGeneration(generation),
+      lane as Record<string, unknown>,
+      localAuthorityHome,
+      actor,
+      loop.created_by,
+      cwd ?? reservation.store_root,
+    );
+    if (!settlement || settlement.cell.decision !== 'settled') {
+      return {
+        reconciled: false,
+        reason: `settlement lost close(${generation.attempt_epoch}) to ${settlement?.cell.decision ?? 'unknown'} — evidence is audit-only`,
+      };
+    }
+    lane = LaneResultSchema.parse(settlement.evidence.result);
+  }
+  const acceptedGeneration = generationState?.latest_generation;
+  const acceptedRunId = acceptedGeneration?.run_id ?? reservation.child_ids.run_id;
+  const acceptedNonce = acceptedGeneration?.launch_nonce ?? reservation.launch?.token;
+  const acceptedEpoch = acceptedGeneration?.attempt_epoch ?? reservation.epoch;
+  const acceptedContractHash = acceptedGeneration?.contract_hash
+    ?? reservation.execution_contract_ref?.hash
+    ?? evidenceDigest({
+      version: 'legacy-uncontracted-reservation-v1',
+      turn_id: reservation.turn_id,
+      run_id: reservation.child_ids.run_id,
+      epoch: reservation.epoch,
+      phase: reservation.phase,
+      iteration: reservation.iteration,
+      cwd: reservation.cwd,
+    });
+  const acceptedWorkspaceDigest = acceptedGeneration?.workspace_digest ?? evidenceDigest({
+    workspace_policy: reservation.execution_contract?.workspace_policy,
+    cwd: reservation.cwd,
+    store_root: reservation.store_root,
+  });
 
   // A terminal loop already converged → idempotent no-op (any trigger may fire us). Still
   // release the claim (review Finding 2): a cap-blocked loop that crashed AFTER the block
@@ -259,16 +442,67 @@ function convergeLockedTurn(
     try {
       const [primary, ...extras] = reduced.artifacts;
       for (const a of extras) {
-        try { add_artifact({ id: loop.id, actor, artifact: { phase: a.phase, type: a.type, body: a.body, produced_by: a.produced_by } }, cwd); }
+        try {
+          addArtifactWithEvidence({
+            id: loop.id,
+            actor,
+            evidence_context: {
+              channel: 'reconcile_turn',
+              producer_kind: 'slot',
+              producer_id: reservation.agent,
+              agent_id: reservation.agent_id,
+              slot_id: slot.slot_id,
+              slot_role: slot.role,
+              turn_id,
+              assignment_id: reservation.child_ids.assignment_id,
+              claim_id: reservation.claim_id,
+              run_id: acceptedRunId,
+              nonce: acceptedNonce,
+              attempt_epoch: acceptedEpoch,
+              execution_contract_hash: acceptedContractHash,
+              workspace_digest: acceptedWorkspaceDigest,
+            },
+            artifact: {
+              phase: a.phase,
+              type: a.type,
+              body: a.body,
+              produced_by: a.produced_by,
+              addresses_critique: a.addresses_critique,
+            },
+          }, cwd);
+        }
         catch { /* an extra artifact failing must not abort convergence */ }
       }
-      complete_turn({
+      completeTurnWithEvidence({
         id: loop.id,
         slot_id: slot.slot_id,
         actor,
+        evidence_context: {
+          channel: 'reconcile_turn',
+          producer_kind: 'slot',
+          producer_id: reservation.agent,
+          agent_id: reservation.agent_id,
+          slot_id: slot.slot_id,
+          slot_role: slot.role,
+          turn_id,
+          assignment_id: reservation.child_ids.assignment_id,
+          claim_id: reservation.claim_id,
+          run_id: acceptedRunId,
+          nonce: acceptedNonce,
+          attempt_epoch: acceptedEpoch,
+          execution_contract_hash: acceptedContractHash,
+          workspace_digest: acceptedWorkspaceDigest,
+        },
         outcome: reduced.slot_outcome,
         failure_reason: reduced.failure_reason,
-        ...(primary ? { artifact: { phase: primary.phase, type: primary.type, body: primary.body } } : {}),
+        ...(primary ? {
+          artifact: {
+            phase: primary.phase,
+            type: primary.type,
+            body: primary.body,
+            addresses_critique: primary.addresses_critique,
+          },
+        } : {}),
       }, cwd);
     } catch (err) {
       return { reconciled: false, reason: `complete_turn failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -282,7 +516,9 @@ function convergeLockedTurn(
         text: `reconcileTurn: harvested turn ${turn_id} on slot ${slot.slot_id} → loop ${loop.id} (${slot_outcome}, ${artifacts_added} artifact(s), phase ${reservation.phase})`,
         tags: ['loops', 'reconcile', 'harvest', 'turn-attempt'],
         assignment_id: reservation.child_ids.assignment_id,
-        run_id: reservation.child_ids.run_id,
+        run_id: acceptedRunId,
+        attempt_epoch: acceptedGeneration?.attempt_epoch,
+        workspace_digest: acceptedGeneration?.workspace_digest,
         status_reason: `harvested_${slot_outcome}`,
       }, cwd);
     } catch {
@@ -295,7 +531,7 @@ function convergeLockedTurn(
   // can RETAIN the claim/worktree. Run + assignment settle unconditionally on both paths
   // (a crash that recorded the turn but not the settle still converges on replay; the
   // fix-cycle re-dispatch mints a fresh run/assignment, so completing the old is correct). ──
-  settleRunCompleted(reservation.child_ids.run_id, actor, cwd);
+  settleRunCompleted(acceptedRunId, actor, cwd);
   settleAssignment(reservation.child_ids.assignment_id, actor, cwd);
 
   // ── Advance / stop decision. On a `done` outcome we either drive a deterministic stop
@@ -325,7 +561,7 @@ function convergeLockedTurn(
       loop.protocol?.review_mode === 'symmetric';
     if (symmetricRC) {
       // EXACTLY-ONCE bump (the one non-negotiable safety guard): each bump changes
-      // deriveTurnId(loop, slot, iteration), so a DOUBLE bump would mint two turn_ids and
+      // resolveTurnId(loop, slot, phase, iteration), so a DOUBLE bump would mint two turn_ids and
       // the launch fence would spawn BOTH rounds. Bump only when this turn's round is still
       // current; a re-reconcile after the bump takes the else-branch (no re-bump, no re-emit).
       if (loop.iteration_count === reservation.iteration) {
@@ -355,7 +591,14 @@ function convergeLockedTurn(
           // (reserved_never_launched — crash between arm and consume + the expiry sweep) or an
           // absent reservation is a STRAND (dec#149 R1): re-emit to self-heal. The re-dispatch's
           // prepare re-arms a revoked grant at a higher epoch, so this round can actually relaunch.
-          const bumpedTurnId = deriveTurnId(loop.id, slot.slot_id, cur.iteration_count);
+          const currentSlot = cur.slots.find((candidate) => candidate.slot_id === slot.slot_id);
+          const bumpedTurnId = resolveTurnId({
+            loop_id: loop.id,
+            slot_id: slot.slot_id,
+            phase: cur.current_phase,
+            iteration: cur.iteration_count,
+            current_turn_id: currentSlot?.current_turn_id,
+          }, cwd);
           const bumpedGrant = launchGrant(bumpedTurnId, cwd);
           const bumpedLive =
             getReservation(bumpedTurnId, cwd) !== undefined &&
@@ -369,7 +612,7 @@ function convergeLockedTurn(
                 text: `reconcileTurn: fix-cycle round ${cur.iteration_count} of loop ${loop.id} was bumped but never dispatched (turn ${turn_id} strand) — re-emitting next_turn to self-heal`,
                 tags: ['loops', 'reconcile', 'turn-owned', 'strand-recovery'],
                 assignment_id: reservation.child_ids.assignment_id,
-                run_id: reservation.child_ids.run_id,
+                run_id: acceptedRunId,
                 status_reason: 'fix_cycle_strand_reemit',
               }, cwd);
             } catch { /* observability best-effort */ }
@@ -411,6 +654,15 @@ function convergeLockedTurn(
     loop_status,
     ...(next_turn ? { next_turn } : {}),
   };
+}
+
+function normalizedWorkspace(value: string): string | undefined {
+  try {
+    const resolved = fs.realpathSync.native(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return undefined;
+  }
 }
 
 // ─── pln#641 (dec#151 option b) — business convergence of a FAILED turn ─────

@@ -363,6 +363,90 @@ export const REF_BASED_ARTIFACT_TYPES = new Set<string>([
   'file_diff',
 ]);
 
+export const EVIDENCE_ATTESTATION_KINDS = ['claim', 'observation', 'verification', 'approval'] as const;
+export type EvidenceAttestationKind = (typeof EVIDENCE_ATTESTATION_KINDS)[number];
+
+export const EVIDENCE_PRODUCER_KINDS = ['engine', 'slot', 'coordinator', 'operator'] as const;
+export type EvidenceProducerKind = (typeof EVIDENCE_PRODUCER_KINDS)[number];
+
+export const EVIDENCE_CHANNELS = [
+  'complete_turn',
+  'reconcile_turn',
+  'verify_command',
+  'add_artifact',
+  'operator_input',
+  'system_hook',
+] as const;
+export type EvidenceChannel = (typeof EVIDENCE_CHANNELS)[number];
+
+export const EvidenceSubjectSchema = z.object({
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  artifact_id: z.string().min(1),
+  phase: z.string().min(1),
+  iteration: z.number().int().nonnegative(),
+  slot_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  assignment_id: z.string().optional(),
+  claim_id: z.string().optional(),
+  run_id: z.string().optional(),
+  nonce_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  attempt_epoch: z.number().int().nonnegative().optional(),
+  execution_contract_hash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  command_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  workspace_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+});
+export type EvidenceSubject = z.infer<typeof EvidenceSubjectSchema>;
+
+export const EvidenceProducerSchema = z.object({
+  kind: z.enum(EVIDENCE_PRODUCER_KINDS),
+  id: z.string().min(1),
+  agent_id: z.string().optional(),
+  channel: z.enum(EVIDENCE_CHANNELS),
+});
+export type EvidenceProducer = z.infer<typeof EvidenceProducerSchema>;
+
+export const EvidenceAttestationSchema = z.object({
+  kind: z.enum(EVIDENCE_ATTESTATION_KINDS),
+  issuer: z.string().min(1),
+  issued_at: z.string().datetime(),
+  subject_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  rights: z.array(z.string().min(1)).min(1),
+});
+export type EvidenceAttestation = z.infer<typeof EvidenceAttestationSchema>;
+
+/**
+ * EvidenceEnvelope v1 is sealed by the loop engine at the artifact commit
+ * boundary. The seal is an integrity checksum, not a remote identity
+ * signature: ingress schemas never accept this object from a caller.
+ */
+export const EvidenceEnvelopeSchema = z.object({
+  version: z.literal(1),
+  evidence_id: z.string().regex(/^evd_[0-9a-z]+$/),
+  evidence_type: z.literal('artifact_commit'),
+  policy_version: z.literal('gate-policy-v1'),
+  subject: EvidenceSubjectSchema,
+  producer: EvidenceProducerSchema,
+  artifact_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  issued_at: z.string().datetime(),
+  observed_at: z.string().datetime(),
+  validity: z.object({
+    not_before: z.string().datetime(),
+    not_after: z.string().datetime().optional(),
+  }),
+  attestations: z.array(EvidenceAttestationSchema).min(1),
+  seal: z.object({
+    algorithm: z.literal('sha256'),
+    digest: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+});
+export type EvidenceEnvelope = z.infer<typeof EvidenceEnvelopeSchema>;
+
+export const EvidencePolicyBindingSchema = z.object({
+  version: z.literal('gate-policy-v1'),
+  mode: z.enum(['shadow', 'strict']),
+});
+export type EvidencePolicyBinding = z.infer<typeof EvidencePolicyBindingSchema>;
+
 /**
  * Lookup table mapping known artifact types to their body Zod schemas.
  * Step 2 handlers (request_input/provide_input) parse `artifact.body` as
@@ -390,6 +474,7 @@ export const REF_BASED_ARTIFACT_TYPES = new Set<string>([
  */
 export const VerifyReportBodySchema = z.object({
   command: z.string().min(1),
+  command_argv: z.array(z.string()).min(1).optional(),
   exit_code: z.number().int().nullable(),
   passed: z.boolean(),
   duration_ms: z.number().int().nonnegative().optional(),
@@ -397,6 +482,9 @@ export const VerifyReportBodySchema = z.object({
   timed_out: z.boolean().optional(),
   stdout_tail: z.string().max(1024).optional(),
   stderr_tail: z.string().max(1024).optional(),
+  command_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  workspace_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  workspace_stable: z.boolean().optional(),
 });
 export type VerifyReportBody = z.infer<typeof VerifyReportBodySchema>;
 
@@ -454,6 +542,14 @@ export const LoopArtifactSchema = z
      * at artifact creation time so callers don't have to track it.
      */
     iteration: z.number().int().nonnegative().optional(),
+    /**
+     * Explicit migration provenance. Optional on read so artifacts persisted
+     * before P2 remain valid; use artifactEvidenceProvenance() to infer their
+     * effective value without rewriting historical records.
+     */
+    provenance: z.enum(['legacy', 'attested']).optional(),
+    /** Server-sealed provenance and independent attestations (P2). */
+    evidence: EvidenceEnvelopeSchema.optional(),
   })
   .superRefine((artifact, ctx) => {
     if (artifact.body !== undefined && Buffer.byteLength(artifact.body, 'utf8') > LOOP_ARTIFACT_BODY_MAX_BYTES) {
@@ -576,6 +672,8 @@ export const LoopThreadSchema = z
     artifacts: z.array(LoopArtifactSchema),
     linked: LoopLinksSchema.optional(),
     stop_condition: StopConditionSchema.optional(),
+    /** Absent means a pre-policy/legacy thread. New loops bind this at open. */
+    evidence_policy: EvidencePolicyBindingSchema.optional(),
 
     /**
      * pln#508 step 1 — set of unresolved operator_question artifact ids.
@@ -662,6 +760,19 @@ const LoopEventBaseShape = {
   mutation_id: z.string().min(1),
 };
 
+export const GateDecisionSchema = z.object({
+  passed: z.boolean(),
+  /** Strict and legacy dimensions remain observable during a shadow rollout. */
+  strict_passed: z.boolean().optional(),
+  legacy_passed: z.boolean().optional(),
+  policy_version: z.enum(['legacy', 'gate-policy-v1']),
+  mode: z.enum(['legacy', 'shadow', 'strict']),
+  condition_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  accepted_evidence_ids: z.array(z.string()),
+  rejected: z.array(z.object({ artifact_id: z.string(), reason: z.string() })),
+});
+export type GateDecision = z.infer<typeof GateDecisionSchema>;
+
 export const LoopEventSchema = z.discriminatedUnion('kind', [
   z.object({
     ...LoopEventBaseShape,
@@ -676,6 +787,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     to_phase: z.string().min(1),
     iteration: z.number().int().nonnegative(),
     reason: z.string().optional(),
+    gate_decision: GateDecisionSchema.optional(),
   }),
   z.object({
     ...LoopEventBaseShape,
@@ -699,6 +811,19 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     ...LoopEventBaseShape,
+    kind: z.literal('attempt_generation_changed'),
+    slot_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    assignment_id: z.string().min(1),
+    from_epoch: z.number().int().nonnegative(),
+    to_epoch: z.number().int().positive(),
+    from_run_id: z.string().min(1),
+    to_run_id: z.string().min(1),
+    close_digest: z.string().regex(/^[a-f0-9]{64}$/),
+    cause: z.string().min(1),
+  }),
+  z.object({
+    ...LoopEventBaseShape,
     kind: z.literal('turn_completed'),
     slot_id: z.string().min(1),
     phase: z.string().min(1),
@@ -713,6 +838,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     phase: z.string().min(1),
     type: z.string().min(1),
     produced_by: z.string().optional(),
+    evidence_id: z.string().optional(),
   }),
   z.object({
     ...LoopEventBaseShape,
@@ -733,6 +859,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     kind: z.literal('closed'),
     final_status: z.enum(['completed', 'cancelled', 'blocked']),
     reason: z.string().optional(),
+    gate_decision: GateDecisionSchema.optional(),
   }),
   // pln#492 — system events emitted by the iteration / phase-advance gate.
   // Carried in the same event journal rather than as artifacts so consumers
@@ -742,6 +869,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     kind: z.literal('phase_advance_blocked'),
     phase: z.string().min(1),
     gate_reason: z.string().min(1),
+    gate_decision: GateDecisionSchema.optional(),
   }),
   z.object({
     ...LoopEventBaseShape,
@@ -872,8 +1000,9 @@ export const DEFAULT_PROTOCOLS: Record<
   },
   // pln#609 — implementation loop v2. The loop ADDS to the dispatch pipeline
   // what it lacked: a deterministic command_green gate + a bounded fix↔verify
-  // cycle + per-phase context sculpting. `bind` is an ENGINE action (bind
-  // plan+sequence and dispatch) not narration; execute↔verify iterates until
+  // cycle + per-phase context sculpting. `bind` is an engine-only link
+  // validation/advance; worker launch belongs to turn(dispatch=true).
+  // execute↔verify iterates until
   // the verify command is green (a passing verify_report this iteration) or
   // the cycle cap is hit (→ handoff_ready with the red report → blocked).
   implementation: {

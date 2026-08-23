@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
+import type { CapabilitySnapshot, ExecutionContractRef } from './execution-contract.js';
 import { resolveOwnerProjectId } from './config.js';
 import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
@@ -55,34 +56,39 @@ function assignmentStoreForDir(dirPath: string): JsonStore<Assignment> {
 
 export function saveAssignment(assignment: Assignment, cwd?: string): void {
   mutate({ cwd }, () => {
-    ensureAssignmentsDir(cwd);
-    const store = new JsonStore<Assignment>({
-      dirPath: assignmentsDir(cwd, 'write'),
-      documentType: 'assignment',
-      getId: (a) => a.id,
-      sort: (a, b) => a.created_at.localeCompare(b.created_at),
-    });
-    const parsed = AssignmentSchema.parse(assignment);
-    // pln#568 (I2): journal the post-image BEFORE the projection write.
-    const created = !store.exists(parsed.id);
-    emitRegistryPostImage('assignment', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
-    registryFaultPoint('after_registry_journal');
-    store.save(parsed);
-    // CONVERGE THE OTHER LAYOUT, exactly as saveClaim does. Without this, a save wrote
-    // canonical and LEFT a legacy copy holding the stale status: `loadAssignment` reads
-    // canonical first so the record looked right, but `deleteAssignment` removed only the
-    // canonical one and the stale copy became the record again — a zombie resurrection.
-    // Best effort on purpose: `listAssignments` reads both dirs, so a missed cleanup stays
-    // visible rather than silently dropping data. (Fable audit; claims.ts already had it.)
-    const writeDir = assignmentsDir(cwd, 'write');
-    for (const dirPath of entityRecordDirs('assignments', cwd ?? process.cwd())) {
-      if (dirPath === writeDir) continue;
-      const legacyPath = path.join(dirPath, `${parsed.id}.json`);
-      try {
-        if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
-      } catch { /* best effort — the dual-layout list keeps it visible */ }
-    }
+    saveAssignmentUnlocked(assignment, cwd);
   });
+}
+
+/** Store-lock caller variant used by create-or-validate projection repair. */
+function saveAssignmentUnlocked(assignment: Assignment, cwd?: string): void {
+  ensureAssignmentsDir(cwd);
+  const store = new JsonStore<Assignment>({
+    dirPath: assignmentsDir(cwd, 'write'),
+    documentType: 'assignment',
+    getId: (a) => a.id,
+    sort: (a, b) => a.created_at.localeCompare(b.created_at),
+  });
+  const parsed = AssignmentSchema.parse(assignment);
+  // pln#568 (I2): journal the post-image BEFORE the projection write.
+  const created = !store.exists(parsed.id);
+  emitRegistryPostImage('assignment', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
+  registryFaultPoint('after_registry_journal');
+  store.save(parsed);
+  // CONVERGE THE OTHER LAYOUT, exactly as saveClaim does. Without this, a save wrote
+  // canonical and LEFT a legacy copy holding the stale status: `loadAssignment` reads
+  // canonical first so the record looked right, but `deleteAssignment` removed only the
+  // canonical one and the stale copy became the record again — a zombie resurrection.
+  // Best effort on purpose: `listAssignments` reads both dirs, so a missed cleanup stays
+  // visible rather than silently dropping data. (Fable audit; claims.ts already had it.)
+  const writeDir = assignmentsDir(cwd, 'write');
+  for (const dirPath of entityRecordDirs('assignments', cwd ?? process.cwd())) {
+    if (dirPath === writeDir) continue;
+    const legacyPath = path.join(dirPath, `${parsed.id}.json`);
+    try {
+      if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+    } catch { /* best effort — the dual-layout list keeps it visible */ }
+  }
 }
 
 export function loadAssignment(id: string, cwd?: string): Assignment | undefined {
@@ -437,6 +443,8 @@ export interface CreateAssignmentOptions {
   description: string;
   lane?: string;
   worktree_path?: string;
+  execution_contract_ref?: ExecutionContractRef;
+  capability_snapshot?: CapabilitySnapshot;
   heartbeat_ttl_ms?: number;
   acceptance_ttl_ms?: number;
   max_retries?: number;
@@ -447,7 +455,7 @@ export interface CreateAssignmentOptions {
  * Create a new assignment. Called by the dispatcher after creating a claim
  * and sending an inbox message.
  */
-export function createAssignment(options: CreateAssignmentOptions, cwd?: string): Assignment {
+function buildAssignment(options: CreateAssignmentOptions, cwd?: string): Assignment {
   const generated = options.id ? undefined : generateAssignmentId(cwd);
   const id = options.id ?? generated!.id;
   // `generated` is undefined whenever the caller supplied an id, so the old
@@ -455,7 +463,7 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
   // "give me this id, derive the rest". Found while pinning the layout primitive.
   const short_label = options.short_label ?? generated?.short_label ?? id;
 
-  const assignment: Assignment = AssignmentSchema.parse({
+  return AssignmentSchema.parse({
     schema_version: 1,
     id,
     short_label,
@@ -479,6 +487,8 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
     description: options.description,
     lane: options.lane,
     worktree_path: options.worktree_path,
+    execution_contract_ref: options.execution_contract_ref,
+    capability_snapshot: options.capability_snapshot,
     status: 'created',
     created_at: nowISO(),
     heartbeat_ttl_ms: options.heartbeat_ttl_ms,
@@ -488,10 +498,14 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
     artifacts: [],
     tags: options.tags ?? [],
   });
+}
 
-  saveAssignment(assignment, cwd);
+function emitAssignmentCreatedSideEffects(
+  assignment: Assignment,
+  options: CreateAssignmentOptions,
+  cwd?: string,
+): void {
   emitAssignmentEvent(assignment, 'assignment_created', options.dispatcher_agent, cwd);
-
   appendAuditEntry({
     actor: options.dispatcher_agent,
     action: 'create',
@@ -499,8 +513,120 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
     item_type: 'assignment',
     after: { agent: options.agent, scope: options.scope, claim_id: options.claim_id },
   }, cwd);
+}
+
+export function createAssignment(options: CreateAssignmentOptions, cwd?: string): Assignment {
+  const assignment = buildAssignment(options, cwd);
+
+  saveAssignment(assignment, cwd);
+  emitAssignmentCreatedSideEffects(assignment, options, cwd);
 
   return assignment;
+}
+
+export class AssignmentProjectionConflictError extends Error {
+  constructor(public readonly assignmentId: string, detail: string) {
+    super(`Assignment projection conflict for ${assignmentId}: ${detail}`);
+    this.name = 'AssignmentProjectionConflictError';
+  }
+}
+
+export interface EnsureAssignmentProjectionResult {
+  assignment: Assignment;
+  created: boolean;
+  repaired?: boolean;
+}
+
+const TERMINAL_PROJECTION_ASSIGNMENT_STATUSES = new Set<AssignmentStatus>([
+  'completed', 'cancelled', 'failed', 'blocked', 'timed_out', 'expired', 'rerouted',
+]);
+
+function assertAssignmentProjectionMatches(
+  existing: Assignment,
+  expected: Assignment,
+): void {
+  const fields: Array<keyof Assignment> = [
+    'id', 'claim_id', 'agent', 'dispatcher_agent', 'scope', 'description',
+  ];
+  for (const field of fields) {
+    if (existing[field] !== expected[field]) {
+      throw new AssignmentProjectionConflictError(
+        expected.id,
+        `${String(field)} differs (existing=${String(existing[field])}, expected=${String(expected[field])})`,
+      );
+    }
+  }
+  // project_id was added after the entity shipped. An absent legacy owner remains readable;
+  // when present it must identify the same authoritative store.
+  if (existing.project_id !== undefined && existing.project_id !== expected.project_id) {
+    throw new AssignmentProjectionConflictError(expected.id, 'project_id differs');
+  }
+  // Turn-owned Assignments created before P0B did not persist agent_id. Accept and
+  // enrich that legacy omission when the named agent still matches; a present,
+  // divergent identity remains a hard conflict.
+  if (existing.agent_id !== undefined && existing.agent_id !== expected.agent_id) {
+    throw new AssignmentProjectionConflictError(expected.id, 'agent_id differs');
+  }
+  if (
+    existing.execution_contract_ref !== undefined
+    && expected.execution_contract_ref !== undefined
+    && JSON.stringify(existing.execution_contract_ref) !== JSON.stringify(expected.execution_contract_ref)
+  ) {
+    throw new AssignmentProjectionConflictError(expected.id, 'execution_contract_ref differs');
+  }
+  if (
+    existing.capability_snapshot !== undefined
+    && expected.capability_snapshot !== undefined
+    && JSON.stringify(existing.capability_snapshot) !== JSON.stringify(expected.capability_snapshot)
+  ) {
+    throw new AssignmentProjectionConflictError(expected.id, 'capability_snapshot differs');
+  }
+  if (TERMINAL_PROJECTION_ASSIGNMENT_STATUSES.has(existing.status)) {
+    throw new AssignmentProjectionConflictError(expected.id, `existing status is terminal (${existing.status})`);
+  }
+}
+
+/**
+ * Create-or-validate the deterministic Assignment projection for one logical turn.
+ *
+ * The read/decision/write sequence is serialized by the store lock. Identical recovery is
+ * a strict no-op (no registry/runtime/audit duplicate); any divergent projection fails closed.
+ */
+export function ensureAssignmentProjection(
+  options: CreateAssignmentOptions & { id: string },
+  cwd?: string,
+): EnsureAssignmentProjectionResult {
+  let created = false;
+  let repaired = false;
+  const expected = buildAssignment(options, cwd);
+  const assignment = mutate({ cwd }, () => {
+    const existing = loadAssignment(options.id, cwd);
+    if (existing) {
+      assertAssignmentProjectionMatches(existing, expected);
+      const requiredTags = options.tags ?? [];
+      const missingAgentId = existing.agent_id === undefined && expected.agent_id !== undefined;
+      const missingContractRef = existing.execution_contract_ref === undefined && expected.execution_contract_ref !== undefined;
+      const missingCapabilitySnapshot = existing.capability_snapshot === undefined && expected.capability_snapshot !== undefined;
+      const missingTags = !requiredTags.every((tag) => existing.tags.includes(tag));
+      if (!missingAgentId && !missingContractRef && !missingCapabilitySnapshot && !missingTags) return existing;
+      const enriched = AssignmentSchema.parse({
+        ...existing,
+        ...(missingAgentId ? { agent_id: expected.agent_id } : {}),
+        ...(missingContractRef ? { execution_contract_ref: expected.execution_contract_ref } : {}),
+        ...(missingCapabilitySnapshot ? { capability_snapshot: expected.capability_snapshot } : {}),
+        tags: [...new Set([...existing.tags, ...requiredTags])],
+        updated_at: nowISO(),
+      });
+      saveAssignmentUnlocked(enriched, cwd);
+      repaired = true;
+      return enriched;
+    }
+    saveAssignmentUnlocked(expected, cwd);
+    created = true;
+    return expected;
+  });
+  if (created) emitAssignmentCreatedSideEffects(assignment, options, cwd);
+  return { assignment, created, ...(repaired ? { repaired: true } : {}) };
 }
 
 // ── Active Assignment Lookup ─────────────────────────────────

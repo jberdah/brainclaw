@@ -408,26 +408,30 @@ describe('instruction-templates', () => {
       }
     });
 
-    it('marks Review & Fix Loop as implemented and other loops as planned', () => {
+    it('presents all five shipped Loop Engine protocols without review bias', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
-      assert.ok(result.content.includes('Review & Fix Loop'));
-      // pln#458: the section now describes the loop as the multi-turn
-      // delegation pattern and points at the right entry tool instead of
-      // flagging it with an italic "*implemented*" marker. Assert the
-      // operative content (entry tool + drive tool + anti-pattern) is
-      // present — that's the semantic contract for agents.
+      assert.ok(result.content.includes('Loop Engine'));
+      for (const kind of ['review', 'ideation', 'implementation', 'research', 'debug']) {
+        assert.match(result.content, new RegExp(`\\b${kind}\\b`, 'i'), `agent surface must name shipped ${kind} protocol`);
+      }
       assert.ok(
         result.content.includes('bclaw_coordinate(intent=review, open_loop=true'),
-        'Review & Fix Loop must name bclaw_coordinate(intent=review, open_loop=true) as the start entry',
+        'review must name bclaw_coordinate(intent=review, open_loop=true) as the start entry',
+      );
+      assert.ok(
+        result.content.includes('bclaw_coordinate(intent=ideate'),
+        'ideation must name bclaw_coordinate(intent=ideate) as the start entry',
       );
       assert.ok(
         /bclaw_loop\(intent=turn\|complete_turn\|advance\|close\)/.test(result.content),
-        'Review & Fix Loop must point at bclaw_loop for driving turns',
+        'the shared engine must point at bclaw_loop for driving turns',
       );
-      assert.ok(
-        /Ideation.*planned/i.test(result.content),
-        'Ideation loop must be marked planned',
+      assert.match(
+        result.content,
+        /bclaw_loop\(intent=open, kind=<kind>, allow_orphan=true\)/,
+        'direct implementation/research/debug open must carry the explicit allow_orphan acknowledgement',
       );
+      assert.doesNotMatch(result.content, /Ideation\s*\/\s*Debug\s*\/\s*Research loops\s*—\s*\*planned\*/i);
     });
 
     it('escalation path is goal-oriented (pln#458) — no bare bclaw_loop(intent=open) recommendation', () => {

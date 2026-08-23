@@ -53,7 +53,10 @@ function run(
   args: string[],
   cwd: string,
   envOverrides: Record<string, string> = {},
-  timeoutMs: number = 20000,
+  // `init` performs agent detection + surface generation and can cross 20s on
+  // Windows when Defender scans each freshly written file. Keep the timeout a
+  // failure boundary, not a scheduler-speed assertion.
+  timeoutMs: number = 60000,
 ): { stdout: string; stderr: string; exitCode: number; fakeHome: string } {
   // Use a separate fake home so ensureUserStore() doesn't create .brainclaw/ in cwd
   const fakeHome = createFakeHome();

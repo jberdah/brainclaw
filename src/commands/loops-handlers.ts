@@ -2,6 +2,7 @@ import { ZodError } from 'zod';
 import type { FacadeResponse } from '../core/facade-schema.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
+import { dispatchLoopTurn } from '../core/loop-turn-dispatch.js';
 import { findReservationByRunId } from '../core/loops/attempt-reservation.js';
 import { runVerify } from '../core/loops/verify-command.js';
 import { runImplBind } from '../core/loops/impl-bind.js';
@@ -25,6 +26,8 @@ import {
   requestInput,
   resume,
   sweepPauseTimeouts,
+  takeoverLoopAttempt,
+  readLocalAuthorityHome,
   turn,
   VersionConflictError,
   withLoopLock,
@@ -203,12 +206,11 @@ const SLOT_BOUND_INTENTS = new Set<BclawLoopIntent>(['complete_turn']);
  * took over" window — the verb will not proceed if the lock's mutation_id
  * changed between `acquireLock` and `work` dispatch. It does NOT cover mid-verb
  * fs operations: the verbs themselves (`openLoop`, `advance`, …) perform their
- * atomic-rename + JSONL append without consulting the fence. That gap is
- * intentional for the MVP because the verbs are synchronous and complete in
- * single-digit milliseconds, much shorter than any reasonable hard_deadline
- * (default 30_000 ms). If a future slice adds async dispatch inside a
- * mutation, thread `fenceCheck` down into the verb and call it before each
- * committing write.
+ * atomic-rename + JSONL append without consulting the fence. Safety therefore
+ * depends on lock.ts refusing deadline/lease-based takeover of a still-live
+ * local process (and failing closed for remote-host owners). If a future slice
+ * adds async work inside a mutation or enables time-based/remote takeover,
+ * `fenceCheck` must first be threaded to every committing write.
  */
 function withLockedLoopMutation(
   req: LoopMutationRequest,
@@ -221,7 +223,7 @@ function withLockedLoopMutation(
     intent: req.intent,
     agentId,
     scope: { kind: 'loop', loopId: req.loop_id },
-    expectedVersion: req.expected_version,
+    expectedVersion: 'expected_version' in req ? req.expected_version : undefined,
     clientRequestId: req.client_request_id,
     requestPayload: requestPayload(req),
     currentVersion: () => currentLoopVersion(req.loop_id, cwd),
@@ -426,6 +428,53 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
       }
 
       case 'turn': {
+        if (req.dispatch) {
+          if (!req.slot_id) {
+            return errorResponse('turn', 'validation_error', 'turn dispatch requires slot_id', Date.now() - startMs);
+          }
+          const dispatched = await dispatchLoopTurn({
+            loop_id: req.loop_id,
+            slot_id: req.slot_id,
+            task: req.input ?? `Execute ${req.loop_id} slot ${req.slot_id}`,
+            dispatcher_agent: actor,
+            dispatcher_agent_id: req.agentId,
+            session_id: options.sessionId,
+            model: req.model,
+            auto_execute: req.auto_execute,
+            candidate_agents: req.target_agents,
+            cwd: options.cwd ?? process.cwd(),
+          });
+          // Before AttemptAuthority exists an error is a true denial. Once the
+          // launch grant has crossed, however, transport may fall back to a
+          // manual command or become crossed_unknown. Preserve the created
+          // entities in a successful structured response instead of reporting
+          // an empty-side-effect error that invites a dangerous retry.
+          if (dispatched.error && !dispatched.turn_id) {
+            return errorResponse('turn', 'dispatch_denied', dispatched.error, Date.now() - startMs);
+          }
+          const loop = getLoop(req.loop_id, options.cwd);
+          return successResponse(
+            'turn',
+            { loop, dispatch: dispatched, next_expected: loop ? computeNextExpected(loop) : undefined },
+            [
+              loopArtifactEntry(req.loop_id),
+              ...(dispatched.assignment_id ? [{ type: 'assignment' as const, id: dispatched.assignment_id }] : []),
+              ...(dispatched.run_id ? [{ type: 'agent_run' as const, id: dispatched.run_id }] : []),
+              ...(dispatched.claim_id ? [{ type: 'claim' as const, id: dispatched.claim_id }] : []),
+            ],
+            [
+              sideEffectUpdate('loop', req.loop_id),
+              ...(dispatched.claim_id ? [{ action: 'create', entity: 'claim', id: dispatched.claim_id }] : []),
+              ...(dispatched.assignment_id ? [{ action: 'create', entity: 'assignment', id: dispatched.assignment_id }] : []),
+              ...(dispatched.run_id ? [{ action: 'create', entity: 'agent_run', id: dispatched.run_id }] : []),
+            ],
+            dispatched.error ? [dispatched.error] : [],
+            Date.now() - startMs,
+            dispatched.error
+              ? `⚠ ${dispatched.kind}.${dispatched.phase} turn ${dispatched.turn_id} crossed; ${dispatched.error}`
+              : `✔ dispatched ${dispatched.kind}.${dispatched.phase} turn ${dispatched.turn_id}`,
+          );
+        }
         return withLockedLoopMutation(req, agentId, options.cwd, () => {
           const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
           const loop = turn(
@@ -460,6 +509,13 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
             {
               id: req.loop_id,
               slot_id: req.slot_id,
+              assignment_id: req.assignment_id,
+              turn_id: req.turn_id,
+              run_id: req.run_id,
+              nonce: req.nonce,
+              attempt_epoch: req.attempt_epoch,
+              execution_contract_hash: req.execution_contract_hash,
+              workspace_digest: req.workspace_digest,
               outcome: req.outcome,
               failure_reason: req.failure_reason,
               artifact: req.artifact
@@ -490,6 +546,41 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
             summarizeLoop(loop),
           );
         });
+      }
+
+      case 'takeover': {
+        const authorityHome = readLocalAuthorityHome(options.cwd ?? process.cwd());
+        if (!authorityHome) {
+          return errorResponse('takeover', 'authority_home_unavailable', 'local store/device authority identity is not initialized', Date.now() - startMs);
+        }
+        const result = takeoverLoopAttempt({
+          loop_id: req.loop_id,
+          slot_id: req.slot_id,
+          turn_id: req.turn_id,
+          expected_epoch: req.expected_epoch,
+          authority_home: authorityHome,
+          actor,
+          actor_id: agentId,
+          writer_id: agentId,
+          cause: req.cause,
+          liveness_evidence: req.liveness_evidence,
+          external_effect_policy: req.external_effect_policy,
+          next_workspace_path: req.next_workspace_path,
+          mode: req.takeover_mode,
+          cwd: options.cwd ?? process.cwd(),
+        });
+        return successResponse(
+          'takeover',
+          {
+            ...result,
+            next_action: 'dispatch the same logical turn; the common path will project and contend on launch(next_epoch)',
+          },
+          [loopArtifactEntry(result.loop.id)],
+          [sideEffectUpdate('loop', result.loop.id)],
+          [],
+          Date.now() - startMs,
+          `✔ takeover ${result.turn_id} epoch=${result.attempt_epoch} run=${result.run_id} (armed, not spawned)`,
+        );
       }
 
       case 'advance': {
@@ -528,7 +619,6 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
                 phase: req.artifact.phase,
                 type: req.artifact.type,
                 body: req.artifact.body,
-                produced_by: req.artifact.produced_by,
                 ref: req.artifact.ref,
                 addresses_critique: req.artifact.addresses_critique,
               },
@@ -708,10 +798,9 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
         );
       }
       case 'bind': {
-        // pln#632 impl-loop bind — dispatch the loop's linked sequence + advance
-        // bind→execute. runImplBind awaits the async spawn (the advance takes its own
-        // lock via the verb), so it is NOT wrapped in withLockedLoopMutation — it mirrors
-        // coordinate(open_loop)'s async-handler-spawns pattern, not a synchronous verb.
+        // Implementation bind is engine-only: validate the linked sequence and
+        // advance bind -> execute. Worker launch belongs exclusively to
+        // turn(dispatch=true), the common AttemptAuthority path.
         const existing = getLoop(req.loop_id, options.cwd);
         if (!existing) {
           return errorResponse('bind', 'not_found', `unknown loop_id ${req.loop_id}`, Date.now() - startMs);
@@ -759,7 +848,7 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
           },
           [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
           sideEffects,
-          bind.dispatch?.warnings ?? [],
+          [...bind.warnings, ...(bind.dispatch?.warnings ?? [])],
           Date.now() - startMs,
           bind.reason,
         );
@@ -819,6 +908,9 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
       );
     }
     const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith('attempt_fence_')) {
+      return errorResponse(req.intent, 'attempt_fence_rejected', message, Date.now() - startMs);
+    }
     if (message.includes('unauthorized_slot_write')) {
       return errorResponse(req.intent, 'unauthorized_slot_write', message, Date.now() - startMs);
     }

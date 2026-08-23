@@ -426,6 +426,152 @@
   {
     "aliases": [],
     "arguments": [],
+    "options": [],
+    "path": "brainclaw attempt-authority"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent-id <agent_id>",
+        "long": "--agent-id",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--membership-epoch <n>",
+        "long": "--membership-epoch",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw attempt-authority ack"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "defaultValue": "operator",
+        "flags": "--activated-by <actor>",
+        "long": "--activated-by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--membership-epoch <n>",
+        "long": "--membership-epoch",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw attempt-authority activate"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--membership-epoch <n>",
+        "long": "--membership-epoch",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "operator",
+        "flags": "--prepared-by <actor>",
+        "long": "--prepared-by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--writers <agent_ids...>",
+        "long": "--writers",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      }
+    ],
+    "path": "brainclaw attempt-authority prepare"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw attempt-authority status"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
     "options": [
       {
         "flags": "--action <action>",
@@ -4023,6 +4169,36 @@
         "variadic": false
       },
       {
+        "flags": "--assignment-id <id>",
+        "long": "--assignment-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--attempt-epoch <n>",
+        "long": "--attempt-epoch",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--execution-contract-hash <sha256>",
+        "long": "--execution-contract-hash",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--failure-reason <text>",
         "long": "--failure-reason",
         "mandatory": false,
@@ -4043,8 +4219,152 @@
         "variadic": false
       },
       {
+        "flags": "--nonce <value>",
+        "long": "--nonce",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--outcome <outcome>",
         "long": "--outcome",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--run-id <id>",
+        "long": "--run-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--slot <slot_id>",
+        "long": "--slot",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--turn-id <id>",
+        "long": "--turn-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--workspace-digest <sha256>",
+        "long": "--workspace-digest",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw loop complete-turn"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "loop_id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--cause <text>",
+        "long": "--cause",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--expected-epoch <n>",
+        "long": "--expected-epoch",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--external-effect-policy <policy>",
+        "long": "--external-effect-policy",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--liveness-evidence <text>",
+        "long": "--liveness-evidence",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "takeover",
+        "flags": "--mode <mode>",
+        "long": "--mode",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--next-workspace-path <path>",
+        "long": "--next-workspace-path",
         "mandatory": true,
         "negate": false,
         "short": null,
@@ -4061,9 +4381,19 @@
         "valueOptional": false,
         "valueRequired": true,
         "variadic": false
+      },
+      {
+        "flags": "--turn-id <turn_id>",
+        "long": "--turn-id",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
       }
     ],
-    "path": "brainclaw loop complete-turn"
+    "path": "brainclaw loop takeover"
   },
   {
     "aliases": [],

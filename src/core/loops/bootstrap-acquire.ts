@@ -22,7 +22,7 @@ import { acquireClaimScope, listClaims, releaseClaim } from '../claims.js';
 import { buildSurveySignalsBaseline } from './hooks/survey-signals-baseline.js';
 import { BOOTSTRAP_PRESET } from './presets/bootstrap.js';
 import { listLoops, openLoop } from './store.js';
-import { add_artifact } from './verbs.js';
+import { addArtifactWithEvidence } from './verbs.js';
 import type { LoopThread } from './types.js';
 
 // ---- public types -----------------------------------------------------------
@@ -248,15 +248,19 @@ export function acquireBootstrapLoop(
     // failure must never block opening the loop.
     try {
       const baseline = buildSurveySignalsBaseline(cwd ?? process.cwd());
-      loop = add_artifact(
+      loop = addArtifactWithEvidence(
         {
           id: loop.id,
           actor: opts.created_by ?? opts.agent_id ?? opts.actor,
+          evidence_context: {
+            channel: 'system_hook',
+            producer_kind: 'engine',
+            producer_id: 'brainclaw-scanner',
+          },
           artifact: {
             phase: 'survey',
             type: 'signals_baseline',
             body: JSON.stringify(baseline),
-            produced_by: 'brainclaw-scanner',
           },
         },
         cwd,
