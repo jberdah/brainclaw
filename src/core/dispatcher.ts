@@ -54,6 +54,7 @@ import { sweepAssignments } from './assignment-sweeper.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 import { generateId, nowISO } from './ids.js';
 import { applyHandoffUpdates } from '../commands/update-handoff.js';
+import type { ExecutionContractRef } from './execution-contract.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -496,19 +497,30 @@ export function buildWorkingDefaultsSection(opts: { canCommit: boolean }): strin
  * because the contract had nowhere to put the reasoning). Caught in review by
  * Fable before this shipped.
  */
-export function laneResultShape(assignmentId?: string): string {
+export function laneResultShape(assignmentId?: string, contractRef?: ExecutionContractRef): string {
   const asgn = assignmentId ?? '<assignment_id>';
-  return `{"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<one line>","body":"<your full output — the reasoning, not just a label>","files_changed":["..."],"artifacts":["..."]}`;
+  const contract = contractRef
+    ? `,"execution_contract_hash":"${contractRef.hash}","capability_snapshot_hash":"${contractRef.snapshot_hash}"`
+    : '';
+  return `{"assignment_id":"${asgn}"${contract},"status":"completed|blocked|failed","summary":"<one line>","body":"<your full output — the reasoning, not just a label>","files_changed":["..."],"artifacts":["..."]}`;
 }
 
-export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: string }): string {
-  const laneResult = `write LANE-RESULT.json at the worktree ROOT: ${laneResultShape(opts.assignmentId)}`;
+export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: string; executionContractRef?: ExecutionContractRef }): string {
+  const laneResult = `write LANE-RESULT.json at the worktree ROOT: ${laneResultShape(opts.assignmentId, opts.executionContractRef)}`;
+  const acceptance = opts.executionContractRef
+    ? [
+      `Execution contract: ${opts.executionContractRef.hash}`,
+      `Capability snapshot: ${opts.executionContractRef.snapshot_hash}`,
+      'These values are also available as BRAINCLAW_EXECUTION_CONTRACT_HASH and BRAINCLAW_CAPABILITY_SNAPSHOT_HASH. Echo both unchanged in LANE-RESULT.json. If either differs from what your runtime accepted, report blocked immediately; Brainclaw withholds convergence and never respawns this crossed generation.',
+    ]
+    : [];
 
   if (!opts.hasMcp) {
     return [
       '## ⚠ Transport: no MCP (file protocol only)',
       'Your runtime has no brainclaw MCP access — any `bclaw_*` instruction above does NOT apply to you. Report your outcome via the FILE protocol only; it is authoritative for this run:',
       `- When done, ${laneResult}.`,
+      ...acceptance,
       // RESTORED after review. Removing this orphaned a real, shipped consumer:
       // `collectWorktreeCandidateFiles` (harvest.ts:191-205) scans exactly this
       // directory inside WORKER worktrees, and `bclaw_harvest_candidates` exposes
@@ -526,6 +538,7 @@ export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: st
     'Your profile declares brainclaw MCP access, but that is a DECLARATION, not a verified fact — the config may be absent on this machine or the server may not have started. Decide from what you actually observe:',
     '- If `bclaw_*` tools respond: use them, as instructed above.',
     `- If they are unavailable or error: do not stop and do not discard your work — ${laneResult}. The coordinator harvests it.`,
+    ...acceptance,
     '',
   ].join('\n');
 }
@@ -869,6 +882,8 @@ export interface DispatchBriefOptions {
    * otherwise carry no context at all.
    */
   contextEnvelope?: boolean;
+  /** Immutable worker contract reference to deliver and require in evidence. */
+  executionContractRef?: ExecutionContractRef;
 }
 
 /** Character budget for the inlined context envelope — bounded by design
@@ -988,6 +1003,7 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
     parts.push(buildTransportSection({
       hasMcp: taskBriefProfile ? dispatchHasMcp(taskBriefProfile) : true,
       assignmentId: options.assignmentId,
+      executionContractRef: options.executionContractRef,
     }));
   }
 

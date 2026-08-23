@@ -6,7 +6,19 @@ import { z } from 'zod';
 
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
+import {
+  CapabilitySnapshotSchema,
+  assertExecutionContractIntegrity,
+  ExecutionContractRefSchema,
+  ExecutionContractSchema,
+  type CapabilitySnapshot,
+  type ExecutionContract,
+  type ExecutionContractRef,
+} from '../execution-contract.js';
+import { ExpectedArtifactSchema, type ExpectedArtifact } from './artifact-contract.js';
 import { acquireLock } from './lock.js';
+
+export { ExpectedArtifactSchema, type ExpectedArtifact } from './artifact-contract.js';
 
 /**
  * Turn-attempt reservation authority (pln#630, spec v2 §1/§3).
@@ -37,16 +49,6 @@ export type ReservationDecision = 'prepared' | 'committed' | 'aborted';
  * MUST be realpath-containment-validated before any read (invariant #7, wired in
  * a later PR). `sha256` is filled at harvest and validated before state mutation.
  */
-export const ExpectedArtifactSchema = z.object({
-  logical_name: z.string().min(1),
-  worker_path: z.string().min(1),
-  loop_artifact_type: z.string().min(1),
-  schema_id: z.string().optional(),
-  completion_policy: z.enum(['required', 'optional']).default('required'),
-  sha256: z.string().optional(),
-});
-export type ExpectedArtifact = z.infer<typeof ExpectedArtifactSchema>;
-
 export const TurnReservationSchema = z.object({
   turn_id: z.string().min(1),
   epoch: z.number().int().nonnegative(),
@@ -70,6 +72,10 @@ export const TurnReservationSchema = z.object({
   // pln#630 PR2b-a (§13 R1): artifacts this attempt's worker must produce.
   // Default [] so PR1 on-disk records (which predate the field) still parse.
   expected_artifacts: z.array(ExpectedArtifactSchema).default([]),
+  /** P1: complete immutable launch contract. Optional for pre-P1 reservations. */
+  execution_contract: ExecutionContractSchema.optional(),
+  execution_contract_ref: ExecutionContractRefSchema.optional(),
+  capability_snapshot: CapabilitySnapshotSchema.optional(),
   store_root: z.string().min(1),
   cwd: z.string().min(1),
   lease_deadline: z.string().min(1),
@@ -117,6 +123,10 @@ export interface ReserveInput {
   expected_artifacts?: ExpectedArtifact[];
   /** pln#630 PR2b-a — effective completion policy for this attempt (default 'file'). */
   completion_mode?: 'file' | 'mcp' | 'either';
+  /** P1 immutable contract fields. Omitted only by legacy/direct callers. */
+  execution_contract?: ExecutionContract;
+  execution_contract_ref?: ExecutionContractRef;
+  capability_snapshot?: CapabilitySnapshot;
 }
 
 /** Raised when a decision CAS is attempted from an incompatible terminal state. */
@@ -127,6 +137,7 @@ export class ReservationStateError extends Error {
       | 'reservation_not_found'
       | 'reservation_exists'
       | 'invalid_lease_deadline'
+      | 'invalid_execution_contract'
       | 'committed_not_abortable'
       | 'aborted_not_committable'
       | 'not_dispatchable',
@@ -318,6 +329,34 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
   if (!Number.isFinite(Date.parse(input.lease_deadline))) {
     throw new ReservationStateError(input.turn_id, 'invalid_lease_deadline', `reserve: lease_deadline "${input.lease_deadline}" is not a parseable timestamp`);
   }
+  const contractFieldCount = [
+    input.execution_contract,
+    input.execution_contract_ref,
+    input.capability_snapshot,
+  ].filter((value) => value !== undefined).length;
+  if (contractFieldCount !== 0 && contractFieldCount !== 3) {
+    throw new ReservationStateError(
+      input.turn_id,
+      'invalid_execution_contract',
+      'reserve: execution_contract, execution_contract_ref and capability_snapshot must be supplied together',
+    );
+  }
+  if (input.execution_contract && input.execution_contract_ref && input.capability_snapshot) {
+    try {
+      assertExecutionContractIntegrity(
+        input.execution_contract,
+        input.execution_contract_ref,
+        input.capability_snapshot,
+        { agent: input.agent, agent_id: input.agent_id },
+      );
+    } catch (error) {
+      throw new ReservationStateError(
+        input.turn_id,
+        'invalid_execution_contract',
+        `reserve: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   return withReservationLock(
     input.turn_id,
     agentId,
@@ -345,6 +384,9 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
         iteration: input.iteration,
         completion_mode: input.completion_mode ?? 'file',
         expected_artifacts: input.expected_artifacts ?? [],
+        execution_contract: input.execution_contract,
+        execution_contract_ref: input.execution_contract_ref,
+        capability_snapshot: input.capability_snapshot,
         store_root: input.store_root,
         cwd: input.cwd,
         lease_deadline: input.lease_deadline,

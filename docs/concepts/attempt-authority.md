@@ -111,6 +111,13 @@ rewritten (`turn_id`, `loop_id`, `slot_id`, `phase`, `iteration`,
 `loop_version_at_reserve`). Callers set them once; the authority never
 mutates them.
 
+New attempts also freeze `execution_contract`, `execution_contract_ref` and
+`capability_snapshot` at reservation time. The full contract is authoritative
+on TurnReservation; Assignment and AgentRun receive only its reference and the
+resolved snapshot as pre-crossing projections. These fields reuse the existing
+reservation and entity stores — they do not create another journal. See
+[Execution contract and capability snapshot](./execution-contract.md).
+
 Downstream artifacts — the assignment record, the agent_run row, the loop
 slot's `current_turn_id` pointer — are **projections** of the authority
 record. Since P0B (`pln#677`), they are created or validated idempotently
@@ -422,6 +429,7 @@ here descriptively; the characterization suite locks them empirically.
 ## Related
 
 - Loop Engine — [`loop-engine.md`](./loop-engine.md)
+- Execution contract — [`execution-contract.md`](./execution-contract.md)
 - Loop protocols — [`../loops/`](../loops/)
 - Dispatch lifecycle — [`dispatch-lifecycle.md`](./dispatch-lifecycle.md)
 - Reference implementation —

@@ -81,6 +81,42 @@ export function signalExists(root: string, assignmentId: string, signal: Runtime
   }
 }
 
+export interface ContractAckBody {
+  status: 'accepted' | 'rejected';
+  turn_id: string;
+  run_id: string;
+  nonce: string;
+  contract_hash: string;
+  capability_snapshot_hash: string;
+}
+
+/** Read the bootstrap's effective-environment attestation. Empty legacy acks return undefined. */
+export function readContractAck(root: string, assignmentId: string): ContractAckBody | undefined {
+  try {
+    const raw = fs.readFileSync(getRuntimeSignalPath(root, assignmentId, 'ack'), 'utf8').trim();
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as Partial<ContractAckBody>;
+    if (
+      (parsed.status === 'accepted' || parsed.status === 'rejected')
+      && typeof parsed.turn_id === 'string'
+      && typeof parsed.run_id === 'string'
+      && typeof parsed.nonce === 'string'
+      && typeof parsed.contract_hash === 'string'
+      && typeof parsed.capability_snapshot_hash === 'string'
+    ) {
+      return {
+        status: parsed.status,
+        turn_id: parsed.turn_id,
+        run_id: parsed.run_id,
+        nonce: parsed.nonce,
+        contract_hash: parsed.contract_hash,
+        capability_snapshot_hash: parsed.capability_snapshot_hash,
+      };
+    }
+  } catch { /* absent, legacy or malformed */ }
+  return undefined;
+}
+
 export interface HeartbeatInfo {
   exists: boolean;
   /** mtime of the heartbeat file in ms since epoch, when present. */
@@ -138,6 +174,8 @@ export interface CompletionSignalBody {
   turn_id: string;
   run_id: string;
   nonce: string;
+  contract_hash?: string;
+  capability_snapshot_hash?: string;
   status: 'completed' | 'failed';
   /** ISO timestamp; '' when a legacy body omitted it. */
   at: string;
@@ -177,6 +215,10 @@ function readOneCompletionSignal(root: string, assignmentId: string, status: 'co
         turn_id: parsed.turn_id,
         run_id: parsed.run_id,
         nonce: parsed.nonce,
+        ...(typeof parsed.contract_hash === 'string' ? { contract_hash: parsed.contract_hash } : {}),
+        ...(typeof parsed.capability_snapshot_hash === 'string'
+          ? { capability_snapshot_hash: parsed.capability_snapshot_hash }
+          : {}),
         status: parsed.status,
         at: typeof parsed.at === 'string' ? parsed.at : '',
       };

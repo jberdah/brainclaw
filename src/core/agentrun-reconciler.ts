@@ -34,12 +34,13 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { loadAgentRun, transitionAgentRun, type ListAgentRunsFilter, listAgentRuns } from './agentruns.js';
+import { loadAgentRun, recordExecutionContractAnomaly, transitionAgentRun, type ListAgentRunsFilter, listAgentRuns } from './agentruns.js';
 import { loadClaim, releaseClaim } from './claims.js';
 import { loadAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
-import { readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
+import { readContractAck, readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
+import { validateWorkerContractAcceptance } from './execution-contract.js';
 import { findReservationByRunId, evidenceMatchesAttempt, launchGrant, revokeLaunchGrant } from './loops/attempt-reservation.js';
 import type { TurnReservation } from './loops/attempt-reservation.js';
 import { reconcileFailedTurn } from './loops/reconcile-turn.js';
@@ -115,6 +116,8 @@ export interface ReconcileEvidence {
    * -only phantom-completion holes).
    */
   turn_keyed_completed: boolean;
+  /** Contracted run reported different/missing accepted hashes after crossing. */
+  contract_acceptance_anomaly: boolean;
   /** Worker wrote a `heartbeat` (work_loop_reached) at least once. */
   heartbeat_exists: boolean;
   /** Age of the heartbeat in ms (undefined when no heartbeat). */
@@ -292,20 +295,57 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
   // (no owning reservation) keep presence-based acceptance.
   let turn_owned = false;
   let turn_keyed_completed = false;
+  let contract_acceptance_anomaly = Boolean(run.execution_contract_anomaly);
   try {
     const reservation = findReservationByRunId(run.id, cwd);
     if (reservation) {
       turn_owned = true;
       const bodies = readCompletionSignals(signalRoot, run.assignment_id);
+      const bootstrapAck = readContractAck(signalRoot, run.assignment_id);
+      const hasTerminalBody = bodies.completed !== undefined || bodies.failed !== undefined;
+      const bootstrapAccepted = !reservation.execution_contract_ref || (
+        bootstrapAck?.status === 'accepted'
+        && bootstrapAck.turn_id === reservation.turn_id
+        && bootstrapAck.run_id === reservation.child_ids.run_id
+        && bootstrapAck.nonce === reservation.launch?.token
+        && validateWorkerContractAcceptance(
+          reservation.execution_contract_ref,
+          {
+            contract_hash: bootstrapAck.contract_hash,
+            capability_snapshot_hash: bootstrapAck.capability_snapshot_hash,
+          },
+          reservation.launch?.status,
+        ).kind === 'accepted'
+      );
+      if (reservation.execution_contract_ref && ((bootstrapAck && !bootstrapAccepted) || (hasTerminalBody && !bootstrapAccepted))) {
+        contract_acceptance_anomaly = true;
+      }
+      const contractAccepted = (body: typeof bodies.completed): boolean => {
+        if (!reservation.execution_contract_ref) return true;
+        if (!bootstrapAccepted) return false;
+        if (!body?.contract_hash || !body.capability_snapshot_hash) {
+          contract_acceptance_anomaly = Boolean(body);
+          return false;
+        }
+        const verdict = validateWorkerContractAcceptance(
+          reservation.execution_contract_ref,
+          { contract_hash: body.contract_hash, capability_snapshot_hash: body.capability_snapshot_hash },
+          reservation.launch?.status,
+        );
+        if (verdict.kind !== 'accepted') contract_acceptance_anomaly = true;
+        return verdict.kind === 'accepted';
+      };
       // Evidence must be turn-keyed AND carry the RIGHT status (a `.completed`
       // file whose body says status:'failed' is not completion evidence —
       // read-strict trusts the body, not the filename, review PR2b-c #C2).
       const matchedCompleted = bodies.completed !== undefined
         && bodies.completed.status === 'completed'
-        && evidenceMatchesAttempt(reservation, bodies.completed);
+        && evidenceMatchesAttempt(reservation, bodies.completed)
+        && contractAccepted(bodies.completed);
       const matchedFailed = bodies.failed !== undefined
         && bodies.failed.status === 'failed'
-        && evidenceMatchesAttempt(reservation, bodies.failed);
+        && evidenceMatchesAttempt(reservation, bodies.failed)
+        && contractAccepted(bodies.failed);
       if (matchedCompleted && matchedFailed) {
         // §13 R4 — a completed+failed contradiction WITHHOLDS both (never a
         // silent accept). Conflict-event journaling is deferred to
@@ -327,7 +367,7 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
   return {
     age_ms, has_post_start_commit, claim_released, assignment_completed, process_alive,
     completed_signal, failed_signal, heartbeat_exists, heartbeat_age_ms, fs_activity_age_ms,
-    turn_owned, turn_keyed_completed,
+    turn_owned, turn_keyed_completed, contract_acceptance_anomaly,
   };
 }
 
@@ -472,6 +512,7 @@ function logTailSuffix(run: AgentRun, cwd?: string): string {
 function describeEvidence(evidence: ReconcileEvidence): string {
   const reasons: string[] = [];
   if (evidence.completed_signal) reasons.push('wrapper wrote completed sentinel');
+  if (evidence.contract_acceptance_anomaly) reasons.push('post-crossing contract acceptance anomaly (respawn forbidden)');
   if (evidence.has_post_start_commit) reasons.push('post-start commit on worktree branch');
   if (evidence.claim_released) reasons.push('claim released');
   if (evidence.assignment_completed) reasons.push('assignment marked completed');
@@ -561,7 +602,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     const evidence: ReconcileEvidence = {
       age_ms: 0, has_post_start_commit: false, claim_released: false,
       assignment_completed: false, process_alive: undefined,
-      completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false,
+      completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false, contract_acceptance_anomaly: false,
     };
     return {
       run_id: runId, action: 'no_op', reason: 'run not found', evidence,
@@ -577,6 +618,23 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     return {
       run_id: runId, action: 'no_op', reason: `run already terminal (${run.status})`,
       evidence, previous_status, current_status: run.status,
+    };
+  }
+
+  if (evidence.contract_acceptance_anomaly) {
+    try {
+      recordExecutionContractAnomaly(runId, {
+        source: 'reconciler',
+        reason: 'bootstrap or terminal evidence did not accept the immutable execution contract',
+      }, cwd);
+    } catch { /* ack/sentinel remains a durable fallback fence */ }
+    return {
+      run_id: runId,
+      action: 'health_check_unverified',
+      reason: 'post_crossing_contract_anomaly: accepted contract ref differs or is missing; convergence withheld and respawn=false',
+      evidence,
+      previous_status,
+      current_status: run.status,
     };
   }
 
@@ -758,6 +816,23 @@ function reconcileTurnOwnedPreRunLease(
     grant = launchGrant(reservation.turn_id, cwd);
     crossed = grant?.status === 'crossed';
   }
+
+  if (evidence.contract_acceptance_anomaly) {
+    try {
+      recordExecutionContractAnomaly(run.id, {
+        source: 'reconciler',
+        reason: 'bootstrap or terminal evidence did not accept the immutable execution contract',
+      }, cwd);
+    } catch { /* ack/sentinel remains a durable fallback fence */ }
+    return {
+      run_id: run.id,
+      action: 'health_check_unverified',
+      reason: 'post_crossing_contract_anomaly: accepted contract ref differs or is missing; convergence withheld and respawn=false',
+      evidence,
+      previous_status,
+      current_status: run.status,
+    };
+  }
   const targetStatus: AgentRunStatus = crossed ? 'failed' : 'cancelled';
   const action: ReconcileAction = crossed ? 'inferred_failed' : 'inferred_cancelled';
   const reason = crossed
@@ -816,7 +891,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
     const evidence: ReconcileEvidence = {
       age_ms: 0, has_post_start_commit: false, claim_released: false,
       assignment_completed: false, process_alive: undefined,
-      completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false,
+      completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false, contract_acceptance_anomaly: false,
     };
     return {
       run_id: runId, action: 'no_op', reason: 'run not found', evidence,
@@ -1003,7 +1078,7 @@ export function reconcileAllOpenRuns(
       } catch {
         results.push({
           run_id: run.id, action: 'no_op', reason: 'reconcile threw — skipped',
-          evidence: { age_ms: 0, has_post_start_commit: false, claim_released: false, assignment_completed: false, process_alive: undefined, completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false },
+          evidence: { age_ms: 0, has_post_start_commit: false, claim_released: false, assignment_completed: false, process_alive: undefined, completed_signal: false, failed_signal: false, heartbeat_exists: false, turn_owned: false, turn_keyed_completed: false, contract_acceptance_anomaly: false },
           previous_status: run.status, current_status: run.status,
         });
       }

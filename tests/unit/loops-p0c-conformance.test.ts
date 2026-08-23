@@ -5,6 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
+import { ensureAssignmentProjection, loadAssignment } from '../../src/core/assignments.js';
+import { ensureAgentRunProjection, loadAgentRun } from '../../src/core/agentruns.js';
+import { reconcileAgentRun } from '../../src/core/agentrun-reconciler.js';
+import { executionContractHash } from '../../src/core/execution-contract.js';
 import { nowISO } from '../../src/core/ids.js';
 import { deriveTurnId, getReservation, listReservations } from '../../src/core/loops/attempt-reservation.js';
 import { matchEvidence, prepareAttempt } from '../../src/core/loops/attempt-authority.js';
@@ -12,10 +16,12 @@ import { LOOP_KIND_POLICIES, assertLoopKindPoliciesComplete, phasePolicy } from 
 import { reducerForKind } from '../../src/core/loops/result-reducers.js';
 import { getLoop, openLoop } from '../../src/core/loops/store.js';
 import { prepareTurnExecution } from '../../src/core/loops/turn-execution.js';
+import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
 import { DEFAULT_PROTOCOLS, LOOP_KINDS, type LoopKind } from '../../src/core/loops/types.js';
 import type { LaneResult } from '../../src/core/schema.js';
 import { getLaneResultPath, harvestLaneResults } from '../../src/commands/harvest.js';
 import { prepareTurnOwnedReviewDispatch, turnOwnedLoopEnabled, turnOwnedLoopMode } from '../../src/core/review-loop-turn-dispatch.js';
+import { getRuntimeSignalPath, writeCompletionSignal } from '../../src/core/runtime-signals.js';
 
 function workspace(): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-p0c-'));
@@ -87,6 +93,19 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
       assert.equal(first.reservation.child_ids.run_id, first.result.run_id);
       assert.equal(first.reservation.phase, first.phase);
       assert.deepEqual(first.reservation.expected_artifacts, phasePolicy(kind, first.phase)?.expected_artifacts);
+      assert.ok(first.reservation.execution_contract, 'reservation owns the complete contract');
+      assert.ok(first.reservation.execution_contract_ref, 'reservation owns the contract hash/reference');
+      assert.ok(first.reservation.capability_snapshot?.accepted, 'capability is resolved before crossing');
+      assert.equal(
+        first.reservation.execution_contract_ref.hash,
+        executionContractHash(first.reservation.execution_contract),
+      );
+      const assignment = loadAssignment(first.result.assignment_id, cwd)!;
+      const run = loadAgentRun(first.result.run_id, cwd)!;
+      assert.deepEqual(assignment.execution_contract_ref, first.reservation.execution_contract_ref);
+      assert.deepEqual(run.execution_contract_ref, first.reservation.execution_contract_ref);
+      assert.deepEqual(assignment.capability_snapshot, first.reservation.capability_snapshot);
+      assert.deepEqual(run.capability_snapshot, first.reservation.capability_snapshot);
       assert.equal(matchEvidence(first.reservation, {
         turn_id: first.result.turn_id,
         run_id: first.result.run_id,
@@ -138,6 +157,168 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
     assert.equal(listReservations({}, cwd).length, 0);
   });
 
+  it('rejects unavailable capabilities and a stale worker hash before reserving authority', () => {
+    const loop = openLoop({
+      kind: 'research', title: 'contract preflight', created_by: 'coord',
+      phases: [{ name: 'investigate' }], stop_condition: { kind: 'max_iterations', n: 2 },
+      slots: [{ slot_id: 'lsl_preflight', role: 'worker', agent: 'codex' }],
+    }, cwd);
+    saveClaim({ schema_version: 2, id: 'clm_preflight', agent: 'codex', scope: 'preflight', description: 'preflight', created_at: nowISO(), status: 'active' }, cwd);
+    const unavailable = prepareTurnExecution({
+      kind: 'research', loop_id: loop.id, slot_id: 'lsl_preflight', phase: 'investigate', agent: 'codex',
+      claim_id: 'clm_preflight', dispatcher_agent: 'coord', scope: 'preflight', description: 'preflight', task: 'preflight', cwd,
+      capability_requirement: { roles: ['execute'], required_surfaces: [], execution_surfaces: [], required_tools: ['unattested_tool'] },
+    });
+    assert.equal(unavailable.kind, 'denied');
+    assert.equal(listReservations({}, cwd).length, 0);
+
+    const staleHash = prepareTurnExecution({
+      kind: 'research', loop_id: loop.id, slot_id: 'lsl_preflight', phase: 'investigate', agent: 'codex',
+      claim_id: 'clm_preflight', dispatcher_agent: 'coord', scope: 'preflight', description: 'preflight', task: 'preflight', cwd,
+      accepted_execution_contract: {
+        contract_hash: '0'.repeat(64),
+        capability_snapshot_hash: '0'.repeat(64),
+      },
+    });
+    assert.equal(staleHash.kind, 'denied');
+    assert.equal(listReservations({}, cwd).length, 0);
+  });
+
+  it('adopts a pre-P1 reservation without inventing an unpersisted contract reference', () => {
+    const loop = openLoop({
+      kind: 'research', title: 'legacy adoption', created_by: 'coord',
+      phases: [{ name: 'investigate' }], stop_condition: { kind: 'max_iterations', n: 2 },
+      slots: [{ slot_id: 'lsl_legacy', role: 'worker', agent: 'codex' }],
+    }, cwd);
+    const claimId = 'clm_legacy';
+    saveClaim({ schema_version: 2, id: claimId, agent: 'codex', scope: 'legacy', description: 'legacy', created_at: nowISO(), status: 'active' }, cwd);
+    const turnId = deriveTurnId(loop.id, 'lsl_legacy', 0);
+    const policy = phasePolicy('research', 'investigate')!;
+    prepareAttempt({
+      turn_id: turnId,
+      loop_id: loop.id,
+      slot_id: 'lsl_legacy',
+      target_slot_generation: 0,
+      loop_version_at_reserve: loop.version,
+      agent: 'codex',
+      claim_id: claimId,
+      phase: 'investigate',
+      iteration: 0,
+      completion_mode: policy.completion_mode,
+      expected_artifacts: policy.expected_artifacts,
+      store_root: cwd,
+      cwd,
+      lease_deadline: new Date(Date.now() + 60_000).toISOString(),
+      grant_lease_deadline: new Date(Date.now() + 30_000).toISOString(),
+    }, cwd);
+
+    const adopted = prepareTurnExecution({
+      kind: 'research', loop_id: loop.id, slot_id: 'lsl_legacy', phase: 'investigate', agent: 'codex',
+      claim_id: claimId, dispatcher_agent: 'coord', scope: 'legacy', description: 'legacy', task: 'legacy', cwd,
+    });
+    assert.equal(adopted.kind, 'won');
+    if (adopted.kind !== 'won') throw new Error('legacy reservation was not adopted');
+    assert.equal(adopted.contract_status, 'legacy_uncontracted');
+    assert.equal(adopted.execution_contract_ref, undefined);
+    assert.equal(getReservation(turnId, cwd)?.execution_contract_ref, undefined);
+    assert.equal(loadAssignment(adopted.assignment_id, cwd)?.execution_contract_ref, undefined);
+    assert.equal(loadAgentRun(adopted.run_id, cwd)?.execution_contract_ref, undefined);
+  });
+
+  it('preserves P1 projection fields when a rollback caller replays the legacy shape', () => {
+    const prepared = setupAttempt(cwd, 'research');
+    const assignment = loadAssignment(prepared.result.assignment_id, cwd)!;
+    const run = loadAgentRun(prepared.result.run_id, cwd)!;
+
+    assert.doesNotThrow(() => ensureAssignmentProjection({
+      id: assignment.id,
+      short_label: assignment.short_label,
+      claim_id: assignment.claim_id,
+      agent: assignment.agent,
+      agent_id: assignment.agent_id,
+      dispatcher_agent: assignment.dispatcher_agent,
+      dispatcher_session_id: assignment.dispatcher_session_id,
+      scope: assignment.scope,
+      description: assignment.description,
+      worktree_path: assignment.worktree_path,
+      tags: assignment.tags,
+    }, cwd));
+    assert.doesNotThrow(() => ensureAgentRunProjection({
+      id: run.id,
+      short_label: run.short_label,
+      assignment_id: run.assignment_id,
+      claim_id: run.claim_id,
+      attempt_index: run.attempt_index,
+      agent: run.agent,
+      agent_id: run.agent_id,
+      transport: run.transport,
+      status: run.status,
+      scope: run.scope,
+      description: run.description,
+      worktree_path: run.worktree_path,
+      tags: run.tags,
+    }, cwd));
+    assert.deepEqual(loadAssignment(assignment.id, cwd)?.execution_contract_ref, assignment.execution_contract_ref);
+    assert.deepEqual(loadAgentRun(run.id, cwd)?.capability_snapshot, run.capability_snapshot);
+  });
+
+  it('withholds both loop and run convergence on post-crossing contract evidence mismatch', () => {
+    const prepared = setupAttempt(cwd, 'review');
+    const ackPath = getRuntimeSignalPath(cwd, prepared.result.assignment_id, 'ack');
+    fs.mkdirSync(path.dirname(ackPath), { recursive: true });
+    fs.writeFileSync(ackPath, JSON.stringify({
+      status: 'accepted',
+      turn_id: prepared.result.turn_id,
+      run_id: prepared.result.run_id,
+      nonce: prepared.result.nonce,
+      contract_hash: prepared.result.execution_contract_ref!.hash,
+      capability_snapshot_hash: prepared.result.execution_contract_ref!.snapshot_hash,
+    }));
+    const wrongLane: LaneResult = {
+      assignment_id: prepared.result.assignment_id,
+      turn_id: prepared.result.turn_id,
+      run_id: prepared.result.run_id,
+      nonce: prepared.result.nonce,
+      status: 'completed',
+      summary: 'wrong contract',
+      review_verdict: 'approve',
+      execution_contract_hash: '0'.repeat(64),
+      capability_snapshot_hash: prepared.result.execution_contract_ref!.snapshot_hash,
+    };
+    const reconciled = reconcileTurn({ turn_id: prepared.result.turn_id, lane: wrongLane, cwd });
+    assert.equal(reconciled.reconciled, false);
+    assert.equal(reconciled.contract_anomaly, true);
+    assert.equal(reconciled.respawn, false);
+    assert.equal(getLoop(prepared.loop.id, cwd)?.status, 'open');
+    assert.equal(loadAgentRun(prepared.result.run_id, cwd)?.execution_contract_anomaly?.source, 'lane_result');
+
+    const laterCorrectEvidence = reconcileTurn({
+      turn_id: prepared.result.turn_id,
+      lane: {
+        ...wrongLane,
+        execution_contract_hash: prepared.result.execution_contract_ref!.hash,
+      },
+      cwd,
+    });
+    assert.equal(laterCorrectEvidence.reconciled, false, 'a later matching lane cannot erase the monotone anomaly fence');
+    assert.equal(laterCorrectEvidence.contract_anomaly, true);
+    assert.equal(laterCorrectEvidence.respawn, false);
+
+    writeCompletionSignal(cwd, prepared.result.assignment_id, {
+      turn_id: prepared.result.turn_id,
+      run_id: prepared.result.run_id,
+      nonce: prepared.result.nonce,
+      status: 'completed',
+      at: nowISO(),
+      contract_hash: '0'.repeat(64),
+      capability_snapshot_hash: prepared.result.execution_contract_ref!.snapshot_hash,
+    });
+    const runResult = reconcileAgentRun(prepared.result.run_id, cwd);
+    assert.equal(runResult.action, 'health_check_unverified');
+    assert.equal(runResult.evidence.contract_acceptance_anomaly, true);
+    assert.equal(loadAgentRun(prepared.result.run_id, cwd)?.status, 'created');
+  });
+
   it('production review dispatch persists the common review phase policy', () => {
     const loop = openLoop({
       kind: 'review', title: 'review production path', created_by: 'coord',
@@ -154,6 +335,9 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
     const reservation = listReservations({}, cwd)[0];
     assert.equal(reservation.completion_mode, 'either');
     assert.deepEqual(reservation.expected_artifacts, phasePolicy('review', 'findings')?.expected_artifacts);
+    assert.ok(reservation.execution_contract, 'production review uses the common ExecutionContract path');
+    assert.equal(loadAssignment(prepared.kind === 'won' ? prepared.assignmentId : '', cwd)?.execution_contract_ref?.hash, reservation.execution_contract_ref?.hash);
+    assert.equal(loadAgentRun(prepared.kind === 'won' ? prepared.runId : '', cwd)?.execution_contract_ref?.hash, reservation.execution_contract_ref?.hash);
   });
 
   it('classifies pre-identity, repairable, crossed, and foreign-authority denials', () => {
@@ -209,6 +393,16 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
     const prepared = setupAttempt(cwd, 'ideation');
     const worktree = path.join(cwd, 'critic-worktree');
     fs.mkdirSync(worktree, { recursive: true });
+    const ackPath = getRuntimeSignalPath(cwd, prepared.result.assignment_id, 'ack');
+    fs.mkdirSync(path.dirname(ackPath), { recursive: true });
+    fs.writeFileSync(ackPath, JSON.stringify({
+      status: 'accepted',
+      turn_id: prepared.result.turn_id,
+      run_id: prepared.result.run_id,
+      nonce: prepared.result.nonce,
+      contract_hash: prepared.result.execution_contract_ref!.hash,
+      capability_snapshot_hash: prepared.result.execution_contract_ref!.snapshot_hash,
+    }));
     fs.writeFileSync(getLaneResultPath(worktree), JSON.stringify({
       assignment_id: prepared.result.assignment_id,
       turn_id: prepared.result.turn_id,
@@ -218,6 +412,8 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
       summary: 'challenged the proposal',
       body: 'The proposal conflicts with the retained portability constraint.',
       artifact_type: 'critique',
+      execution_contract_hash: prepared.result.execution_contract_ref?.hash,
+      capability_snapshot_hash: prepared.result.execution_contract_ref?.snapshot_hash,
     }));
 
     const harvested = harvestLaneResults({

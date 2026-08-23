@@ -15,7 +15,7 @@ import {
   evidenceMatchesAttempt, deriveTurnId,
 } from '../../src/core/loops/attempt-reservation.js';
 import { loadAgentRun, createAgentRun } from '../../src/core/agentruns.js';
-import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
+import { ensureRuntimeDirs, getRuntimeSignalPath, writeCompletionSignal } from '../../src/core/runtime-signals.js';
 import { integrateLaneResults, getLaneResultPath } from '../../src/commands/harvest.js';
 import { saveClaim, loadClaim } from '../../src/core/claims.js';
 import { saveAssignment } from '../../src/core/assignments.js';
@@ -72,9 +72,48 @@ function prep(cwd: string, loopId: string, slotId = 'lsl_r') {
 }
 
 /** The FAKE worker: writes the turn-keyed completion sentinel + returns the LANE-RESULT. */
-function fakeWorkerCompletes(cwd: string, w: { turnId: string; runId: string; assignmentId: string; nonce: string }, verdict: 'approve' | 'request_changes'): LaneResult {
-  writeCompletionSignal(cwd, w.assignmentId, { turn_id: w.turnId, run_id: w.runId, nonce: w.nonce, status: 'completed', at: new Date().toISOString() });
-  return { assignment_id: w.assignmentId, turn_id: w.turnId, run_id: w.runId, nonce: w.nonce, status: 'completed', summary: 'fake review', review_verdict: verdict, review_summary: 'looks good' };
+function fakeWorkerCompletes(cwd: string, w: {
+  turnId: string;
+  runId: string;
+  assignmentId: string;
+  nonce: string;
+  executionContractRef?: { hash: string; snapshot_hash: string };
+}, verdict: 'approve' | 'request_changes'): LaneResult {
+  const contractSignal = w.executionContractRef
+    ? { contract_hash: w.executionContractRef.hash, capability_snapshot_hash: w.executionContractRef.snapshot_hash }
+    : {};
+  const contractLane = w.executionContractRef
+    ? { execution_contract_hash: w.executionContractRef.hash, capability_snapshot_hash: w.executionContractRef.snapshot_hash }
+    : {};
+  if (w.executionContractRef) {
+    fs.writeFileSync(getRuntimeSignalPath(cwd, w.assignmentId, 'ack'), JSON.stringify({
+      status: 'accepted',
+      turn_id: w.turnId,
+      run_id: w.runId,
+      nonce: w.nonce,
+      contract_hash: w.executionContractRef.hash,
+      capability_snapshot_hash: w.executionContractRef.snapshot_hash,
+    }));
+  }
+  writeCompletionSignal(cwd, w.assignmentId, {
+    turn_id: w.turnId,
+    run_id: w.runId,
+    nonce: w.nonce,
+    status: 'completed',
+    at: new Date().toISOString(),
+    ...contractSignal,
+  });
+  return {
+    assignment_id: w.assignmentId,
+    turn_id: w.turnId,
+    run_id: w.runId,
+    nonce: w.nonce,
+    status: 'completed',
+    summary: 'fake review',
+    review_verdict: verdict,
+    review_summary: 'looks good',
+    ...contractLane,
+  };
 }
 
 /**
@@ -232,7 +271,16 @@ describe('pln#630 §9 conformance harness — full turn-owned contract (fake exe
     const w = prep(cwd, loop.id);
     const lane = fakeWorkerCompletes(cwd, w, 'approve');
     // Wrapper ALSO wrote a turn-keyed failed sentinel (non-zero exit after result).
-    writeCompletionSignal(cwd, w.assignmentId, { turn_id: w.turnId, run_id: w.runId, nonce: w.nonce, status: 'failed', at: 'f' });
+    writeCompletionSignal(cwd, w.assignmentId, {
+      turn_id: w.turnId,
+      run_id: w.runId,
+      nonce: w.nonce,
+      status: 'failed',
+      at: 'f',
+      ...(w.executionContractRef
+        ? { contract_hash: w.executionContractRef.hash, capability_snapshot_hash: w.executionContractRef.snapshot_hash }
+        : {}),
+    });
     const r = reconcileTurn({ turn_id: w.turnId, lane, cwd });
     assert.equal(r.reconciled, false);
     assert.equal(r.conflict, true);

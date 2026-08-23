@@ -29,7 +29,9 @@ with a few extensions.
 
 Identity, dispatch decisions and spawn authority live in a separate façade
 over the reservation core — see
-[Attempt authority](./attempt-authority.md).
+[Attempt authority](./attempt-authority.md). The exact worker, workspace,
+artifact and evidence expectations for each physical turn are frozen by the
+[Execution contract and capability snapshot](./execution-contract.md).
 
 ## Why
 
@@ -76,6 +78,14 @@ where the phase is still operator-driven. The pre-crossing callback creates or v
 the Assignment and AgentRun, binds the active claim, and binds the slot. A turn
 crossed through that adapter is therefore harvestable; a pre-crossing crash is
 repairable by replaying the same deterministic ids.
+
+Before reservation, that common adapter resolves the selected agent against a
+typed capability requirement and hashes an immutable ExecutionContract. The
+full contract lives on TurnReservation; Assignment and AgentRun carry the same
+hash/reference and capability snapshot before crossing. This is one shared
+dispatch substrate for all five protocols, not protocol-specific review
+metadata, and it adds no journal. See
+[Execution contract and capability snapshot](./execution-contract.md).
 
 Phase-specific execution metadata lives in `LOOP_KIND_POLICIES`; phase graphs,
 gates, iteration and stop conditions remain exclusively in `DEFAULT_PROTOCOLS`.

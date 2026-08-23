@@ -2,6 +2,17 @@
 import { ensureAgentRunProjection } from '../agentruns.js';
 import { ensureAssignmentProjection } from '../assignments.js';
 import { ensureClaimAssignmentBinding, loadClaim } from '../claims.js';
+import {
+  CapabilityRequirementSchema,
+  ExecutionContractSchema,
+  executionContractRef,
+  resolveCapabilitySnapshot,
+  validateWorkerContractAcceptance,
+  type AcceptedExecutionContractRef,
+  type CapabilityRequirement,
+  type CapabilitySnapshot,
+  type ExecutionContractRef,
+} from '../execution-contract.js';
 import { bindTurnProjection } from './verbs.js';
 import { deriveChildIds, deriveTurnId, getReservation, type TurnReservation } from './attempt-reservation.js';
 import { prepareAttempt, projectAndCross } from './attempt-authority.js';
@@ -48,6 +59,8 @@ export function ensureTurnExecutionProjections(
     dispatcher_session_id: input.dispatcher_session_id,
     scope: input.scope,
     description: input.description,
+    execution_contract_ref: reservation.execution_contract_ref,
+    capability_snapshot: reservation.capability_snapshot,
     tags: input.assignment_tags ?? ['coordinate', 'loop', 'turn-owned'],
   }, cwd);
   input.on_projection?.('assignment');
@@ -65,6 +78,8 @@ export function ensureTurnExecutionProjections(
     scope: input.scope,
     description: input.description,
     worktree_path: input.worktree_path,
+    execution_contract_ref: reservation.execution_contract_ref,
+    capability_snapshot: reservation.capability_snapshot,
     tags: input.run_tags ?? ['turn-owned', 'loop'],
   }, cwd);
   input.on_projection?.('run');
@@ -105,12 +120,32 @@ export interface PrepareTurnExecutionInput {
   run_tags?: string[];
   dispatch_lease_ms?: number;
   grant_lease_ms?: number;
+  /** Resolved/requested model identity to freeze in the capability contract. */
+  model?: string;
+  /** Required runtime capabilities; defaults to a CLI-spawnable executor. */
+  capability_requirement?: CapabilityRequirement;
+  /** Contract + snapshot hashes accepted by a pre-crossing worker adapter. */
+  accepted_execution_contract?: AcceptedExecutionContractRef;
+  /** Optional policy overrides captured immutably in the contract. */
+  workspace_policy?: {
+    isolation?: 'worktree' | 'shared_checkout' | 'none';
+    write_access?: 'read_only' | 'workspace' | 'unrestricted';
+  };
   on_authority_stage?: (stage: 'reserved' | 'committed' | 'armed') => void;
   on_projection?: (stage: TurnProjectionStage) => void;
 }
 
 export type PrepareTurnExecutionResult =
-  | { kind: 'won'; turn_id: string; assignment_id: string; run_id: string; nonce: string }
+  | {
+    kind: 'won';
+    turn_id: string;
+    assignment_id: string;
+    run_id: string;
+    nonce: string;
+    contract_status: 'contracted' | 'legacy_uncontracted';
+    execution_contract_ref?: ExecutionContractRef;
+    capability_snapshot?: CapabilitySnapshot;
+  }
   | {
     kind: 'denied';
     reason: string;
@@ -143,6 +178,13 @@ function authorityDenied(
   };
 }
 
+function defaultRequiredRole(kind: LoopKind, phase: string): 'execute' | 'review' | 'consult' {
+  if (kind === 'review') return phase === 'author_response' ? 'execute' : 'review';
+  if (kind === 'ideation') return 'review';
+  if (kind === 'research') return 'consult';
+  return 'execute';
+}
+
 /**
  * Common worker-attempt path. It refuses engine/manual phases and never advances
  * a phase or evaluates a gate; those decisions stay in the Loop Engine.
@@ -167,6 +209,7 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   const iteration = loop.iteration_count;
   const turnId = deriveTurnId(loop.id, input.slot_id, iteration);
   const childIds = deriveChildIds(turnId);
+  const existingReservation = getReservation(turnId, input.cwd);
   const slot = loop.slots.find((candidate) => candidate.slot_id === input.slot_id);
   if (!slot) return preconditionDenied(`slot ${input.slot_id} not found in loop ${loop.id}`);
   if (slot.agent !== undefined && slot.agent !== input.agent) {
@@ -199,6 +242,102 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   if (claim.worktree_path && input.worktree_path && claim.worktree_path !== input.worktree_path) {
     return preconditionDenied(`claim ${input.claim_id} worktree does not match the dispatch worktree`);
   }
+  const dispatchLeaseMs = input.dispatch_lease_ms ?? 30 * 60_000;
+  const grantLeaseMs = input.grant_lease_ms ?? 10 * 60_000;
+  const hasCompleteExistingContract = Boolean(
+    existingReservation?.execution_contract
+    && existingReservation.execution_contract_ref
+    && existingReservation.capability_snapshot,
+  );
+  const hasPartialExistingContract = Boolean(existingReservation) && !hasCompleteExistingContract && Boolean(
+    existingReservation?.execution_contract
+    || existingReservation?.execution_contract_ref
+    || existingReservation?.capability_snapshot,
+  );
+  if (hasPartialExistingContract) {
+    return preconditionDenied('existing reservation has an incomplete execution-contract triplet');
+  }
+  const legacyUncontracted = Boolean(existingReservation) && !hasCompleteExistingContract;
+  const capabilityRequirement = CapabilityRequirementSchema.parse(
+    input.capability_requirement
+    ?? existingReservation?.execution_contract?.capability_requirement
+    ?? {
+    roles: [defaultRequiredRole(input.kind, input.phase)],
+    required_surfaces: ['cli_spawn'],
+    // The transport requirement is CLI spawnability. Some integrations (for
+    // example Cline) expose a spawnable CLI while their native interaction
+    // surface remains an extension; callers can still constrain that native
+    // surface explicitly through capability_requirement.execution_surfaces.
+    execution_surfaces: [],
+    model: input.model,
+    required_tools: [],
+  });
+  if (
+    input.capability_requirement
+    && existingReservation?.execution_contract
+    && JSON.stringify(capabilityRequirement) !== JSON.stringify(existingReservation.execution_contract.capability_requirement)
+  ) {
+    return preconditionDenied('capability requirement differs from the immutable existing execution contract');
+  }
+  const capabilitySnapshot = existingReservation?.capability_snapshot
+    ?? resolveCapabilitySnapshot(input.agent, capabilityRequirement, input.agent_id);
+  if (!capabilitySnapshot.accepted) {
+    const reasons = capabilitySnapshot.reasons.map((reason) => reason.code).join(', ');
+    return preconditionDenied(`capability requirements rejected for ${input.agent}: ${reasons}`);
+  }
+  const effectiveCompletionMode = existingReservation?.completion_mode ?? execution.completion_mode;
+  const effectiveExpectedArtifacts = existingReservation?.expected_artifacts ?? execution.expected_artifacts;
+  const contract = legacyUncontracted ? undefined : (existingReservation?.execution_contract ?? ExecutionContractSchema.parse({
+    schema_version: 1,
+    minimum_reader_version: 1,
+    identity: {
+      loop_id: loop.id,
+      turn_id: turnId,
+      logical_attempt_epoch: existingReservation?.epoch ?? 0,
+      assignment_id: childIds.assignment_id,
+      run_id: childIds.run_id,
+      kind: input.kind,
+      phase: input.phase,
+      iteration,
+    },
+    artifact_contract: {
+      completion_mode: effectiveCompletionMode,
+      expected_artifacts: effectiveExpectedArtifacts,
+    },
+    capability_requirement: capabilityRequirement,
+    workspace_policy: {
+      scope: input.scope,
+      cwd: input.cwd,
+      worktree_path: input.worktree_path,
+      isolation: input.workspace_policy?.isolation ?? (input.worktree_path ? 'worktree' : 'shared_checkout'),
+      write_access: input.workspace_policy?.write_access ?? 'workspace',
+    },
+    timeout_policy: {
+      dispatch_lease_ms: dispatchLeaseMs,
+      grant_lease_ms: grantLeaseMs,
+    },
+    evidence_policy: {
+      require_turn_id: true,
+      require_run_id: true,
+      require_nonce: true,
+      artifact_hash: 'optional',
+    },
+    protocol: { name: 'attempt-authority', minimum_version: 1 },
+  }));
+  const contractRef = contract
+    ? (existingReservation?.execution_contract_ref ?? executionContractRef(contract, capabilitySnapshot))
+    : undefined;
+  if (input.accepted_execution_contract && !contractRef) {
+    return preconditionDenied('legacy uncontracted reservation cannot claim worker contract acceptance');
+  }
+  if (input.accepted_execution_contract && contractRef) {
+    const acceptance = validateWorkerContractAcceptance(contractRef, input.accepted_execution_contract, undefined);
+    if (acceptance.kind !== 'accepted') {
+      return preconditionDenied(
+        `worker contract mismatch before crossing: expected ${contractRef.hash}/${contractRef.snapshot_hash}, accepted ${input.accepted_execution_contract.contract_hash}/${input.accepted_execution_contract.capability_snapshot_hash}; abort and reselect`,
+      );
+    }
+  }
   try {
     const now = Date.now();
     const prepared = prepareAttempt({
@@ -212,12 +351,15 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
       claim_id: input.claim_id,
       phase: input.phase,
       iteration,
-      completion_mode: execution.completion_mode,
-      expected_artifacts: execution.expected_artifacts,
+      completion_mode: effectiveCompletionMode,
+      expected_artifacts: effectiveExpectedArtifacts,
+      execution_contract: contract,
+      execution_contract_ref: contractRef,
+      capability_snapshot: contractRef ? capabilitySnapshot : undefined,
       store_root: input.cwd,
       cwd: input.cwd,
-      lease_deadline: new Date(now + (input.dispatch_lease_ms ?? 30 * 60_000)).toISOString(),
-      grant_lease_deadline: new Date(now + (input.grant_lease_ms ?? 10 * 60_000)).toISOString(),
+      lease_deadline: new Date(now + dispatchLeaseMs).toISOString(),
+      grant_lease_deadline: new Date(now + grantLeaseMs).toISOString(),
       authority_actor: input.dispatcher_agent_id ?? input.dispatcher_agent,
       on_stage: input.on_authority_stage,
     }, input.cwd);
@@ -250,6 +392,9 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
       assignment_id: childIds.assignment_id,
       run_id: childIds.run_id,
       nonce: prepared.token,
+      contract_status: contractRef ? 'contracted' : 'legacy_uncontracted',
+      execution_contract_ref: contractRef,
+      capability_snapshot: contractRef ? capabilitySnapshot : undefined,
     };
   } catch (error) {
     return authorityDenied(input, turnId, error instanceof Error ? error.message : String(error));

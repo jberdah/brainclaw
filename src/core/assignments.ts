@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
+import type { CapabilitySnapshot, ExecutionContractRef } from './execution-contract.js';
 import { resolveOwnerProjectId } from './config.js';
 import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
@@ -442,6 +443,8 @@ export interface CreateAssignmentOptions {
   description: string;
   lane?: string;
   worktree_path?: string;
+  execution_contract_ref?: ExecutionContractRef;
+  capability_snapshot?: CapabilitySnapshot;
   heartbeat_ttl_ms?: number;
   acceptance_ttl_ms?: number;
   max_retries?: number;
@@ -484,6 +487,8 @@ function buildAssignment(options: CreateAssignmentOptions, cwd?: string): Assign
     description: options.description,
     lane: options.lane,
     worktree_path: options.worktree_path,
+    execution_contract_ref: options.execution_contract_ref,
+    capability_snapshot: options.capability_snapshot,
     status: 'created',
     created_at: nowISO(),
     heartbeat_ttl_ms: options.heartbeat_ttl_ms,
@@ -562,6 +567,20 @@ function assertAssignmentProjectionMatches(
   if (existing.agent_id !== undefined && existing.agent_id !== expected.agent_id) {
     throw new AssignmentProjectionConflictError(expected.id, 'agent_id differs');
   }
+  if (
+    existing.execution_contract_ref !== undefined
+    && expected.execution_contract_ref !== undefined
+    && JSON.stringify(existing.execution_contract_ref) !== JSON.stringify(expected.execution_contract_ref)
+  ) {
+    throw new AssignmentProjectionConflictError(expected.id, 'execution_contract_ref differs');
+  }
+  if (
+    existing.capability_snapshot !== undefined
+    && expected.capability_snapshot !== undefined
+    && JSON.stringify(existing.capability_snapshot) !== JSON.stringify(expected.capability_snapshot)
+  ) {
+    throw new AssignmentProjectionConflictError(expected.id, 'capability_snapshot differs');
+  }
   if (TERMINAL_PROJECTION_ASSIGNMENT_STATUSES.has(existing.status)) {
     throw new AssignmentProjectionConflictError(expected.id, `existing status is terminal (${existing.status})`);
   }
@@ -586,11 +605,15 @@ export function ensureAssignmentProjection(
       assertAssignmentProjectionMatches(existing, expected);
       const requiredTags = options.tags ?? [];
       const missingAgentId = existing.agent_id === undefined && expected.agent_id !== undefined;
+      const missingContractRef = existing.execution_contract_ref === undefined && expected.execution_contract_ref !== undefined;
+      const missingCapabilitySnapshot = existing.capability_snapshot === undefined && expected.capability_snapshot !== undefined;
       const missingTags = !requiredTags.every((tag) => existing.tags.includes(tag));
-      if (!missingAgentId && !missingTags) return existing;
+      if (!missingAgentId && !missingContractRef && !missingCapabilitySnapshot && !missingTags) return existing;
       const enriched = AssignmentSchema.parse({
         ...existing,
         ...(missingAgentId ? { agent_id: expected.agent_id } : {}),
+        ...(missingContractRef ? { execution_contract_ref: expected.execution_contract_ref } : {}),
+        ...(missingCapabilitySnapshot ? { capability_snapshot: expected.capability_snapshot } : {}),
         tags: [...new Set([...existing.tags, ...requiredTags])],
         updated_at: nowISO(),
       });

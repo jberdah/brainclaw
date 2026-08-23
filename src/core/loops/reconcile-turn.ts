@@ -4,13 +4,14 @@ import { getReservation, evidenceMatchesAttempt, currentNonce, deriveTurnId, lau
 import { getLoop } from './store.js';
 import { complete_turn, add_artifact, advance } from './verbs.js';
 import { reducerForKind, type ReducerInput } from './result-reducers.js';
-import { loadAgentRun, transitionAgentRun } from '../agentruns.js';
+import { loadAgentRun, recordExecutionContractAnomaly, transitionAgentRun } from '../agentruns.js';
 import { loadAssignment, transitionAssignment } from '../assignments.js';
 import { loadClaim, releaseClaim, releaseClaimIfActive } from '../claims.js';
 import { createRuntimeEvent } from '../events.js';
-import { readCompletionSignals } from '../runtime-signals.js';
+import { readCompletionSignals, readContractAck } from '../runtime-signals.js';
 import { buildFixCycleTask, type ReviewLoopNextTurn } from '../review-loop-close.js';
 import { withLoopLock, LockTimeoutError, LockLostError } from './lock.js';
+import { validateWorkerContractAcceptance } from '../execution-contract.js';
 import type { AgentRun, LaneResult } from '../schema.js';
 
 /**
@@ -45,6 +46,9 @@ export interface ReconcileTurnResult {
   reason: string;
   /** True when a completed+failed contradiction withheld convergence (§13 R4). */
   conflict?: boolean;
+  /** Contract acceptance mismatch after crossing; this generation must not respawn. */
+  contract_anomaly?: boolean;
+  respawn?: false;
   slot_outcome?: 'done' | 'failed';
   artifacts_added?: number;
   auto_closed?: boolean;
@@ -130,6 +134,16 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     return { reconciled: false, reason: `containment: reservation store_root ${reservation.store_root} != operating store ${operatingRoot}` };
   }
 
+  const owningRun = loadAgentRun(reservation.child_ids.run_id, cwd);
+  if (owningRun?.execution_contract_anomaly) {
+    return {
+      reconciled: false,
+      contract_anomaly: true,
+      respawn: false,
+      reason: `persisted post-crossing execution-contract anomaly (${owningRun.execution_contract_anomaly.source}) — convergence withheld; respawn=false`,
+    };
+  }
+
   // ── §2 read-strict evidence gate: the LANE must be turn-keyed to THIS attempt's
   // current launch generation. A stale/mismatched result never converges the loop. ──
   if (!evidenceMatchesAttempt(reservation, { turn_id: lane.turn_id, run_id: lane.run_id, nonce: lane.nonce })) {
@@ -140,6 +154,68 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
         ? 'no live launch generation (revoked/never-armed) — cannot accept evidence'
         : `lane evidence (turn=${lane.turn_id} run=${lane.run_id} nonce=${lane.nonce}) does not match attempt ${turn_id}`,
     };
+  }
+
+  if (reservation.execution_contract_ref) {
+    const completion = readCompletionSignals(cwd ?? process.cwd(), reservation.child_ids.assignment_id).completed;
+    const bootstrapAck = readContractAck(cwd ?? process.cwd(), reservation.child_ids.assignment_id);
+    const accepted = {
+      contract_hash: lane.execution_contract_hash ?? completion?.contract_hash ?? '',
+      capability_snapshot_hash: lane.capability_snapshot_hash ?? completion?.capability_snapshot_hash ?? '',
+    };
+    const bootstrapVerdict = bootstrapAck?.status === 'accepted'
+      && bootstrapAck.turn_id === reservation.turn_id
+      && bootstrapAck.run_id === reservation.child_ids.run_id
+      && bootstrapAck.nonce === reservation.launch?.token
+      ? validateWorkerContractAcceptance(
+        reservation.execution_contract_ref,
+        {
+          contract_hash: bootstrapAck.contract_hash,
+          capability_snapshot_hash: bootstrapAck.capability_snapshot_hash,
+        },
+        reservation.launch?.status,
+      )
+      : undefined;
+    const terminalVerdict = validateWorkerContractAcceptance(
+      reservation.execution_contract_ref,
+      accepted,
+      reservation.launch?.status,
+    );
+    if (bootstrapVerdict?.kind !== 'accepted' || terminalVerdict.kind !== 'accepted') {
+      try {
+        recordExecutionContractAnomaly(reservation.child_ids.run_id, {
+          source: bootstrapVerdict?.kind !== 'accepted'
+            ? 'bootstrap_ack'
+            : lane.execution_contract_hash ? 'lane_result' : 'completion_signal',
+          reason: bootstrapVerdict?.kind !== 'accepted'
+            ? 'bootstrap did not accept the immutable execution contract'
+            : 'terminal evidence did not match the immutable execution contract',
+          accepted_contract_hash: bootstrapVerdict?.kind !== 'accepted'
+            ? bootstrapAck?.contract_hash
+            : accepted.contract_hash,
+          accepted_capability_snapshot_hash: bootstrapVerdict?.kind !== 'accepted'
+            ? bootstrapAck?.capability_snapshot_hash
+            : accepted.capability_snapshot_hash,
+        }, cwd);
+      } catch { /* ack/sentinel remains a durable fallback fence */ }
+      try {
+        createRuntimeEvent({
+          agent: actor,
+          event_type: 'run_blocked',
+          text: `reconcileTurn: post-crossing execution-contract acceptance anomaly for ${turn_id}; convergence WITHHELD and respawn=false`,
+          tags: ['loops', 'reconcile', 'contract-anomaly', 'turn-attempt'],
+          assignment_id: reservation.child_ids.assignment_id,
+          run_id: reservation.child_ids.run_id,
+          status_reason: 'execution_contract_acceptance_mismatch',
+        }, cwd);
+      } catch { /* anomaly journal best-effort */ }
+      return {
+        reconciled: false,
+        contract_anomaly: true,
+        respawn: false,
+        reason: 'post-crossing execution-contract acceptance mismatch or missing hash — convergence withheld; respawn=false',
+      };
+    }
   }
 
   // ── §13 R4 contradiction: a turn-keyed FAILED sentinel present alongside a

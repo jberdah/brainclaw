@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { CapabilitySnapshotSchema, ExecutionContractRefSchema } from './execution-contract.js';
+
 // --- Helpers ---
 
 /** Coerce legacy effort strings ("30min", "2h", "1d") to integer minutes for migration.
@@ -903,6 +905,9 @@ export const AssignmentSchema = z.object({
   description: z.string(),
   lane: z.string().optional(),
   worktree_path: z.string().optional(),
+  /** Immutable attempt contract identity; optional for legacy records. */
+  execution_contract_ref: ExecutionContractRefSchema.optional(),
+  capability_snapshot: CapabilitySnapshotSchema.optional(),
 
   // Status FSM
   status: AssignmentStatusSchema,
@@ -996,6 +1001,17 @@ export const AgentRunSchema = z.object({
   shell: z.string().optional(),
   pid: z.number().int().positive().optional(),
   provider_run_id: z.string().optional(),
+  /** Immutable attempt contract identity; optional for legacy records. */
+  execution_contract_ref: ExecutionContractRefSchema.optional(),
+  capability_snapshot: CapabilitySnapshotSchema.optional(),
+  /** Monotone fence: once present, no reconciler may auto-converge or respawn this generation. */
+  execution_contract_anomaly: z.object({
+    detected_at: z.string().min(1),
+    source: z.enum(['bootstrap_ack', 'completion_signal', 'lane_result', 'reconciler']),
+    reason: z.string().min(1),
+    accepted_contract_hash: z.string().optional(),
+    accepted_capability_snapshot_hash: z.string().optional(),
+  }).optional(),
 
   created_at: z.string(),
   updated_at: z.string().optional(),
@@ -1189,6 +1205,9 @@ export const LaneResultSchema = z.object({
   turn_id: z.string().optional(),
   run_id: z.string().optional(),
   nonce: z.string().optional(),
+  /** ExecutionContract v1 acceptance echoed by the worker/bootstrap. */
+  execution_contract_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  capability_snapshot_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   status: z.enum(['completed', 'blocked', 'failed']),
   summary: z.string(),
   /** Paths or refs the worker produced (commits, files, docs). */

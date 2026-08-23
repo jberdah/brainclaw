@@ -66,18 +66,31 @@ import type { WarningDetail } from '../core/facade-schema.js';
  * double-spawn; and a sentinel that lands after a legacy close makes a later reconcile a
  * terminal-loop idempotent no-op.
  */
-function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): { reservation: TurnReservation; nonce: string } | undefined {
+interface TurnOwnedLaneEvidence {
+  reservation: TurnReservation;
+  nonce?: string;
+  contract_hash?: string;
+  capability_snapshot_hash?: string;
+}
+
+function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): TurnOwnedLaneEvidence | undefined {
   const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
   if (!reservation) return undefined; // legacy lane (no reservation)
-  const nonce = lane.nonce ?? readCompletionSignals(cwd, reservation.child_ids.assignment_id).completed?.nonce;
-  if (!nonce) return undefined; // reservation but NO turn-keyed evidence → legacy finalization
-  return { reservation, nonce };
+  const completion = readCompletionSignals(cwd, reservation.child_ids.assignment_id).completed;
+  const nonce = lane.nonce ?? completion?.nonce;
+  if (!nonce && !reservation.execution_contract_ref) return undefined;
+  return {
+    reservation,
+    nonce,
+    contract_hash: lane.execution_contract_hash ?? completion?.contract_hash,
+    capability_snapshot_hash: lane.capability_snapshot_hash ?? completion?.capability_snapshot_hash,
+  };
 }
 
 function reconcileTurnOwnedLane(
   lane: LaneResult,
   cwd: string,
-  evidence?: { reservation: TurnReservation; nonce: string },
+  evidence?: TurnOwnedLaneEvidence,
 ): { reservation: TurnReservation; result: ReconcileTurnResult } | undefined {
   const ev = evidence ?? turnOwnedLaneEvidence(lane, cwd);
   if (!ev) return undefined; // legacy lane OR no turn-keyed evidence — caller runs the legacy path
@@ -87,6 +100,8 @@ function reconcileTurnOwnedLane(
     turn_id: lane.turn_id ?? reservation.turn_id,
     run_id: lane.run_id ?? reservation.child_ids.run_id,
     nonce,
+    execution_contract_hash: lane.execution_contract_hash ?? ev.contract_hash,
+    capability_snapshot_hash: lane.capability_snapshot_hash ?? ev.capability_snapshot_hash,
   };
   const loop = getLoop(reservation.loop_id, cwd);
   const critiques = loop?.kind === 'ideation'
@@ -517,7 +532,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // (no re-dispatch, no claim retention). `harvest --integrate` owns the cycle.
     // Hoisted for the catch below (PR #171 review P2-2): if turn-owned evidence was
     // found before a throw, the swallowed failure must still surface as a warning.
-    let turnEvidenceForCatch: { reservation: TurnReservation; nonce: string } | undefined;
+    let turnEvidenceForCatch: TurnOwnedLaneEvidence | undefined;
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
       if (laneAssignment) {

@@ -27,10 +27,9 @@ import { sendMessage } from './messaging.js';
 import { buildInvokeCommand, resolveModel } from './agent-capability.js';
 import { attemptExecution } from './execution.js';
 import type { TurnEcho } from './execution-adapters.js';
+import type { ExecutionContractRef } from './execution-contract.js';
 import { transitionAgentRun } from './agentruns.js';
-import { deriveTurnId, deriveChildIds, getReservation } from './loops/attempt-reservation.js';
-import { prepareAttempt, projectAndCross } from './loops/attempt-authority.js';
-import { ensureTurnExecutionProjections } from './loops/turn-execution.js';
+import { prepareTurnExecution } from './loops/turn-execution.js';
 import { phasePolicy } from './loops/kind-policies.js';
 import type { LoopKind, LoopSlot } from './loops/types.js';
 
@@ -93,7 +92,7 @@ const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
 type TurnOwnedPrep =
   | { kind: 'legacy' }
   | { kind: 'denied'; reason: string }
-  | { kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string };
+  | { kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string; executionContractRef?: ExecutionContractRef };
 
 export interface PrepareTurnOwnedReviewInput {
   loopId: string;
@@ -109,6 +108,7 @@ export interface PrepareTurnOwnedReviewInput {
   dispatcherAgent: string;
   dispatcherAgentId?: string;
   sessionId?: string;
+  model?: string;
   isReviewer: boolean;
   cwd: string;
   /** Test-only deterministic crash seam; production callers leave it undefined. */
@@ -148,136 +148,97 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
   const { loopId, slotId, claimId, cwd } = input;
 
   // ── Snapshot the loop BEFORE turn() bumps its version (dec#139 item 3). ──
-  let iteration: number;
-  let version: number;
+  let thread: ReturnType<typeof getLoop>;
   try {
-    const thread = getLoop(loopId, cwd);
-    if (!thread) return { kind: 'legacy' }; // loop not found — pre-identity, safe to degrade
-    if (thread.kind !== 'review') return { kind: 'denied', reason: `launch_denied: loop ${loopId} is ${thread.kind}, not review` };
-    if (thread.status !== 'open') return { kind: 'denied', reason: `launch_denied: loop ${loopId} is ${thread.status}, not open` };
-    if (thread.current_phase !== input.phase) {
-      return { kind: 'denied', reason: `launch_denied: phase mismatch (${thread.current_phase} != ${input.phase})` };
-    }
-    const execution = phasePolicy('review', input.phase);
-    if (!execution || execution.execution !== 'worker') {
-      return { kind: 'denied', reason: `launch_denied: review.${input.phase} is ${execution?.execution ?? 'unknown'}, not a worker phase` };
-    }
-    const slot = thread.slots.find((candidate) => candidate.slot_id === slotId);
-    if (!slot) return { kind: 'denied', reason: `launch_denied: slot ${slotId} not found` };
-    if (slot.agent !== undefined && slot.agent !== input.agent) {
-      return { kind: 'denied', reason: `launch_denied: slot agent mismatch (${slot.agent} != ${input.agent})` };
-    }
-    if (slot.agent_id !== undefined && slot.agent_id !== input.agentId) {
-      return { kind: 'denied', reason: `launch_denied: slot agent_id mismatch (${slot.agent_id} != ${input.agentId ?? 'none'})` };
-    }
-    if (slot.claim_id !== undefined && slot.claim_id !== claimId) {
-      return { kind: 'denied', reason: `launch_denied: slot claim mismatch (${slot.claim_id} != ${claimId})` };
-    }
-    const claim = (() => {
-      try { return loadClaim(claimId, cwd); } catch { return undefined; }
-    })();
-    if (!claim) return { kind: 'denied', reason: `launch_denied: claim ${claimId} not found` };
-    if (claim.status !== 'active' || claim.agent !== input.agent || claim.scope !== input.scope) {
-      return { kind: 'denied', reason: `launch_denied: claim ${claimId} is incompatible with slot ${slotId}` };
-    }
-    iteration = thread.iteration_count;
-    version = thread.version;
-  } catch {
-    return { kind: 'legacy' };
+    thread = getLoop(loopId, cwd);
+  } catch (error) {
+    return { kind: 'denied', reason: `launch_denied: indeterminate loop read; fail-closed (${error instanceof Error ? error.message : String(error)})` };
+  }
+  if (!thread) return { kind: 'legacy' }; // proven absent before identity: safe legacy path
+  if (thread.kind !== 'review') return { kind: 'denied', reason: `launch_denied: loop ${loopId} is ${thread.kind}, not review` };
+  if (thread.status !== 'open') return { kind: 'denied', reason: `launch_denied: loop ${loopId} is ${thread.status}, not open` };
+  if (thread.current_phase !== input.phase) {
+    return { kind: 'denied', reason: `launch_denied: phase mismatch (${thread.current_phase} != ${input.phase})` };
+  }
+  const execution = phasePolicy('review', input.phase);
+  if (!execution || execution.execution !== 'worker') {
+    return { kind: 'denied', reason: `launch_denied: review.${input.phase} is ${execution?.execution ?? 'unknown'}, not a worker phase` };
+  }
+  const slot = thread.slots.find((candidate) => candidate.slot_id === slotId);
+  if (!slot) return { kind: 'denied', reason: `launch_denied: slot ${slotId} not found` };
+  if (slot.agent !== undefined && slot.agent !== input.agent) {
+    return { kind: 'denied', reason: `launch_denied: slot agent mismatch (${slot.agent} != ${input.agent})` };
+  }
+  if (slot.agent_id !== undefined && slot.agent_id !== input.agentId) {
+    return { kind: 'denied', reason: `launch_denied: slot agent_id mismatch (${slot.agent_id} != ${input.agentId ?? 'none'})` };
+  }
+  if (slot.claim_id !== undefined && slot.claim_id !== claimId) {
+    return { kind: 'denied', reason: `launch_denied: slot claim mismatch (${slot.claim_id} != ${claimId})` };
+  }
+  let claim: ReturnType<typeof loadClaim>;
+  try {
+    claim = loadClaim(claimId, cwd);
+  } catch (error) {
+    return { kind: 'denied', reason: `launch_denied: indeterminate claim read; fail-closed (${error instanceof Error ? error.message : String(error)})` };
+  }
+  if (!claim) return { kind: 'denied', reason: `launch_denied: claim ${claimId} not found` };
+  if (claim.status !== 'active' || claim.agent !== input.agent || claim.scope !== input.scope) {
+    return { kind: 'denied', reason: `launch_denied: claim ${claimId} is incompatible with slot ${slotId}` };
   }
 
-  const turnId = deriveTurnId(loopId, slotId, iteration);
-  const { assignment_id: assignmentId, run_id: runId } = deriveChildIds(turnId);
-  const execution = phasePolicy('review', input.phase)!;
-  // Existing P0B reservations predate the common policy fields. Adopt their
-  // persisted immutable contract; every newly reserved review turn uses the
-  // same completion/artifact policy as the other LoopKinds.
-  const existingContract = getReservation(turnId, cwd);
-  // Decoupled leases (dec#149 R1): the reservation dispatch lease is longer than each grant's
-  // lease, giving a revoked (reserved_never_launched) round a window to re-arm. reserve() adopts
-  // on a re-dispatch, so the ORIGINAL (longer) dispatch lease governs re-arm eligibility.
-  const dispatchLease = new Date(Date.now() + TURN_OWNED_DISPATCH_LEASE_MS).toISOString();
-  const grantLease = new Date(Date.now() + TURN_OWNED_LEASE_MS).toISOString();
-
-  // From prepareAttempt onward identity may exist, so every error is fail-closed.
+  // From the common adapter onward identity may exist, so every error is
+  // fail-closed. Review is a protocol adapter over the same contract and fence
+  // used by ideation, implementation, research and debug.
   // Only the loop snapshot above can safely choose the legacy path.
   try {
-    const prepared = prepareAttempt({
-      turn_id: turnId,
+    const prepared = prepareTurnExecution({
+      kind: 'review',
       loop_id: loopId,
       slot_id: slotId,
-      target_slot_generation: iteration,
-      loop_version_at_reserve: version,
+      phase: input.phase,
       agent: input.agent,
       agent_id: input.agentId,
       claim_id: claimId,
-      phase: input.phase,
-      iteration,
-      completion_mode: existingContract?.completion_mode ?? execution.completion_mode,
-      expected_artifacts: existingContract?.expected_artifacts ?? execution.expected_artifacts,
-      store_root: cwd,
+      dispatcher_agent: input.dispatcherAgent,
+      dispatcher_agent_id: input.dispatcherAgentId,
+      dispatcher_session_id: input.sessionId,
+      scope: input.scope,
+      description: input.description,
+      task: input.task,
       cwd,
-      lease_deadline: dispatchLease,
-      grant_lease_deadline: grantLease,
-      authority_actor: input.dispatcherAgentId ?? input.dispatcherAgent,
-      on_stage: (stage) => turnProjectionFaultPoint(input, stage === 'reserved'
+      worktree_path: input.worktreePath,
+      dispatch_lease_ms: TURN_OWNED_DISPATCH_LEASE_MS,
+      grant_lease_ms: TURN_OWNED_LEASE_MS,
+      model: input.model,
+      assignment_tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
+      run_tags: ['turn-owned', 'review', 'loop'],
+      on_authority_stage: (stage) => turnProjectionFaultPoint(input, stage === 'reserved'
         ? 'after_reservation'
         : stage === 'committed' ? 'after_commit' : 'after_arm'),
-    }, cwd);
-    if (prepared.launch_status !== 'armed') {
-      return { kind: 'denied', reason: `launch_denied: grant is ${prepared.launch_status} (not armed)` };
-    }
-
-    // pln#677 / dec#171 — materialize every deterministic projection BEFORE the
-    // irreversible crossing. The reservation lock serializes projection+CAS; each
-    // projection is create-or-validate so a pre-crossing crash is safely replayable.
-    try {
-      const crossing = projectAndCross(
-        prepared,
-        (reservation) => {
-          // P0 has no cross-claim takeover transaction. The reservation's claim is
-          // authoritative; a different recovery claim must fail closed rather than
-          // partially rebind Assignment/Run/slot to a second owner.
-          if (reservation.claim_id !== claimId) {
-            throw new Error(`claim mismatch: reservation=${reservation.claim_id}, caller=${claimId}`);
-          }
-
-          ensureTurnExecutionProjections(reservation, {
-            loop_id: loopId,
-            slot_id: slotId,
-            turn_id: turnId,
-            assignment_id: assignmentId,
-            run_id: runId,
-            agent: input.agent,
-            agent_id: input.agentId,
-            dispatcher_agent: input.dispatcherAgent,
-            dispatcher_agent_id: input.dispatcherAgentId,
-            dispatcher_session_id: input.sessionId,
-            scope: input.scope,
-            description: input.description,
-            task: input.task,
-            worktree_path: input.worktreePath,
-            assignment_tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
-            run_tags: ['turn-owned', 'review', 'loop'],
-            on_projection: (stage) => turnProjectionFaultPoint(input,
-              stage === 'assignment' ? 'after_assignment'
-                : stage === 'run' ? 'after_run'
-                  : stage === 'claim_binding' ? 'after_claim_binding'
-                    : stage === 'slot_binding' ? 'after_slot_binding' : 'before_consume'),
-          }, cwd);
-        },
-        cwd,
-        input.dispatcherAgentId ?? input.dispatcherAgent,
-      );
-      if (crossing.kind !== 'won') {
-        return { kind: 'denied', reason: 'launch_denied: grant already crossed by a concurrent dispatch' };
-      }
-    } catch (err) {
-      return { kind: 'denied', reason: `launch_denied: projection/consume refused (${err instanceof Error ? err.message : String(err)})` };
+      on_projection: (stage) => turnProjectionFaultPoint(input,
+        stage === 'assignment' ? 'after_assignment'
+          : stage === 'run' ? 'after_run'
+            : stage === 'claim_binding' ? 'after_claim_binding'
+              : stage === 'slot_binding' ? 'after_slot_binding' : 'before_consume'),
+    });
+    if (prepared.kind !== 'won') {
+      const reason = /incompatible claim_id/.test(prepared.reason)
+        ? `claim mismatch: ${prepared.reason}`
+        : /lock_timeout/.test(prepared.reason)
+          ? `indeterminate reservation; fail-closed: ${prepared.reason}`
+          : prepared.reason;
+      return { kind: 'denied', reason: `launch_denied: ${reason}` };
     }
     turnProjectionFaultPoint(input, 'after_consume');
 
-    return { kind: 'won', assignmentId, runId, turnId, nonce: prepared.token };
+    return {
+      kind: 'won',
+      assignmentId: prepared.assignment_id,
+      runId: prepared.run_id,
+      turnId: prepared.turn_id,
+      nonce: prepared.nonce,
+      executionContractRef: prepared.execution_contract_ref,
+    };
   } catch (err) {
     // FAIL-CLOSED: identity reserved; degrade to denied, NEVER legacy.
     const detail = err instanceof Error ? err.message : String(err);
@@ -412,6 +373,7 @@ export async function dispatchReviewLoopTurn(
         dispatcherAgent: input.dispatcherAgent,
         dispatcherAgentId: input.dispatcherAgentId,
         sessionId: input.sessionId,
+        model: resolveModel(agent, { override: input.model }),
         isReviewer,
         cwd,
       });
@@ -442,7 +404,15 @@ export async function dispatchReviewLoopTurn(
         // ack-wrapper writes a turn-keyed completion sentinel.
         assignmentId = prep.assignmentId;
         result.assignment_id = prep.assignmentId;
-        turnEcho = { turn_id: prep.turnId, run_id: prep.runId, nonce: prep.nonce };
+        turnEcho = {
+          turn_id: prep.turnId,
+          run_id: prep.runId,
+          nonce: prep.nonce,
+          ...(prep.executionContractRef ? {
+            contract_hash: prep.executionContractRef.hash,
+            capability_snapshot_hash: prep.executionContractRef.snapshot_hash,
+          } : {}),
+        };
         runLegacyProjection = false;
       }
       // prep.kind === 'legacy' (fail-open BEFORE identity) → fall through unchanged.
@@ -500,6 +470,12 @@ export async function dispatchReviewLoopTurn(
       scope,
       worktreePath: claimResult.worktreePath,
       assignmentId,
+      executionContractRef: turnEcho?.contract_hash && turnEcho.capability_snapshot_hash ? {
+        version: 1,
+        hash: turnEcho.contract_hash,
+        snapshot_hash: turnEcho.capability_snapshot_hash,
+        turn_id: turnEcho.turn_id,
+      } : undefined,
       cwd, // pln#638 PR-6b — the context envelope reads the store
     });
 

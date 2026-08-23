@@ -77,6 +77,14 @@ function assertCompatible(existing: TurnReservation, input: PrepareAttemptInput)
     existing.iteration !== input.iteration && 'iteration',
     existing.completion_mode !== (input.completion_mode ?? 'file') && 'completion_mode',
     !sameExpectedArtifacts(existing.expected_artifacts, input.expected_artifacts) && 'expected_artifacts',
+    existing.execution_contract_ref !== undefined
+      && input.execution_contract_ref !== undefined
+      && JSON.stringify(existing.execution_contract_ref) !== JSON.stringify(input.execution_contract_ref)
+      && 'execution_contract_ref',
+    existing.capability_snapshot !== undefined
+      && input.capability_snapshot !== undefined
+      && JSON.stringify(existing.capability_snapshot) !== JSON.stringify(input.capability_snapshot)
+      && 'capability_snapshot',
   ].find(Boolean);
   if (mismatch) {
     throw new ReservationStateError(

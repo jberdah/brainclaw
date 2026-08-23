@@ -58,6 +58,7 @@ import { prepareTurnOwnedReviewDispatch, turnOwnedReviewEnabled } from '../core/
 import { prepareTurnExecution } from '../core/loops/turn-execution.js';
 import { removeWorktree } from '../core/worktree.js';
 import type { TurnEcho } from '../core/execution-adapters.js';
+import type { ExecutionContractRef } from '../core/execution-contract.js';
 import {
   createAssignment,
   generateAssignmentId,
@@ -692,7 +693,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     + 'to close the review loop on approve, or continue it on request_changes.';
 
   /** Build a coordinate brief: delegates to shared generateDispatchBrief(). */
-  const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string; assignmentId?: string; contextEnvelope?: boolean }): string => {
+  const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string; assignmentId?: string; contextEnvelope?: boolean; executionContractRef?: ExecutionContractRef }): string => {
     return generateDispatchBrief({
       task,
       agent: agentName,
@@ -700,6 +701,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       scope: options?.scope,
       worktreePath: options?.worktreePath,
       assignmentId: options?.assignmentId,
+      executionContractRef: options?.executionContractRef,
       // pln#638 PR-6b — the envelope must read the TARGET project's store: on a
       // cross-project dispatch, defaulting to process.cwd() would inline the
       // WRONG project's constraints/traps into the worker's brief.
@@ -1205,6 +1207,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
 
             let reviewAssignmentId: string | undefined;
             let reviewTurnEcho: TurnEcho | undefined;
+            let reviewExecutionContractRef: ExecutionContractRef | undefined;
             // pln#630 — turn-own the INITIAL reviewer dispatch (same default + kill-switch as the
             // fix cycle). Skipped for cross-project reviews (no local worktree/sentinel → they never
             // spawn here). WON: prepare minted the DETERMINISTIC assignment + run + turn()-bound the
@@ -1229,12 +1232,22 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
                 dispatcherAgent: senderAgent,
                 dispatcherAgentId: senderAgentId,
                 sessionId: connectionSessionId,
+                model: resolveModel(slot.agent ?? '', { override: req.model }),
                 isReviewer: true,
                 cwd: dispatchCwd,
               });
               if (prep.kind === 'won') {
                 reviewAssignmentId = prep.assignmentId; // deterministic — harvest correlates on it
-                reviewTurnEcho = { turn_id: prep.turnId, run_id: prep.runId, nonce: prep.nonce };
+                reviewExecutionContractRef = prep.executionContractRef;
+                reviewTurnEcho = {
+                  turn_id: prep.turnId,
+                  run_id: prep.runId,
+                  nonce: prep.nonce,
+                  ...(prep.executionContractRef ? {
+                    contract_hash: prep.executionContractRef.hash,
+                    capability_snapshot_hash: prep.executionContractRef.snapshot_hash,
+                  } : {}),
+                };
                 out.artifacts.push({ type: 'assignment', id: prep.assignmentId });
                 usedTurnOwned = true; // prepare already created the assignment + run + bound the slot
               } else if (prep.kind === 'denied') {
@@ -1293,6 +1306,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               scope: reviewScope,
               worktreePath: claimResult.worktreePath,
               assignmentId: reviewAssignmentId,
+              executionContractRef: reviewExecutionContractRef,
             });
             const queued = queueCoordinateMessage({
               agent: slot.agent ?? '',
@@ -1927,6 +1941,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               task: briefResult.text,
               cwd: dispatchCwd,
               worktree_path: claimResult.worktreePath,
+              model: resolveModel(slot.agent, { override: req.model }),
               assignment_tags: ['coordinate', 'ideate', 'loop', 'turn-owned'],
               run_tags: ['turn-owned', 'ideate', 'loop'],
             });
@@ -1960,6 +1975,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               turn_id: attempt.turn_id,
               run_id: attempt.run_id,
               nonce: attempt.nonce,
+              ...(attempt.execution_contract_ref ? {
+                contract_hash: attempt.execution_contract_ref.hash,
+                capability_snapshot_hash: attempt.execution_contract_ref.snapshot_hash,
+              } : {}),
             };
             artifacts.push({ type: 'assignment', id: criticAssignmentId });
 
@@ -1984,6 +2003,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               // and break the documented ~48K content cap + dispatch-envelope
               // math pinned by ideation-loop-e2e.
               contextEnvelope: false,
+              executionContractRef: attempt.execution_contract_ref,
             });
             const queued = queueCoordinateMessage({
               agent: slot.agent,

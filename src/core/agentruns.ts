@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AgentRunSchema, type AgentRun, type AgentRunStatus, type AgentRunTransport, type Assignment, type AssignmentArtifact } from './schema.js';
+import type { CapabilitySnapshot, ExecutionContractRef } from './execution-contract.js';
 import { resolveOwnerProjectId } from './config.js';
 import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
@@ -101,6 +102,43 @@ export function loadAgentRun(id: string, cwd?: string): AgentRun | undefined {
     } catch { /* not in this layout — try the other */ }
   }
   return undefined;
+}
+
+export interface ExecutionContractAnomalyInput {
+  source: NonNullable<AgentRun['execution_contract_anomaly']>['source'];
+  reason: string;
+  accepted_contract_hash?: string;
+  accepted_capability_snapshot_hash?: string;
+}
+
+/**
+ * Persist the first execution-contract anomaly for a run.
+ *
+ * The field is deliberately monotone: later correct-looking evidence cannot
+ * erase an already-observed post-crossing mismatch and reopen convergence.
+ */
+export function recordExecutionContractAnomaly(
+  id: string,
+  anomaly: ExecutionContractAnomalyInput,
+  cwd?: string,
+): AgentRun {
+  return mutate({ cwd }, () => {
+    const run = loadAgentRun(id, cwd);
+    if (!run) throw new Error(`AgentRun not found: ${id}`);
+    if (run.execution_contract_anomaly) return run;
+    const now = nowISO();
+    run.execution_contract_anomaly = {
+      detected_at: now,
+      source: anomaly.source,
+      reason: anomaly.reason,
+      accepted_contract_hash: anomaly.accepted_contract_hash,
+      accepted_capability_snapshot_hash: anomaly.accepted_capability_snapshot_hash,
+    };
+    run.updated_at = now;
+    run.last_event_at = now;
+    saveAgentRunUnlocked(run, cwd);
+    return run;
+  });
 }
 
 export interface ListAgentRunsFilter {
@@ -206,6 +244,8 @@ export interface CreateAgentRunOptions {
   shell?: string;
   pid?: number;
   provider_run_id?: string;
+  execution_contract_ref?: ExecutionContractRef;
+  capability_snapshot?: CapabilitySnapshot;
   tags?: string[];
 }
 
@@ -240,6 +280,8 @@ function buildAgentRun(options: CreateAgentRunOptions, cwd?: string): AgentRun {
     shell: options.shell,
     pid: options.pid,
     provider_run_id: options.provider_run_id,
+    execution_contract_ref: options.execution_contract_ref,
+    capability_snapshot: options.capability_snapshot,
     created_at: now,
     updated_at: now,
     last_event_at: now,
@@ -312,6 +354,20 @@ function assertAgentRunProjectionMatches(
   if (existing.project_id !== undefined && existing.project_id !== expected.project_id) {
     throw new AgentRunProjectionConflictError(expected.id, 'project_id differs');
   }
+  if (
+    existing.execution_contract_ref !== undefined
+    && expected.execution_contract_ref !== undefined
+    && JSON.stringify(existing.execution_contract_ref) !== JSON.stringify(expected.execution_contract_ref)
+  ) {
+    throw new AgentRunProjectionConflictError(expected.id, 'execution_contract_ref differs');
+  }
+  if (
+    existing.capability_snapshot !== undefined
+    && expected.capability_snapshot !== undefined
+    && JSON.stringify(existing.capability_snapshot) !== JSON.stringify(expected.capability_snapshot)
+  ) {
+    throw new AgentRunProjectionConflictError(expected.id, 'capability_snapshot differs');
+  }
   if (!RECOVERABLE_PROJECTION_RUN_STATUSES.has(existing.status)) {
     throw new AgentRunProjectionConflictError(expected.id, `existing status is terminal (${existing.status})`);
   }
@@ -333,9 +389,17 @@ export function ensureAgentRunProjection(
     const existing = loadAgentRun(options.id, cwd);
     if (existing) {
       const requiredTags = normalized.tags ?? [];
-      const enriched = requiredTags.every((tag) => existing.tags.includes(tag))
+      const missingContractRef = existing.execution_contract_ref === undefined && expected.execution_contract_ref !== undefined;
+      const missingCapabilitySnapshot = existing.capability_snapshot === undefined && expected.capability_snapshot !== undefined;
+      const missingTags = !requiredTags.every((tag) => existing.tags.includes(tag));
+      const enriched = !missingContractRef && !missingCapabilitySnapshot && !missingTags
         ? existing
-        : { ...existing, tags: [...new Set([...existing.tags, ...requiredTags])] };
+        : {
+          ...existing,
+          ...(missingContractRef ? { execution_contract_ref: expected.execution_contract_ref } : {}),
+          ...(missingCapabilitySnapshot ? { capability_snapshot: expected.capability_snapshot } : {}),
+          tags: [...new Set([...existing.tags, ...requiredTags])],
+        };
       assertAgentRunProjectionMatches(enriched, expected);
       if (enriched !== existing) {
         saveAgentRunUnlocked(enriched, cwd);
