@@ -23,14 +23,14 @@
  * `protocol.verify` → a typed `unconfigured` result; the agent-narrated path is unchanged.
  */
 import { spawnSync } from 'node:child_process';
-import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import { getLoop } from './store.js';
 import { withLoopLock } from './lock.js';
 import { addArtifactWithEvidence } from './verbs.js';
 import { artifactsInIteration } from './iteration-engine.js';
 import { evidenceDigest } from './evidence.js';
+import { eligibleArtifactsForPurpose } from './gate-policy.js';
+import { captureWorkspaceDigest } from './workspace-digest.js';
 import {
   VERIFY_DEFAULT_TIMEOUT_MS,
   LOOP_ARTIFACT_BODY_MAX_BYTES,
@@ -158,6 +158,7 @@ export function buildVerifyReportBody(
 ): VerifyReportBody {
   return fitBody({
     command: config.command.join(' '),
+    command_argv: config.command,
     exit_code: result.exit_code,
     passed: result.passed,
     duration_ms: result.duration_ms,
@@ -167,51 +168,6 @@ export function buildVerifyReportBody(
     stderr_tail: result.stderr_tail || undefined,
     ...bindings,
   });
-}
-
-function fallbackFiles(root: string, current = root): string[] {
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-    if (entry.name === '.brainclaw' || entry.name === '.git' || entry.name === 'node_modules') continue;
-    const absolute = path.join(current, entry.name);
-    if (entry.isDirectory()) files.push(...fallbackFiles(root, absolute));
-    else if (entry.isFile()) files.push(path.relative(root, absolute));
-  }
-  return files;
-}
-
-/** Digest the exact tracked/untracked workspace bytes around a verify run. */
-export function captureWorkspaceDigest(cwd: string): string {
-  const rootResult = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
-    encoding: 'utf8', shell: false, maxBuffer: 1024 * 1024,
-  });
-  const gitRoot = rootResult.status === 0 ? rootResult.stdout.trim() : undefined;
-  let files: string[];
-  let root: string;
-  if (gitRoot) {
-    root = path.resolve(gitRoot);
-    const listed = spawnSync('git', ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
-      encoding: 'buffer', shell: false, maxBuffer: 32 * 1024 * 1024,
-    });
-    files = listed.status === 0
-      ? listed.stdout.toString('utf8').split('\0').filter(Boolean)
-      : fallbackFiles(root);
-  } else {
-    root = path.resolve(cwd);
-    files = fallbackFiles(root);
-  }
-  const hash = crypto.createHash('sha256').update(root.normalize('NFC'));
-  for (const relative of [...new Set(files)].sort()) {
-    const absolute = path.resolve(root, relative);
-    try {
-      const stat = fs.lstatSync(absolute);
-      if (!stat.isFile()) continue;
-      hash.update('\0').update(relative.normalize('NFC')).update('\0').update(fs.readFileSync(absolute));
-    } catch {
-      hash.update('\0missing\0').update(relative.normalize('NFC'));
-    }
-  }
-  return hash.digest('hex');
 }
 
 export interface RunVerifyInput {
@@ -231,9 +187,10 @@ export interface RunVerifyResult {
   report_artifact_id?: string;
 }
 
-/** True when a verify_report already exists in this iteration (idempotency key = loop+iteration). */
+/** True when an authoritative, still-fresh engine report exists for this iteration. */
 function hasVerifyReportForIteration(thread: LoopThread, iteration: number): boolean {
-  return artifactsInIteration(thread, iteration).some((a) => a.type === 'verify_report');
+  const reports = artifactsInIteration(thread, iteration).filter((artifact) => artifact.type === 'verify_report');
+  return eligibleArtifactsForPurpose(thread, reports, 'command_green').eligible.length > 0;
 }
 
 /**
@@ -282,7 +239,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
   const runResult = runner(config);
   const workspaceAfter = captureWorkspaceDigest(config.cwd);
   const workspace_stable = workspaceBefore === workspaceAfter;
-  const report = buildVerifyReportBody(
+  const reportAfterRun = buildVerifyReportBody(
     config,
     { ...runResult, passed: runResult.passed && workspace_stable },
     { command_digest, workspace_digest: workspaceAfter, workspace_stable },
@@ -301,8 +258,18 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
       // landed (a concurrent verify won). Checking the snapshot (not the current)
       // iteration is what makes this correct after a concurrent advance (review F1).
       if (hasVerifyReportForIteration(thread, iteration)) {
-        return { thread, report, deduped: true };
+        return { thread, report: reportAfterRun, deduped: true };
       }
+      // Close the final out-of-lock race: the bytes verified above must still be the
+      // bytes present at the evidence commit boundary. A later gate independently
+      // repeats this freshness check so a post-commit mutation also fails closed.
+      const workspaceAtCommit = captureWorkspaceDigest(config.cwd);
+      const commitStable = workspace_stable && workspaceAtCommit === workspaceAfter;
+      const report = buildVerifyReportBody(
+        config,
+        { ...runResult, passed: runResult.passed && commitStable },
+        { command_digest, workspace_digest: workspaceAtCommit, workspace_stable: commitStable },
+      );
       const updated = addArtifactWithEvidence(
         {
           id: input.loop_id,
@@ -312,7 +279,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
             producer_kind: 'engine',
             producer_id: 'brainclaw:verify-command',
             command_digest,
-            workspace_digest: workspaceAfter,
+            workspace_digest: workspaceAtCommit,
           },
           artifact: {
             // Stamp the SNAPSHOT phase + iteration so the report is attributed to the

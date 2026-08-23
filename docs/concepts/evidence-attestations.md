@@ -16,7 +16,7 @@ An envelope binds:
 - the artifact digest, including id, phase, type, body/ref, producer,
   production time, critique links, and iteration;
 - the exact subject: loop, artifact, phase, iteration and, when available,
-  slot, turn, assignment, claim, run, launch nonce/epoch, execution-contract
+  slot, turn, assignment, claim, run, launch-nonce digest/epoch, execution-contract
   hash, command digest, and workspace digest;
 - a server-derived producer and ingress channel;
 - an observation time and explicit validity window;
@@ -84,9 +84,12 @@ threshold gates. If an envelope is present but invalid, legacy behavior is
 never used as a fallback.
 
 The engine snapshots the workspace bytes immediately before and after
-`verify_command`. A concurrent mutation changes the digest and forces the
-report red. The command and stable workspace digests are copied into both the
-report and its sealed subject; gate policy requires the two bindings to match.
+`verify_command`, then again at the evidence commit boundary. A concurrent
+mutation changes the digest and forces the report red. The command argv and
+its digest plus the stable workspace digest are copied into the report and its
+sealed subject. Gate policy requires those bindings to match the configured
+command and recomputes the current workspace digest whenever the gate is read;
+a post-verification mutation therefore invalidates an earlier green report.
 Reconciled worker evidence likewise binds the run, launch generation, and
 execution contract. Pre-P1 reservations retain a deterministic hash of their
 immutable legacy reservation fields so an in-flight historical attempt can
@@ -101,9 +104,9 @@ Negative convergence is fail-closed too: an invalid critique cannot be used
 to manufacture “no new critique”. After at least one full ideation cycle, a
 settled critique round with no eligible new critiques is evaluated before the
 quantitative critique gate. “Settled” is causal: the last trusted critic
-completion emits an engine-owned `critique_window_closed` artifact for that
-iteration. An open, assigned, or running critic turn therefore cannot create
-saturation merely by staying silent.
+successful completion emits an engine-owned `critique_window_closed` artifact
+for that iteration. An open, assigned, running, failed, or cancelled critic
+turn therefore cannot create saturation merely by staying silent.
 
 ## Rollout and legacy threads
 

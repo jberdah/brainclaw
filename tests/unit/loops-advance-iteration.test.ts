@@ -262,4 +262,23 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     assert.ok(result.loop.artifacts.some((artifact) =>
       artifact.type === 'critique_window_closed' && artifact.iteration === 2));
   });
+
+  it('a failed critic turn cannot close the critique window or manufacture saturation', () => {
+    const loop = openIdeation(cwd);
+    advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique
+    turn({ id: loop.id, slot_id: loop.slots[0]!.slot_id, actor: 'agt_test' }, cwd);
+    const failed = complete_turn({
+      id: loop.id,
+      slot_id: loop.slots[0]!.slot_id,
+      actor: 'agt_c',
+      caller_agent_id: 'agt_c',
+      outcome: 'failed',
+    }, cwd);
+    assert.equal(failed.slots[0]?.status, 'failed');
+    assert.equal(failed.artifacts.some((artifact) => artifact.type === 'critique_window_closed'), false);
+    assert.throws(
+      () => advance({ id: loop.id, actor: 'agt_test' }, cwd),
+      /phase_advance_blocked/,
+    );
+  });
 });

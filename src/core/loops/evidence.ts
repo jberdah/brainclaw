@@ -111,7 +111,7 @@ export function sealArtifactEvidence(
     assignment_id: context.assignment_id,
     claim_id: context.claim_id,
     run_id: context.run_id,
-    nonce: context.nonce,
+    nonce_digest: context.nonce ? evidenceDigest({ launch_nonce: context.nonce }) : undefined,
     attempt_epoch: context.attempt_epoch,
     execution_contract_hash: context.execution_contract_hash,
     command_digest: context.command_digest,

@@ -794,7 +794,7 @@ function completeTurnCommit(input: CompleteTurnCommitInput, cwd?: string): LoopT
   const critiqueWindowClosed = slot.phase === 'critique'
     && trustedCompletion
     && critiqueSlots.length > 0
-    && critiqueSlots.every((candidate) => ['done', 'failed', 'cancelled'].includes(candidate.status));
+    && critiqueSlots.every((candidate) => candidate.status === 'done');
   const alreadyClosed = nextArtifacts.some((artifact) =>
     artifact.type === 'critique_window_closed'
       && (artifact.iteration ?? 0) === current.iteration_count,

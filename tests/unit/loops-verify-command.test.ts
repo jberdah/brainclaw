@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { advance, openLoop } from '../../src/core/loops/index.js';
+import { add_artifact, advance, openLoop } from '../../src/core/loops/index.js';
 import { addArtifactWithEvidence } from '../../src/core/loops/verbs.js';
 import { getLoop, writeThreadFile } from '../../src/core/loops/store.js';
 import { hasPassingVerifyReportInIteration } from '../../src/core/loops/iteration-engine.js';
@@ -138,6 +138,44 @@ describe('pln#632 verify-command runner', () => {
     assert.equal(second.deduped, true, 'second call is deduped');
     const thread = getLoop(loop.id, cwd)!;
     assert.equal(thread.artifacts.filter((a) => a.type === 'verify_report').length, 1, 'exactly one verify_report');
+  });
+
+  it('a rejected public verify_report cannot suppress engine verification', () => {
+    const cwd = ws();
+    const loop = openImpl(cwd, ['echo', 'ok']);
+    add_artifact({
+      id: loop.id,
+      actor: 'agt_untrusted',
+      artifact: {
+        phase: loop.current_phase,
+        iteration: 0,
+        type: 'verify_report',
+        body: JSON.stringify({ command: 'fake', exit_code: 0, passed: true }),
+      },
+    }, cwd);
+
+    const result = runVerify({ loop_id: loop.id, actor: 'agt_i', runner: runnerReturning(GREEN) }, cwd);
+    assert.equal(result.deduped, false);
+    const reports = getLoop(loop.id, cwd)!.artifacts.filter((artifact) => artifact.type === 'verify_report');
+    assert.equal(reports.length, 2, 'the rejected audit report remains, and engine evidence is appended');
+    assert.equal(reports.at(-1)?.evidence?.producer.channel, 'verify_command');
+  });
+
+  it('a post-verification workspace mutation invalidates an earlier green report at gate time', () => {
+    const cwd = ws();
+    fs.writeFileSync(path.join(cwd, 'subject.txt'), 'verified');
+    const loop = openImpl(cwd, ['echo', 'ok']);
+    advance({ id: loop.id, actor: 'agt_test' }, cwd); // bind → execute
+    advance({ id: loop.id, actor: 'agt_test' }, cwd); // execute → verify
+    runVerify({ loop_id: loop.id, actor: 'agt_i', runner: runnerReturning(GREEN) }, cwd);
+    assert.equal(hasPassingVerifyReportInIteration(getLoop(loop.id, cwd)!, 0), true);
+
+    fs.writeFileSync(path.join(cwd, 'subject.txt'), 'changed after green');
+    assert.equal(hasPassingVerifyReportInIteration(getLoop(loop.id, cwd)!, 0), false);
+    assert.throws(
+      () => advance({ id: loop.id, actor: 'agt_test' }, cwd),
+      /phase_advance_blocked/,
+    );
   });
 
   it('an UNCONFIGURED loop → typed unconfigured, no artifact (agent-narrated path unchanged)', () => {

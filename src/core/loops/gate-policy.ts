@@ -9,6 +9,7 @@ import type {
   StopCondition,
 } from './types.js';
 import { evidenceDigest, validateArtifactEvidence } from './evidence.js';
+import { captureWorkspaceDigest } from './workspace-digest.js';
 
 export type EvidencePurpose = 'artifact' | 'reviewer_green' | 'command_green' | 'critic_signal';
 
@@ -29,7 +30,7 @@ type SubjectBinding =
   | 'slot_id'
   | 'turn_id'
   | 'run_id'
-  | 'nonce'
+  | 'nonce_digest'
   | 'attempt_epoch'
   | 'execution_contract_hash'
   | 'command_digest'
@@ -45,7 +46,7 @@ const OBSERVATION: GateRequirement = {
   right: 'gate:artifact',
   authorities: [
     { channel: 'complete_turn', producer_kind: 'slot', attestation: 'observation', issuer: 'brainclaw:artifact-commit', required_subject_fields: ['slot_id'] },
-    { channel: 'reconcile_turn', producer_kind: 'slot', attestation: 'observation', issuer: 'brainclaw:artifact-commit', required_subject_fields: ['slot_id', 'turn_id', 'run_id', 'nonce', 'attempt_epoch', 'execution_contract_hash', 'workspace_digest'] },
+    { channel: 'reconcile_turn', producer_kind: 'slot', attestation: 'observation', issuer: 'brainclaw:artifact-commit', required_subject_fields: ['slot_id', 'turn_id', 'run_id', 'nonce_digest', 'attempt_epoch', 'execution_contract_hash', 'workspace_digest'] },
     { channel: 'operator_input', producer_kind: 'slot', attestation: 'observation', issuer: 'brainclaw:artifact-commit', required_subject_fields: ['slot_id'] },
     { channel: 'operator_input', producer_kind: 'operator', attestation: 'observation', issuer: 'brainclaw:artifact-commit' },
     { channel: 'operator_input', producer_kind: 'engine', attestation: 'observation', issuer: 'brainclaw:artifact-commit' },
@@ -57,7 +58,7 @@ const APPROVAL: GateRequirement = {
   right: 'gate:reviewer_green',
   authorities: [
     { channel: 'complete_turn', producer_kind: 'slot', attestation: 'approval', issuer: 'brainclaw:review-slot', required_subject_fields: ['slot_id'] },
-    { channel: 'reconcile_turn', producer_kind: 'slot', attestation: 'approval', issuer: 'brainclaw:review-slot', required_subject_fields: ['slot_id', 'turn_id', 'run_id', 'nonce', 'attempt_epoch', 'execution_contract_hash', 'workspace_digest'] },
+    { channel: 'reconcile_turn', producer_kind: 'slot', attestation: 'approval', issuer: 'brainclaw:review-slot', required_subject_fields: ['slot_id', 'turn_id', 'run_id', 'nonce_digest', 'attempt_epoch', 'execution_contract_hash', 'workspace_digest'] },
   ],
 };
 const VERIFICATION: GateRequirement = {
@@ -206,7 +207,13 @@ function selectEligible(
         }
       }
       if (envelope.producer.channel === 'verify_command') {
-        let report: { command_digest?: string; workspace_digest?: string; workspace_stable?: boolean };
+        let report: {
+          command_argv?: string[];
+          command_digest?: string;
+          cwd?: string;
+          workspace_digest?: string;
+          workspace_stable?: boolean;
+        };
         try {
           report = JSON.parse(artifact.body ?? '{}') as typeof report;
         } catch {
@@ -214,10 +221,23 @@ function selectEligible(
         }
         if (
           report.workspace_stable !== true
+          || !report.command_argv
+          || evidenceDigest({ command: report.command_argv }) !== report.command_digest
+          || (thread.protocol?.verify
+            && evidenceDigest({ command: thread.protocol.verify.command }) !== report.command_digest)
           || report.command_digest !== envelope.subject.command_digest
           || report.workspace_digest !== envelope.subject.workspace_digest
         ) {
           rejected.push({ artifact_id: artifact.artifact_id, reason: 'verification_subject_mismatch' });
+          continue;
+        }
+        try {
+          if (!report.cwd || captureWorkspaceDigest(report.cwd) !== envelope.subject.workspace_digest) {
+            rejected.push({ artifact_id: artifact.artifact_id, reason: 'workspace_changed_after_verification' });
+            continue;
+          }
+        } catch {
+          rejected.push({ artifact_id: artifact.artifact_id, reason: 'workspace_freshness_unavailable' });
           continue;
         }
       }

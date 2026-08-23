@@ -389,7 +389,7 @@ export const EvidenceSubjectSchema = z.object({
   assignment_id: z.string().optional(),
   claim_id: z.string().optional(),
   run_id: z.string().optional(),
-  nonce: z.string().optional(),
+  nonce_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   attempt_epoch: z.number().int().nonnegative().optional(),
   execution_contract_hash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   command_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
@@ -474,6 +474,7 @@ export type EvidencePolicyBinding = z.infer<typeof EvidencePolicyBindingSchema>;
  */
 export const VerifyReportBodySchema = z.object({
   command: z.string().min(1),
+  command_argv: z.array(z.string()).min(1).optional(),
   exit_code: z.number().int().nullable(),
   passed: z.boolean(),
   duration_ms: z.number().int().nonnegative().optional(),

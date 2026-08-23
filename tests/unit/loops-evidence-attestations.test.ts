@@ -23,6 +23,7 @@ import {
   type StopCondition,
 } from '../../src/core/loops/index.js';
 import { sealArtifactEvidence } from '../../src/core/loops/evidence.js';
+import { captureWorkspaceDigest } from '../../src/core/loops/workspace-digest.js';
 
 const cleanup: string[] = [];
 afterEach(() => {
@@ -122,21 +123,24 @@ describe('EvidenceEnvelope v1 and declarative GatePolicy', () => {
     assert.equal(verdict.passed, false);
     assert.match(verdict.rejected[0]?.reason ?? '', /channel_not_allowed/);
 
+    const command = ['npm', 'test'];
+    const commandDigest = evidenceDigest({ command });
+    const workspaceDigest = captureWorkspaceDigest(cwd);
     const base: Omit<LoopArtifact, 'evidence'> = {
       artifact_id: 'art_engine_verified',
       phase: 'verify',
       iteration: 0,
       type: 'verify_report',
       body: JSON.stringify({
-        command: 'npm test', exit_code: 0, passed: true,
-        command_digest: 'a'.repeat(64), workspace_digest: 'b'.repeat(64), workspace_stable: true,
+        command: 'npm test', command_argv: command, exit_code: 0, passed: true, cwd,
+        command_digest: commandDigest, workspace_digest: workspaceDigest, workspace_stable: true,
       }),
       produced_by: 'brainclaw:verify-command',
       produced_at: loop.created_at,
     };
     const verified = sealArtifactEvidence(loop, base, {
       channel: 'verify_command', producer_kind: 'engine', producer_id: 'brainclaw:verify-command',
-      command_digest: 'a'.repeat(64), workspace_digest: 'b'.repeat(64),
+      command_digest: commandDigest, workspace_digest: workspaceDigest,
     });
     const withVerified = { ...loop, artifacts: [verified] };
     assert.equal(evaluateCommandGreen(withVerified, 0).passed, true);
@@ -381,6 +385,8 @@ describe('EvidenceEnvelope v1 and declarative GatePolicy', () => {
       slot_id: slot.slot_id, turn_id: 'turn_1', run_id: 'run_1', nonce: 'nonce_1', attempt_epoch: 0,
       execution_contract_hash: 'c'.repeat(64), workspace_digest: 'd'.repeat(64),
     });
+    assert.equal(JSON.stringify(complete.evidence).includes('nonce_1'), false, 'the bearer launch token is never persisted');
+    assert.equal(complete.evidence?.subject.nonce_digest, evidenceDigest({ launch_nonce: 'nonce_1' }));
     assert.equal(evaluateGateCondition(
       { ...loop, artifacts: [complete] },
       { kind: 'artifact_produced', phase: loop.current_phase, type: 'handoff' },
