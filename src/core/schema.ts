@@ -1184,6 +1184,9 @@ export const RuntimeEventTypeSchema = z.enum([
   // pln#521 P4 — a turn-owned loop artifact was harvested + integrated into the loop
   // by reconcileTurn (observability for the harvest path).
   'loop_artifact_harvested',
+  // AttemptAuthority v2 — causal takeover telemetry. The immutable close cell
+  // remains authoritative; this event is an operator-facing projection only.
+  'attempt_takeover',
 ]);
 export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
 
@@ -1213,6 +1216,9 @@ export const LaneResultSchema = z.object({
   turn_id: z.string().optional(),
   run_id: z.string().optional(),
   nonce: z.string().optional(),
+  /** AttemptAuthority v2 full-fence coordinates (required by v2 acceptance). */
+  attempt_epoch: z.number().int().nonnegative().optional(),
+  workspace_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   /** ExecutionContract v1 acceptance echoed by the worker/bootstrap. */
   execution_contract_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   capability_snapshot_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -1267,6 +1273,8 @@ export const RuntimeEventSchema = z.object({
   // `run_id` already present above; `nonce` == launch-generation token.
   turn_id: z.string().optional(),
   nonce: z.string().optional(),
+  attempt_epoch: z.number().int().nonnegative().optional(),
+  workspace_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   claim_id: z.string().optional(),
   message_id: z.string().optional(),
   plan_id: z.string().optional(),

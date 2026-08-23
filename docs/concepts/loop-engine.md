@@ -66,27 +66,30 @@ Claims, handoffs, and candidates remain the source of truth for their own data.
 
 Every dispatched turn crosses several boundaries — the loop mints identity,
 an assignment must be persisted, a run must be launched, evidence must
-eventually be accepted. `AttemptAuthority` is the single writer for that
-turn's identity and commit-decision fields; the Loop engine never
-double-writes them. It is a façade over the existing `TurnReservation` core
-in [`src/core/loops/attempt-reservation.ts`](../../src/core/loops/attempt-reservation.ts),
-not a new subsystem or a new journal. Its normative turn-owned chronology is
-`reserve → commit → arm → durable projections → consume → wonTransition ===
-true`. `prepareTurnExecution` applies it to worker phases of all five kinds and
-refuses `engine`/`manual` phases before reservation. Review and multi-agent
-ideation use it through their coordinator shortcuts; implementation, research
-and debug use the same contract when their driver dispatches a worker, even
-where the phase is still operator-driven. The pre-crossing callback creates or validates
-the Assignment and AgentRun, binds the active claim, and binds the slot. A turn
-crossed through that adapter is therefore harvestable; a pre-crossing crash is
-repairable by replaying the same deterministic ids.
+eventually be accepted. `AttemptAuthority` owns those execution decisions while
+the Loop Engine owns phases, artifacts, gates, and convergence. It is common to
+all five kinds and adds no event journal.
+
+`prepareTurnExecution` applies the same projections-before-crossing path to
+every worker phase and refuses `engine` or `manual` phases before reservation.
+The first physical generation follows `reserve → commit → durable projections
+→ launch(0)`. A fenced takeover keeps the same `turn_id` and `assignment_id`,
+but creates a new epoch, run, nonce, contract, and isolated workspace. Re-entry
+through the same common path projects that successor and races
+`launch(next_epoch)` immediately before spawn.
+
+Completion is accepted only on the full generation fence. Settlement and
+takeover contend on one immutable `close(epoch)` decision, so an old worker
+cannot settle after a successor wins. Mutable AgentRun and head records are
+replayable projections, not authority. See [Attempt authority](./attempt-authority.md)
+for the Windows-safe publish protocol, two-release activation, and recovery.
 
 Before reservation, that common adapter resolves the selected agent against a
 typed capability requirement and hashes an immutable ExecutionContract. The
 full contract lives on TurnReservation; Assignment and AgentRun carry the same
 hash/reference and capability snapshot before crossing. This is one shared
 dispatch substrate for all five protocols, not protocol-specific review
-metadata, and it adds no journal. See
+metadata. See
 [Execution contract and capability snapshot](./execution-contract.md).
 
 The contracted attempt then passes through a
@@ -244,6 +247,7 @@ type LoopEvent =
   | (LoopEventBase & { kind: 'phase_advanced'; from_phase: string; to_phase: string; iteration: number; reason?: string })
   | (LoopEventBase & { kind: 'turn_assigned'; slot_id: SlotId; phase: string; assignment_id?: string; input?: string; retry_of?: string /* prior event_id */ })
   | (LoopEventBase & { kind: 'turn_completed'; slot_id: SlotId; phase: string; artifact_id?: string; outcome: 'done' | 'failed' | 'cancelled'; failure_reason?: string })
+  | (LoopEventBase & { kind: 'attempt_generation_changed'; slot_id: SlotId; turn_id: string; assignment_id: string; from_epoch: number; to_epoch: number; from_run_id: string; to_run_id: string; close_digest: string; cause: string })
   | (LoopEventBase & { kind: 'artifact_added'; artifact_id: string; phase: string; type: string; produced_by?: SlotId })
   | (LoopEventBase & { kind: 'linked'; target: LoopRef })
   | (LoopEventBase & { kind: 'paused'; reason?: string })
@@ -337,6 +341,10 @@ Additional shared and engine-owned actions complete the lifecycle:
 - **pause** / **resume** — suspend a loop without closing (e.g. waiting on an external input).
 - **add_artifact** — attach an artifact to a phase without moving on.
 - **complete_turn** — close out a previously-assigned turn: flips `slot.status` to `'done'` (or `'failed' | 'cancelled'`), optionally attaches an artifact carrying the outcome. Emitted by the slot agent itself when its dispatched work returns. Separate from `turn` precisely because the dispatch is async. Authorization is strict: the caller's `agentId` must equal that slot's `agent_id`, unless the caller is the loop's `created_by`, which is the only admin override.
+- **takeover** — coordinator-only cross-kind recovery action. It closes the
+  active physical generation, arms a successor in a distinct isolated
+  workspace, and records `attempt_generation_changed`. It does not spawn; the
+  normal turn dispatch must still win the successor's launch cell.
 - **request_input** / **provide_input** — bounded, evidence-backed operator clarification usable by any protocol.
 - **bind** — implementation-loop engine action that binds and dispatches the linked sequence.
 - **verify** — implementation/debug engine action that runs the opener-configured command outside the loop lock, then records a verification-attested report.
@@ -365,6 +373,7 @@ type BclawLoopInput = BclawLoopCallerEnvelope & (
   | { intent: 'open';          kind: LoopKind; title: string; goal?: string; phases?: LoopPhase[]; slots?: Partial<LoopSlot>[]; linked?: LoopLinks; stop_condition?: StopCondition; mode?: ReviewMode /* review only; persisted to loop.protocol.review_mode; default 'asymmetric' */ }
   | { intent: 'turn';          loop_id: LoopId; slot_id?: SlotId; role?: string; input?: string; dispatch?: boolean; expected_version?: number }
   | { intent: 'complete_turn'; loop_id: LoopId; slot_id: SlotId; artifact?: Pick<LoopArtifact, 'phase' | 'type' | 'body' | 'ref' | 'addresses_critique'>; outcome?: 'done' | 'failed' | 'cancelled'; failure_reason?: string; expected_version?: number }
+  | { intent: 'takeover';      loop_id: LoopId; slot_id: SlotId; turn_id: string; expected_epoch: number; cause: string; liveness_evidence: string; external_effect_policy: 'none' | 'idempotent' | 'externally_fenced'; next_workspace_path: string; takeover_mode?: 'takeover' | 'retry' }
   | { intent: 'advance';       loop_id: LoopId; to_phase?: string; reason?: string; force?: boolean; expected_version?: number }
   | { intent: 'add_artifact';  loop_id: LoopId; artifact: Pick<LoopArtifact, 'phase' | 'type' | 'body' | 'ref' | 'addresses_critique'>; expected_version?: number }
   | { intent: 'pause';         loop_id: LoopId; reason?: string; expected_version?: number }

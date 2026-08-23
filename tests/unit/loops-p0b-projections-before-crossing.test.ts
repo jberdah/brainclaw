@@ -199,6 +199,29 @@ describe('P0B create-or-validate projections', () => {
     assert.equal(listAgentRuns(cwd, { assignment_id: f.assignmentId }).length, 1);
   });
 
+  it('preserves an explicit physical generation index for AttemptAuthority v2', () => {
+    const f = fixture(cwd);
+    const generationRunId = `${f.runId}_g2`;
+    const options = {
+      id: generationRunId,
+      short_label: generationRunId,
+      assignment_id: f.assignmentId,
+      claim_id: CLAIM_ID,
+      attempt_index: 2,
+      agent: AGENT,
+      agent_id: f.input.agentId,
+      transport: 'cli_spawn' as const,
+      status: 'created' as const,
+      scope: f.input.scope,
+      description: f.input.description,
+      worktree_path: f.input.worktreePath,
+      tags: ['turn-owned', 'loop', 'attempt-generation:2'],
+    };
+
+    assert.equal(ensureAgentRunProjection(options, cwd).run.attempt_index, 2);
+    assert.equal(ensureAgentRunProjection(options, cwd).run.attempt_index, 2);
+  });
+
   it('adopts and enriches a pre-P0B Assignment that omitted agent_id', () => {
     const f = fixture(cwd);
     const legacyOptions = {

@@ -19,7 +19,7 @@
  * here imports harvest or review-loop-close, so no import cycle is introduced.
  */
 import { createCoordinatorClaim, attachAssignmentMessageToClaim, ensureClaimAssignmentBinding, linkClaimToAssignment, loadClaim } from './claims.js';
-import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
+import { createAssignment, loadAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { turn } from './loops/verbs.js';
 import { getLoop } from './loops/store.js';
 import { generateDispatchBrief } from './dispatcher.js';
@@ -93,7 +93,12 @@ const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
 type TurnOwnedPrep =
   | { kind: 'legacy' }
   | { kind: 'denied'; reason: string }
-  | { kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string; executionContractRef?: ExecutionContractRef; harnessBinding: HarnessBinding };
+  | {
+    kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string;
+    attemptEpoch?: number; workspaceDigest?: string;
+    workspacePath: string;
+    executionContractRef?: ExecutionContractRef; harnessBinding: HarnessBinding;
+  };
 
 export interface PrepareTurnOwnedReviewInput {
   loopId: string;
@@ -240,6 +245,9 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
       runId: prepared.run_id,
       turnId: prepared.turn_id,
       nonce: prepared.nonce,
+      attemptEpoch: prepared.attempt_epoch,
+      workspaceDigest: prepared.workspace_digest,
+      workspacePath: prepared.workspace_path,
       executionContractRef: prepared.execution_contract_ref,
       harnessBinding,
     };
@@ -359,6 +367,7 @@ export async function dispatchReviewLoopTurn(
     let turnEcho: TurnEcho | undefined;
     let harnessBinding: HarnessBinding | undefined;
     let runLegacyProjection = true;
+    let executionWorktreePath = claimResult.worktreePath;
 
     // pln#630 — turn-owned (exactly-once) dispatch, now the DEFAULT + FAIL-CLOSED after
     // reserve. Kill-switch off (BRAINCLAW_TURN_OWNED_REVIEW=0) → runLegacyProjection stays
@@ -417,8 +426,12 @@ export async function dispatchReviewLoopTurn(
             contract_hash: prep.executionContractRef.hash,
             capability_snapshot_hash: prep.executionContractRef.snapshot_hash,
           } : {}),
+          ...(prep.attemptEpoch !== undefined ? { attempt_epoch: prep.attemptEpoch } : {}),
+          ...(prep.workspaceDigest ? { workspace_digest: prep.workspaceDigest } : {}),
         };
         harnessBinding = prep.harnessBinding;
+        executionWorktreePath = prep.workspacePath;
+        result.worktree_path = executionWorktreePath;
         runLegacyProjection = false;
       }
       // prep.kind === 'legacy' (fail-open BEFORE identity) → fall through unchanged.
@@ -474,13 +487,20 @@ export async function dispatchReviewLoopTurn(
       agent,
       claimId: claimResult.claimId,
       scope,
-      worktreePath: claimResult.worktreePath,
+      worktreePath: executionWorktreePath,
       assignmentId,
       executionContractRef: turnEcho?.contract_hash && turnEcho.capability_snapshot_hash ? {
         version: 1,
         hash: turnEcho.contract_hash,
         snapshot_hash: turnEcho.capability_snapshot_hash,
         turn_id: turnEcho.turn_id,
+      } : undefined,
+      attemptFence: turnEcho?.attempt_epoch !== undefined && turnEcho.workspace_digest ? {
+        turn_id: turnEcho.turn_id,
+        run_id: turnEcho.run_id,
+        nonce: turnEcho.nonce,
+        attempt_epoch: turnEcho.attempt_epoch,
+        workspace_digest: turnEcho.workspace_digest,
       } : undefined,
       cwd, // pln#638 PR-6b — the context envelope reads the store
     });
@@ -507,7 +527,7 @@ export async function dispatchReviewLoopTurn(
           scope,
           claim_id: claimResult.claimId,
           ...(assignmentId ? { assignment_id: assignmentId } : {}),
-          worktree_path: claimResult.worktreePath,
+          worktree_path: executionWorktreePath,
         },
       },
       cwd,
@@ -519,7 +539,12 @@ export async function dispatchReviewLoopTurn(
         attachAssignmentMessageToClaim(claimResult.claimId, msg.id, cwd);
         if (turnEcho) ensureClaimAssignmentBinding(claimResult.claimId, assignmentId, cwd);
         else linkClaimToAssignment(claimResult.claimId, assignmentId, cwd);
-        transitionAssignment(assignmentId, 'offered', { actor: input.dispatcherAgent }, cwd);
+        const logicalAssignment = loadAssignment(assignmentId, cwd);
+        if (logicalAssignment?.status === 'created' || logicalAssignment?.status === 'retrying') {
+          transitionAssignment(assignmentId, 'offered', { actor: input.dispatcherAgent }, cwd);
+        } else if (turnEcho?.attempt_epoch === undefined || logicalAssignment?.status !== 'started') {
+          transitionAssignment(assignmentId, 'offered', { actor: input.dispatcherAgent }, cwd);
+        }
         patchAssignmentMessageId(assignmentId, msg.id, cwd);
       } catch (linkErr) {
         result.error = `assignment linkage failed: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`;
@@ -535,7 +560,7 @@ export async function dispatchReviewLoopTurn(
     const execResult = await attemptExecution(invoke, {
       agent,
       autoExecute: true,
-      worktreePath: claimResult.worktreePath,
+      worktreePath: executionWorktreePath,
       claimId: claimResult.claimId,
       assignmentId,
       dispatcherAgent: input.dispatcherAgent,

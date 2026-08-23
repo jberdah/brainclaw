@@ -114,6 +114,20 @@ export const BclawLoopCompleteTurnSchema = z.object({
   ...CallerEnvelopeFields,
 });
 
+export const BclawLoopTakeoverSchema = z.object({
+  intent: z.literal('takeover'),
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  slot_id: z.string().min(1),
+  turn_id: z.string().min(1),
+  expected_epoch: z.number().int().nonnegative(),
+  cause: z.string().min(1),
+  liveness_evidence: z.string().min(1),
+  external_effect_policy: z.enum(['none', 'idempotent', 'externally_fenced']),
+  next_workspace_path: z.string().min(1),
+  takeover_mode: z.enum(['takeover', 'retry']).optional(),
+  ...CallerEnvelopeFields,
+});
+
 export const BclawLoopAdvanceSchema = z.object({
   intent: z.literal('advance'),
   loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
@@ -267,6 +281,7 @@ export const BclawLoopRequestSchema = z.discriminatedUnion('intent', [
   BclawLoopListSchema,
   BclawLoopTurnSchema,
   BclawLoopCompleteTurnSchema,
+  BclawLoopTakeoverSchema,
   BclawLoopAdvanceSchema,
   BclawLoopAddArtifactSchema,
   BclawLoopPauseSchema,
@@ -287,6 +302,7 @@ export const BCLAW_LOOP_INTENTS = [
   'list',
   'turn',
   'complete_turn',
+  'takeover',
   'advance',
   'add_artifact',
   'pause',

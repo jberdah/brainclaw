@@ -17,6 +17,7 @@ import { createRuntimeEvent } from './events.js';
 import { latestActivityMs, readHeartbeat } from './runtime-signals.js';
 import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
 import { loadAssignment } from './assignments.js';
+import { currentAttemptRunIdForAssignment } from './loops/attempt-reservation.js';
 
 /** Parse duration string like '4h', '30m' to ms. */
 function parseTtl(value: string): number {
@@ -835,6 +836,7 @@ const FUTURE_EVIDENCE_TOLERANCE_MS = 5 * 60_000;
 function freshestEvidenceAgeMs(claim: Claim, nowMs: number, cwd?: string): number | undefined {
   if (!claim.assignment_id) return undefined;
   const root = cwd ?? process.cwd();
+  const runId = currentAttemptRunIdForAssignment(claim.assignment_id, cwd);
   let freshest: number | undefined;
   const consider = (ms: number | undefined): void => {
     if (ms === undefined) return;
@@ -847,11 +849,11 @@ function freshestEvidenceAgeMs(claim: Claim, nowMs: number, cwd?: string): numbe
     if (freshest === undefined || normalised < freshest) freshest = normalised;
   };
   try {
-    const hb = readHeartbeat(root, claim.assignment_id, claim.worktree_path);
+    const hb = readHeartbeat(root, claim.assignment_id, claim.worktree_path, runId);
     if (hb.exists) consider(hb.mtimeMs);
   } catch { /* evidence is best-effort */ }
   try {
-    consider(latestActivityMs(root, claim.assignment_id, claim.worktree_path));
+    consider(latestActivityMs(root, claim.assignment_id, claim.worktree_path, runId));
   } catch { /* evidence is best-effort */ }
   return freshest;
 }

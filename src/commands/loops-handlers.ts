@@ -25,6 +25,8 @@ import {
   requestInput,
   resume,
   sweepPauseTimeouts,
+  takeoverLoopAttempt,
+  readLocalAuthorityHome,
   turn,
   VersionConflictError,
   withLoopLock,
@@ -221,7 +223,7 @@ function withLockedLoopMutation(
     intent: req.intent,
     agentId,
     scope: { kind: 'loop', loopId: req.loop_id },
-    expectedVersion: req.expected_version,
+    expectedVersion: 'expected_version' in req ? req.expected_version : undefined,
     clientRequestId: req.client_request_id,
     requestPayload: requestPayload(req),
     currentVersion: () => currentLoopVersion(req.loop_id, cwd),
@@ -490,6 +492,41 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
             summarizeLoop(loop),
           );
         });
+      }
+
+      case 'takeover': {
+        const authorityHome = readLocalAuthorityHome(options.cwd ?? process.cwd());
+        if (!authorityHome) {
+          return errorResponse('takeover', 'authority_home_unavailable', 'local store/device authority identity is not initialized', Date.now() - startMs);
+        }
+        const result = takeoverLoopAttempt({
+          loop_id: req.loop_id,
+          slot_id: req.slot_id,
+          turn_id: req.turn_id,
+          expected_epoch: req.expected_epoch,
+          authority_home: authorityHome,
+          actor,
+          actor_id: agentId,
+          writer_id: agentId,
+          cause: req.cause,
+          liveness_evidence: req.liveness_evidence,
+          external_effect_policy: req.external_effect_policy,
+          next_workspace_path: req.next_workspace_path,
+          mode: req.takeover_mode,
+          cwd: options.cwd ?? process.cwd(),
+        });
+        return successResponse(
+          'takeover',
+          {
+            ...result,
+            next_action: 'dispatch the same logical turn; the common path will project and contend on launch(next_epoch)',
+          },
+          [loopArtifactEntry(result.loop.id)],
+          [sideEffectUpdate('loop', result.loop.id)],
+          [],
+          Date.now() - startMs,
+          `✔ takeover ${result.turn_id} epoch=${result.attempt_epoch} run=${result.run_id} (armed, not spawned)`,
+        );
       }
 
       case 'advance': {

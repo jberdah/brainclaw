@@ -5,6 +5,17 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **AttemptAuthority v2 multi-run takeover.** A logical turn and Assignment can survive multiple isolated physical AgentRuns. Immutable no-clobber generation, launch, result, and close cells arbitrate settlement versus takeover without concurrently rewriting shared JSON files; signed two-release writer membership and authority-home checks fail closed before v2 writes. The `bclaw_assignment_update` and `bclaw_release_claim` MCP schemas now carry optional generation-fence coordinates, which become mandatory or settlement-managed when linked work uses v2.
+- **Agent-first MCP entry points for every Loop Engine workflow.** `bclaw_loop` now publishes direct `open` (with explicit `allow_orphan` ownership), `verify`, `request_input`, and `provide_input`, so implementation, research, and debug loops no longer depend on undocumented internal/CLI-only paths.
+
+### Changed
+
+- **AttemptAuthority v2 keeps Assignment logical.** Worker lifecycle calls may acknowledge, start, and heartbeat the current generation, but cannot terminalize the stable Assignment or release its Claim. Immutable settlement is recorded first; mutable Assignment, AgentRun, Claim, and loop projections are then replayed idempotently.
+
 ## [1.26.2] — 2026-08-22
 
 ### Fixed

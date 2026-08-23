@@ -110,6 +110,7 @@ describe('defaultExecutionAdapter', () => {
       stdoutLog: 'runtime/stdout.log',
       stderrLog: 'runtime/stderr.log',
       contractBootstrapPath: 'runtime/contract-bootstrap.cjs',
+      expectedWorkspacePath: process.cwd(),
     };
     for (const isWin32 of [false, true]) {
       const command = buildAckWrapCommand('agent-command', paths, isWin32, {
@@ -136,7 +137,12 @@ describe('defaultExecutionAdapter', () => {
       writeContractBootstrapScript(scriptPath);
 
       const identity = ['tat_bootstrap', 'run_bootstrap', 'nonce_bootstrap'] as const;
-      const accepted = spawnSync(process.execPath, [scriptPath, ackPath, ...identity, expectedContract, expectedSnapshot], {
+      const workspaceB64 = Buffer.from(dir, 'utf8').toString('base64url');
+      const normalizedDir = process.platform === 'win32'
+        ? fs.realpathSync.native(dir).toLowerCase()
+        : fs.realpathSync.native(dir);
+      const accepted = spawnSync(process.execPath, [scriptPath, ackPath, ...identity, expectedContract, expectedSnapshot, '', '', workspaceB64], {
+        cwd: dir,
         env: {
           ...process.env,
           BRAINCLAW_EXECUTION_CONTRACT_HASH: expectedContract,
@@ -151,10 +157,12 @@ describe('defaultExecutionAdapter', () => {
         nonce: identity[2],
         contract_hash: expectedContract,
         capability_snapshot_hash: expectedSnapshot,
+        cwd: normalizedDir,
       });
 
       fs.rmSync(ackPath);
-      const rejected = spawnSync(process.execPath, [scriptPath, ackPath, ...identity, expectedContract, expectedSnapshot], {
+      const rejected = spawnSync(process.execPath, [scriptPath, ackPath, ...identity, expectedContract, expectedSnapshot, '', '', workspaceB64], {
+        cwd: dir,
         env: {
           ...process.env,
           BRAINCLAW_EXECUTION_CONTRACT_HASH: '0'.repeat(64),
@@ -169,8 +177,10 @@ describe('defaultExecutionAdapter', () => {
         nonce: identity[2],
         contract_hash: '0'.repeat(64),
         capability_snapshot_hash: expectedSnapshot,
+        cwd: normalizedDir,
       });
-      const repeated = spawnSync(process.execPath, [scriptPath, ackPath, ...identity, expectedContract, expectedSnapshot], {
+      const repeated = spawnSync(process.execPath, [scriptPath, ackPath, ...identity, expectedContract, expectedSnapshot, '', '', workspaceB64], {
+        cwd: dir,
         env: {
           ...process.env,
           BRAINCLAW_EXECUTION_CONTRACT_HASH: expectedContract,
@@ -213,6 +223,7 @@ describe('defaultExecutionAdapter', () => {
         claimId: 'clm_manual_contract',
         assignmentId: 'asgn_manual_contract',
         ackRoot: dir,
+        worktreePath: dir,
         turnEcho: {
           turn_id: 'tat_manual_contract',
           run_id: 'run_manual_contract',
@@ -226,7 +237,7 @@ describe('defaultExecutionAdapter', () => {
       assert.match(manual.command, /BRAINCLAW_CAPABILITY_SNAPSHOT_HASH/);
       assert.match(manual.command, /bootstrap\.cjs/);
       assert.match(manual.command, /nonce_manual_contract/);
-      assert.ok(fs.existsSync(`${getAssignmentAckPath(dir, 'asgn_manual_contract')}.bootstrap.cjs`));
+      assert.ok(fs.existsSync(`${getAssignmentAckPath(dir, 'asgn_manual_contract', 'run_manual_contract')}.bootstrap.cjs`));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -285,6 +296,7 @@ describe('attemptExecution', () => {
         dispatcherAgent: 'test',
         assignmentId: 'asgn_contract_manual',
         cwd: dir,
+        worktreePath: dir,
         turnEcho: {
           turn_id: 'tat_contract_manual',
           run_id: 'run_contract_manual',

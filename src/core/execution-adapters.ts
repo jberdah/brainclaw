@@ -30,14 +30,26 @@ export interface AckWrapPaths {
   stderrLog: string;
   /** Child-process bootstrap that attests the effective environment before exec. */
   contractBootstrapPath?: string;
+  /** Workspace in which the worker must actually execute. */
+  expectedWorkspacePath?: string;
 }
 
 const CONTRACT_BOOTSTRAP_SOURCE = `'use strict';
 const fs = require('node:fs');
-const [ackPath, turnId, runId, nonce, expectedContractHash, expectedSnapshotHash] = process.argv.slice(2);
+const [ackPath, turnId, runId, nonce, expectedContractHash, expectedSnapshotHash, attemptEpoch, workspaceDigest, expectedWorkspaceB64] = process.argv.slice(2);
 const contractHash = process.env.BRAINCLAW_EXECUTION_CONTRACT_HASH || '';
 const snapshotHash = process.env.BRAINCLAW_CAPABILITY_SNAPSHOT_HASH || '';
-const accepted = contractHash === expectedContractHash && snapshotHash === expectedSnapshotHash;
+const normalize = (value) => {
+  let resolved = fs.realpathSync.native(value);
+  if (process.platform === 'win32') resolved = resolved.toLowerCase();
+  return resolved;
+};
+const expectedWorkspace = Buffer.from(expectedWorkspaceB64 || '', 'base64url').toString('utf8');
+const actualCwd = normalize(process.cwd());
+const accepted = contractHash === expectedContractHash
+  && snapshotHash === expectedSnapshotHash
+  && expectedWorkspace !== ''
+  && actualCwd === normalize(expectedWorkspace);
 let fd;
 try {
   fd = fs.openSync(ackPath, 'wx');
@@ -51,8 +63,11 @@ try {
     turn_id: turnId,
     run_id: runId,
     nonce,
+    ...(attemptEpoch ? { attempt_epoch: Number(attemptEpoch) } : {}),
+    ...(workspaceDigest ? { workspace_digest: workspaceDigest } : {}),
     contract_hash: contractHash,
     capability_snapshot_hash: snapshotHash,
+    cwd: actualCwd,
   }));
 } finally {
   fs.closeSync(fd);
@@ -86,6 +101,9 @@ export interface TurnEcho {
   /** Present for ExecutionContract v1 attempts; omitted for legacy reservations. */
   contract_hash?: string;
   capability_snapshot_hash?: string;
+  /** AttemptAuthority v2 full-fence coordinates. */
+  attempt_epoch?: number;
+  workspace_digest?: string;
 }
 
 // The turn-echo values are raw-embedded into a shell one-liner (see marker()),
@@ -103,7 +121,7 @@ export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, is
   if (turnEcho) {
     for (const [field, value] of Object.entries(turnEcho)) {
       if (value === undefined) continue;
-      if (!TURN_ECHO_SAFE.test(value)) {
+      if (!TURN_ECHO_SAFE.test(String(value))) {
         throw new Error(
           `buildAckWrapCommand: turnEcho.${field} must match ${TURN_ECHO_SAFE} to be shell-safe for the completion sentinel (got ${JSON.stringify(value)})`,
         );
@@ -124,6 +142,8 @@ export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, is
       nonce: turnEcho.nonce,
       ...(turnEcho.contract_hash ? { contract_hash: turnEcho.contract_hash } : {}),
       ...(turnEcho.capability_snapshot_hash ? { capability_snapshot_hash: turnEcho.capability_snapshot_hash } : {}),
+      ...(turnEcho.attempt_epoch !== undefined ? { attempt_epoch: turnEcho.attempt_epoch } : {}),
+      ...(turnEcho.workspace_digest ? { workspace_digest: turnEcho.workspace_digest } : {}),
       status,
     });
     return isWin32 ? `echo ${body}>"${p}"` : `printf '%s' '${body}' > "${p}"`;
@@ -135,7 +155,11 @@ export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, is
     }
     // This child reads the EFFECTIVE environment it received. It writes the
     // actual values and exits non-zero on mismatch, so `&&` prevents worker exec.
-    return `"${process.execPath}" "${paths.contractBootstrapPath}" "${paths.ackPath}" "${turnEcho.turn_id}" "${turnEcho.run_id}" "${turnEcho.nonce}" "${turnEcho.contract_hash}" "${turnEcho.capability_snapshot_hash}"`;
+    if (!paths.expectedWorkspacePath) {
+      throw new Error('buildAckWrapCommand: contracted turn requires expectedWorkspacePath');
+    }
+    const expectedWorkspaceB64 = Buffer.from(paths.expectedWorkspacePath, 'utf8').toString('base64url');
+    return `"${process.execPath}" "${paths.contractBootstrapPath}" "${paths.ackPath}" "${turnEcho.turn_id}" "${turnEcho.run_id}" "${turnEcho.nonce}" "${turnEcho.contract_hash}" "${turnEcho.capability_snapshot_hash}" "${turnEcho.attempt_epoch ?? ''}" "${turnEcho.workspace_digest ?? ''}" "${expectedWorkspaceB64}"`;
   })();
   const redirected = `${bashCommand} > "${paths.stdoutLog}" 2> "${paths.stderrLog}"`;
   return (
@@ -305,16 +329,18 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     ) {
       const signalRoot = options.ackRoot ?? options.worktreePath!;
       ensureRuntimeDirs(signalRoot);
-      const ackPath = getRuntimeSignalPath(signalRoot, options.assignmentId, 'ack');
+      const runtimeRunId = options.turnEcho?.run_id;
+      const ackPath = getRuntimeSignalPath(signalRoot, options.assignmentId, 'ack', runtimeRunId);
       const contractBootstrapPath = `${ackPath}.bootstrap.cjs`;
       writeContractBootstrapScript(contractBootstrapPath);
       const wrapped = buildAckWrapCommand(invoke.bashCommand, {
         ackPath,
-        completedPath: getRuntimeSignalPath(signalRoot, options.assignmentId, 'completed'),
-        failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId, 'failed'),
-        stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId, 'stdout'),
-        stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId, 'stderr'),
+        completedPath: getRuntimeSignalPath(signalRoot, options.assignmentId, 'completed', runtimeRunId),
+        failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId, 'failed', runtimeRunId),
+        stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId, 'stdout', runtimeRunId),
+        stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId, 'stderr', runtimeRunId),
         contractBootstrapPath,
+        expectedWorkspacePath: options.worktreePath,
       }, isWin32, options.turnEcho);
       const contractEnv = isWin32
         ? [
@@ -402,18 +428,20 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     if (useAckWrap) {
       const signalRoot = options.ackRoot ?? options.worktreePath!;
       ensureRuntimeDirs(signalRoot);
-      const ackPath = getRuntimeSignalPath(signalRoot, options.assignmentId!, 'ack');
+      const runtimeRunId = options.turnEcho?.run_id;
+      const ackPath = getRuntimeSignalPath(signalRoot, options.assignmentId!, 'ack', runtimeRunId);
       const contractBootstrapPath = `${ackPath}.bootstrap.cjs`;
       if (options.turnEcho?.contract_hash && options.turnEcho.capability_snapshot_hash) {
         writeContractBootstrapScript(contractBootstrapPath);
       }
       const wrappedCmd = buildAckWrapCommand(invoke.bashCommand, {
         ackPath,
-        completedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'completed'),
-        failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'failed'),
-        stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stdout'),
-        stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stderr'),
+        completedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'completed', runtimeRunId),
+        failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'failed', runtimeRunId),
+        stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stdout', runtimeRunId),
+        stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stderr', runtimeRunId),
         contractBootstrapPath,
+        expectedWorkspacePath: options.worktreePath,
       }, isWin32, options.turnEcho);
       child = spawn(wrappedCmd, [], {
         detached: !isWin32,

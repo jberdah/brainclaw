@@ -40,16 +40,18 @@ function runtimeDir(root: string): string {
  * `runtime/ack/<id>.ack` location (pln#476); the liveness signals live under
  * `runtime/signal/<id>.<signal>`.
  */
-export function getRuntimeSignalPath(root: string, assignmentId: string, signal: RuntimeSignal): string {
+export function getRuntimeSignalPath(root: string, assignmentId: string, signal: RuntimeSignal, runId?: string): string {
+  const key = runId ? `${assignmentId}.${runId}` : assignmentId;
   if (signal === 'ack') {
-    return path.join(runtimeDir(root), 'ack', `${assignmentId}.ack`);
+    return path.join(runtimeDir(root), 'ack', `${key}.ack`);
   }
-  return path.join(runtimeDir(root), 'signal', `${assignmentId}.${signal}`);
+  return path.join(runtimeDir(root), 'signal', `${key}.${signal}`);
 }
 
 /** Absolute path for a captured stream log (`runtime/log/<id>.{stdout,stderr}.log`). */
-export function getRuntimeLogPath(root: string, assignmentId: string, stream: 'stdout' | 'stderr'): string {
-  return path.join(runtimeDir(root), 'log', `${assignmentId}.${stream}.log`);
+export function getRuntimeLogPath(root: string, assignmentId: string, stream: 'stdout' | 'stderr', runId?: string): string {
+  const key = runId ? `${assignmentId}.${runId}` : assignmentId;
+  return path.join(runtimeDir(root), 'log', `${key}.${stream}.log`);
 }
 
 /**
@@ -61,8 +63,8 @@ export function getRuntimeLogPath(root: string, assignmentId: string, stream: 's
  * write, so briefs point step-0 here, and every heartbeat reader checks BOTH
  * locations.
  */
-export function getWorktreeHeartbeatPath(worktreePath: string, assignmentId: string): string {
-  return path.join(worktreePath, `.brainclaw-heartbeat-${assignmentId}`);
+export function getWorktreeHeartbeatPath(worktreePath: string, assignmentId: string, runId?: string): string {
+  return path.join(worktreePath, `.brainclaw-heartbeat-${assignmentId}${runId ? `-${runId}` : ''}`);
 }
 
 /** Ensure the ack / signal / log directories exist (best-effort, recursive). */
@@ -73,9 +75,9 @@ export function ensureRuntimeDirs(root: string): void {
   }
 }
 
-export function signalExists(root: string, assignmentId: string, signal: RuntimeSignal): boolean {
+export function signalExists(root: string, assignmentId: string, signal: RuntimeSignal, runId?: string): boolean {
   try {
-    return fs.existsSync(getRuntimeSignalPath(root, assignmentId, signal));
+    return fs.existsSync(getRuntimeSignalPath(root, assignmentId, signal, runId));
   } catch {
     return false;
   }
@@ -88,12 +90,15 @@ export interface ContractAckBody {
   nonce: string;
   contract_hash: string;
   capability_snapshot_hash: string;
+  attempt_epoch?: number;
+  workspace_digest?: string;
+  cwd?: string;
 }
 
 /** Read the bootstrap's effective-environment attestation. Empty legacy acks return undefined. */
-export function readContractAck(root: string, assignmentId: string): ContractAckBody | undefined {
+export function readContractAck(root: string, assignmentId: string, runId?: string): ContractAckBody | undefined {
   try {
-    const raw = fs.readFileSync(getRuntimeSignalPath(root, assignmentId, 'ack'), 'utf8').trim();
+    const raw = fs.readFileSync(getRuntimeSignalPath(root, assignmentId, 'ack', runId), 'utf8').trim();
     if (!raw) return undefined;
     const parsed = JSON.parse(raw) as Partial<ContractAckBody>;
     if (
@@ -111,6 +116,9 @@ export function readContractAck(root: string, assignmentId: string): ContractAck
         nonce: parsed.nonce,
         contract_hash: parsed.contract_hash,
         capability_snapshot_hash: parsed.capability_snapshot_hash,
+        ...(typeof parsed.attempt_epoch === 'number' ? { attempt_epoch: parsed.attempt_epoch } : {}),
+        ...(typeof parsed.workspace_digest === 'string' ? { workspace_digest: parsed.workspace_digest } : {}),
+        ...(typeof parsed.cwd === 'string' ? { cwd: parsed.cwd } : {}),
       };
     }
   } catch { /* absent, legacy or malformed */ }
@@ -154,10 +162,10 @@ function readHeartbeatFile(p: string): HeartbeatInfo {
  * worktree-local heartbeat — sandboxed workers can only write the latter. When
  * both exist, the freshest mtime wins.
  */
-export function readHeartbeat(root: string, assignmentId: string, worktreePath?: string): HeartbeatInfo {
-  const projectInfo = readHeartbeatFile(getRuntimeSignalPath(root, assignmentId, 'heartbeat'));
+export function readHeartbeat(root: string, assignmentId: string, worktreePath?: string, runId?: string): HeartbeatInfo {
+  const projectInfo = readHeartbeatFile(getRuntimeSignalPath(root, assignmentId, 'heartbeat', runId));
   const worktreeInfo = worktreePath
-    ? readHeartbeatFile(getWorktreeHeartbeatPath(worktreePath, assignmentId))
+    ? readHeartbeatFile(getWorktreeHeartbeatPath(worktreePath, assignmentId, runId))
     : { exists: false } as HeartbeatInfo;
   if (!projectInfo.exists) return worktreeInfo;
   if (!worktreeInfo.exists) return projectInfo;
@@ -176,6 +184,8 @@ export interface CompletionSignalBody {
   nonce: string;
   contract_hash?: string;
   capability_snapshot_hash?: string;
+  attempt_epoch?: number;
+  workspace_digest?: string;
   status: 'completed' | 'failed';
   /** ISO timestamp; '' when a legacy body omitted it. */
   at: string;
@@ -187,18 +197,18 @@ export interface CompletionSignalBody {
  * still produces a legacy presence-only marker, which stays a valid life-sign
  * via signalExists but is NOT accepted as turn-owned evidence (PR2b-c).
  */
-export function writeCompletionSignal(root: string, assignmentId: string, body: CompletionSignalBody): void {
-  const p = getRuntimeSignalPath(root, assignmentId, body.status);
+export function writeCompletionSignal(root: string, assignmentId: string, body: CompletionSignalBody, runId?: string): void {
+  const p = getRuntimeSignalPath(root, assignmentId, body.status, runId);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(body), 'utf-8');
 }
 
 /** Parse ONE turn-keyed sentinel body, or undefined if absent / legacy
  *  presence-only / non-JSON / missing correlation keys. Never throws. */
-function readOneCompletionSignal(root: string, assignmentId: string, status: 'completed' | 'failed'): CompletionSignalBody | undefined {
+function readOneCompletionSignal(root: string, assignmentId: string, status: 'completed' | 'failed', runId?: string): CompletionSignalBody | undefined {
   let raw: string;
   try {
-    raw = fs.readFileSync(getRuntimeSignalPath(root, assignmentId, status), 'utf-8').trim();
+    raw = fs.readFileSync(getRuntimeSignalPath(root, assignmentId, status, runId), 'utf-8').trim();
   } catch {
     return undefined; // sentinel absent
   }
@@ -219,6 +229,8 @@ function readOneCompletionSignal(root: string, assignmentId: string, status: 'co
         ...(typeof parsed.capability_snapshot_hash === 'string'
           ? { capability_snapshot_hash: parsed.capability_snapshot_hash }
           : {}),
+        ...(typeof parsed.attempt_epoch === 'number' ? { attempt_epoch: parsed.attempt_epoch } : {}),
+        ...(typeof parsed.workspace_digest === 'string' ? { workspace_digest: parsed.workspace_digest } : {}),
         status: parsed.status,
         at: typeof parsed.at === 'string' ? parsed.at : '',
       };
@@ -234,10 +246,10 @@ function readOneCompletionSignal(root: string, assignmentId: string, status: 'co
  * and WITHHOLD an irreversible auto-stop (spec §13 R4), rather than silently
  * collapsing to one. Legacy presence-only markers read as absent here.
  */
-export function readCompletionSignals(root: string, assignmentId: string): { completed?: CompletionSignalBody; failed?: CompletionSignalBody } {
+export function readCompletionSignals(root: string, assignmentId: string, runId?: string): { completed?: CompletionSignalBody; failed?: CompletionSignalBody } {
   const out: { completed?: CompletionSignalBody; failed?: CompletionSignalBody } = {};
-  const completed = readOneCompletionSignal(root, assignmentId, 'completed');
-  const failed = readOneCompletionSignal(root, assignmentId, 'failed');
+  const completed = readOneCompletionSignal(root, assignmentId, 'completed', runId);
+  const failed = readOneCompletionSignal(root, assignmentId, 'failed', runId);
   if (completed) out.completed = completed;
   if (failed) out.failed = failed;
   return out;
@@ -249,8 +261,8 @@ export function readCompletionSignals(root: string, assignmentId: string): { com
  * CALLERS THAT ACT IRREVERSIBLY must use {@link readCompletionSignals} instead
  * so a completed+failed contradiction is not hidden (spec §13 R4).
  */
-export function readCompletionSignal(root: string, assignmentId: string): CompletionSignalBody | undefined {
-  const both = readCompletionSignals(root, assignmentId);
+export function readCompletionSignal(root: string, assignmentId: string, runId?: string): CompletionSignalBody | undefined {
+  const both = readCompletionSignals(root, assignmentId, runId);
   return both.completed ?? both.failed;
 }
 
@@ -286,9 +298,9 @@ export function decodeOemAwareBuffer(buf: Buffer): string {
 }
 
 /** Read the tail of a captured stream log (for failed_silent diagnostics). */
-export function readLogTail(root: string, assignmentId: string, stream: 'stdout' | 'stderr', maxBytes = 2000): string {
+export function readLogTail(root: string, assignmentId: string, stream: 'stdout' | 'stderr', maxBytes = 2000, runId?: string): string {
   try {
-    const p = getRuntimeLogPath(root, assignmentId, stream);
+    const p = getRuntimeLogPath(root, assignmentId, stream, runId);
     const buf = fs.readFileSync(p);
     let slice = buf.length > maxBytes ? buf.subarray(buf.length - maxBytes) : buf;
     // A byte-offset tail can start mid-UTF-8-sequence; dropping leading
@@ -354,13 +366,13 @@ export function latestWorktreeFileMtimeMs(worktreePath: string, maxDepth = 4): n
  * fixing the false-`stalled` verdict (field debrief P1#1). Returns undefined
  * when nothing is observable.
  */
-export function latestActivityMs(root: string, assignmentId: string, worktreePath?: string): number | undefined {
+export function latestActivityMs(root: string, assignmentId: string, worktreePath?: string, runId?: string): number | undefined {
   let latest: number | undefined;
   const bump = (ms: number | undefined): void => {
     if (ms !== undefined && (latest === undefined || ms > latest)) latest = ms;
   };
   for (const stream of ['stdout', 'stderr'] as const) {
-    try { bump(fs.statSync(getRuntimeLogPath(root, assignmentId, stream)).mtimeMs); } catch { /* no log */ }
+    try { bump(fs.statSync(getRuntimeLogPath(root, assignmentId, stream, runId)).mtimeMs); } catch { /* no log */ }
   }
   if (worktreePath) bump(latestWorktreeFileMtimeMs(worktreePath));
   return latest;

@@ -19,6 +19,49 @@ import { appendAuditEntry } from './audit.js';
 import { appendEvent } from './event-log.js';
 import { createRuntimeEvent } from './events.js';
 import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
+import { findReservationByRunId } from './loops/attempt-reservation.js';
+import { resolveTurnGenerationChain } from './loops/attempt-generations.js';
+
+export class AgentRunFencedError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly activeRunId: string | null,
+    public readonly attemptEpoch: number,
+    public readonly authorityStatus: 'active' | 'settled' | 'cancelled',
+  ) {
+    super(
+      `AgentRun ${runId} is fenced by attempt epoch ${attemptEpoch}`
+      + `${activeRunId ? ` (authoritative run: ${activeRunId})` : ''}`
+      + ` [${authorityStatus}]`,
+    );
+    this.name = 'AgentRunFencedError';
+  }
+}
+
+/**
+ * Refuse late writes from an AgentRun superseded by attempt-authority v2.
+ *
+ * The immutable generation chain is authoritative; assignment status and the
+ * mutable head projection are deliberately not consulted. A settled latest
+ * generation may still finish its replayable projections after publishing its
+ * close cell. Controllers may explicitly override this guard only to project a
+ * terminal state onto the run that they just fenced.
+ */
+function assertAgentRunMutationAllowed(id: string, cwd?: string, allowFencedProjection = false): void {
+  if (allowFencedProjection) return;
+  const reservation = findReservationByRunId(id, cwd);
+  if (!reservation) return;
+  const chain = resolveTurnGenerationChain(reservation.store_root, reservation.turn_id);
+  if (!chain) return; // Legacy attempt authority remains compatible.
+  const latest = chain.latest_generation;
+  if (latest.run_id === id && (chain.status === 'active' || chain.status === 'settled')) return;
+  throw new AgentRunFencedError(
+    id,
+    chain.status === 'active' ? latest.run_id : null,
+    latest.attempt_epoch,
+    chain.status,
+  );
+}
 
 function agentRunsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('runs', cwd, mode);
@@ -122,6 +165,7 @@ export function recordExecutionContractAnomaly(
   anomaly: ExecutionContractAnomalyInput,
   cwd?: string,
 ): AgentRun {
+  assertAgentRunMutationAllowed(id, cwd);
   return mutate({ cwd }, () => {
     const run = loadAgentRun(id, cwd);
     if (!run) throw new Error(`AgentRun not found: ${id}`);
@@ -148,6 +192,7 @@ export function recordRuntimeCapabilityObservation(
   diagnostic?: AgentRun['harness_exit_diagnostic'],
   cwd?: string,
 ): AgentRun {
+  assertAgentRunMutationAllowed(id, cwd);
   return mutate({ cwd }, () => {
     const run = loadAgentRun(id, cwd);
     if (!run) throw new Error(`AgentRun not found: ${id}`);
@@ -435,14 +480,20 @@ function assertAgentRunProjectionMatches(
 }
 
 /**
- * Create-or-validate the deterministic P0 AgentRun projection for one logical turn.
- * Recovery never mints attempt 2 and never resets an existing live run to `created`.
+ * Create-or-validate a deterministic AgentRun projection for one physical
+ * generation of a logical turn. P0 callers omit `attempt_index` and therefore
+ * keep the legacy value 1; AttemptAuthority v2 supplies the immutable
+ * generation index. Recovery never changes an existing run's generation and
+ * never resets an existing live run to `created`.
  */
 export function ensureAgentRunProjection(
   options: CreateAgentRunOptions & { id: string },
   cwd?: string,
 ): EnsureAgentRunProjectionResult {
-  const normalized: CreateAgentRunOptions & { id: string } = { ...options, attempt_index: 1 };
+  const normalized: CreateAgentRunOptions & { id: string } = {
+    ...options,
+    attempt_index: options.attempt_index ?? 1,
+  };
   const expected = buildAgentRun(normalized, cwd);
   let created = false;
   let repaired = false;
@@ -485,6 +536,8 @@ export interface TransitionAgentRunOptions {
   actor_id?: string;
   pid?: number;
   provider_run_id?: string;
+  /** Controller-only projection after an immutable close cell fenced this run. */
+  allow_fenced_projection?: boolean;
 }
 
 export interface AgentRunTransitionResult {
@@ -499,6 +552,7 @@ export function transitionAgentRun(
   options: TransitionAgentRunOptions = {},
   cwd?: string,
 ): AgentRunTransitionResult {
+  assertAgentRunMutationAllowed(id, cwd, options.allow_fenced_projection);
   const run = loadAgentRun(id, cwd);
   if (!run) throw new Error(`AgentRun not found: ${id}`);
 
@@ -577,6 +631,7 @@ export function recordAgentRunProgress(
   options: AgentRunProgressOptions = {},
   cwd?: string,
 ): AgentRun {
+  assertAgentRunMutationAllowed(id, cwd);
   const run = loadAgentRun(id, cwd);
   if (!run) throw new Error(`AgentRun not found: ${id}`);
 

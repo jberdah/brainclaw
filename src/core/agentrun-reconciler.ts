@@ -34,6 +34,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { loadAgentRun, recordExecutionContractAnomaly, transitionAgentRun, type ListAgentRunsFilter, listAgentRuns } from './agentruns.js';
 import { loadClaim, releaseClaim } from './claims.js';
 import { loadAssignment } from './assignments.js';
@@ -43,6 +44,8 @@ import { readContractAck, readHeartbeat, readLogTail, signalExists, latestActivi
 import { validateWorkerContractAcceptance } from './execution-contract.js';
 import { findReservationByRunId, evidenceMatchesAttempt, launchGrant, revokeLaunchGrant } from './loops/attempt-reservation.js';
 import type { TurnReservation } from './loops/attempt-reservation.js';
+import { executionContractForGeneration } from './loops/attempt-authority.js';
+import { readLaunchDecision, resolveTurnGenerationChain } from './loops/attempt-generations.js';
 import { reconcileFailedTurn } from './loops/reconcile-turn.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
@@ -62,6 +65,15 @@ export const DEFAULT_HEALTH_CHECK_GRACE_MS = 60_000;
 export const DEFAULT_STALE_AFTER_MS = 30 * 60_000;
 export const DEFAULT_DEAD_PID_READ_SWEEP_AGE_MS = 5 * 60_000;
 export const DEFAULT_DEAD_PID_READ_SWEEP_LIMIT = 50;
+
+function normalizedWorkspace(value: string): string | undefined {
+  try {
+    const resolved = fs.realpathSync.native(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * pln#520 step 1 — a heartbeat older than this (with no completion signal) means
@@ -263,17 +275,24 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
   // coordination dir (the dispatcher's ackRoot), which is `cwd` for the
   // reconciler. Keyed by assignment_id.
   const signalRoot = cwd ?? process.cwd();
+  const signalReservation = findReservationByRunId(run.id, cwd);
+  let v2SignalRunId: string | undefined;
+  try {
+    if (signalReservation && resolveTurnGenerationChain(signalReservation.store_root, signalReservation.turn_id)) {
+      v2SignalRunId = run.id;
+    }
+  } catch { /* strict evidence handling below remains fail-closed */ }
   let completed_signal = false;
   let failed_signal = false;
   let heartbeat_exists = false;
   let heartbeat_age_ms: number | undefined;
   try {
-    completed_signal = signalExists(signalRoot, run.assignment_id, 'completed');
-    failed_signal = signalExists(signalRoot, run.assignment_id, 'failed');
+    completed_signal = signalExists(signalRoot, run.assignment_id, 'completed', v2SignalRunId);
+    failed_signal = signalExists(signalRoot, run.assignment_id, 'failed', v2SignalRunId);
     // sprint 1.5: also read the worktree-local heartbeat — the only location a
     // sandboxed worker can write (the project-root signal dir is outside its
     // writable roots).
-    const hb = readHeartbeat(signalRoot, run.assignment_id, run.worktree_path);
+    const hb = readHeartbeat(signalRoot, run.assignment_id, run.worktree_path, v2SignalRunId);
     heartbeat_exists = hb.exists;
     if (hb.exists && hb.mtimeMs !== undefined) heartbeat_age_ms = now - hb.mtimeMs;
   } catch { /* defensive */ }
@@ -283,7 +302,7 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
   // its heartbeat is frozen (written once at step 0).
   let fs_activity_age_ms: number | undefined;
   try {
-    const lastFs = latestActivityMs(signalRoot, run.assignment_id, run.worktree_path);
+    const lastFs = latestActivityMs(signalRoot, run.assignment_id, run.worktree_path, v2SignalRunId);
     if (lastFs !== undefined) fs_activity_age_ms = now - lastFs;
   } catch { /* defensive */ }
 
@@ -300,37 +319,50 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
     const reservation = findReservationByRunId(run.id, cwd);
     if (reservation) {
       turn_owned = true;
-      const bodies = readCompletionSignals(signalRoot, run.assignment_id);
-      const bootstrapAck = readContractAck(signalRoot, run.assignment_id);
+      const bodies = readCompletionSignals(signalRoot, run.assignment_id, v2SignalRunId);
+      const bootstrapAck = readContractAck(signalRoot, run.assignment_id, v2SignalRunId);
       const hasTerminalBody = bodies.completed !== undefined || bodies.failed !== undefined;
-      const bootstrapAccepted = !reservation.execution_contract_ref || (
+      const generationChain = resolveTurnGenerationChain(reservation.store_root, reservation.turn_id);
+      const generation = generationChain?.latest_generation;
+      const generationApplies = generation !== undefined && generation.run_id === run.id
+        && (generationChain?.status === 'active' || generationChain?.status === 'settled');
+      const generationLaunch = generationApplies
+        ? readLaunchDecision(reservation.store_root, reservation.turn_id, generation.attempt_epoch)
+        : undefined;
+      const expectedContractRef = generationApplies
+        ? executionContractForGeneration(reservation, generation).ref
+        : reservation.execution_contract_ref;
+      const bootstrapAccepted = !expectedContractRef || (
         bootstrapAck?.status === 'accepted'
         && bootstrapAck.turn_id === reservation.turn_id
-        && bootstrapAck.run_id === reservation.child_ids.run_id
-        && bootstrapAck.nonce === reservation.launch?.token
+        && bootstrapAck.run_id === (generationApplies ? generation.run_id : reservation.child_ids.run_id)
+        && bootstrapAck.nonce === (generationApplies ? generation.launch_nonce : reservation.launch?.token)
+        && (!generationApplies || bootstrapAck.cwd === normalizedWorkspace(generation.workspace_path))
+        && (!generationApplies || bootstrapAck.attempt_epoch === generation.attempt_epoch)
+        && (!generationApplies || bootstrapAck.workspace_digest === generation.workspace_digest)
         && validateWorkerContractAcceptance(
-          reservation.execution_contract_ref,
+          expectedContractRef,
           {
             contract_hash: bootstrapAck.contract_hash,
             capability_snapshot_hash: bootstrapAck.capability_snapshot_hash,
           },
-          reservation.launch?.status,
+          generationApplies ? generationLaunch?.decision : reservation.launch?.status,
         ).kind === 'accepted'
       );
-      if (reservation.execution_contract_ref && ((bootstrapAck && !bootstrapAccepted) || (hasTerminalBody && !bootstrapAccepted))) {
+      if (expectedContractRef && ((bootstrapAck && !bootstrapAccepted) || (hasTerminalBody && !bootstrapAccepted))) {
         contract_acceptance_anomaly = true;
       }
       const contractAccepted = (body: typeof bodies.completed): boolean => {
-        if (!reservation.execution_contract_ref) return true;
+        if (!expectedContractRef) return true;
         if (!bootstrapAccepted) return false;
         if (!body?.contract_hash || !body.capability_snapshot_hash) {
           contract_acceptance_anomaly = Boolean(body);
           return false;
         }
         const verdict = validateWorkerContractAcceptance(
-          reservation.execution_contract_ref,
+          expectedContractRef,
           { contract_hash: body.contract_hash, capability_snapshot_hash: body.capability_snapshot_hash },
-          reservation.launch?.status,
+          generationApplies ? generationLaunch?.decision : reservation.launch?.status,
         );
         if (verdict.kind !== 'accepted') contract_acceptance_anomaly = true;
         return verdict.kind === 'accepted';
@@ -340,11 +372,11 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
       // read-strict trusts the body, not the filename, review PR2b-c #C2).
       const matchedCompleted = bodies.completed !== undefined
         && bodies.completed.status === 'completed'
-        && evidenceMatchesAttempt(reservation, bodies.completed)
+        && evidenceMatchesAttempt(reservation, { ...bodies.completed, assignment_id: run.assignment_id })
         && contractAccepted(bodies.completed);
       const matchedFailed = bodies.failed !== undefined
         && bodies.failed.status === 'failed'
-        && evidenceMatchesAttempt(reservation, bodies.failed)
+        && evidenceMatchesAttempt(reservation, { ...bodies.failed, assignment_id: run.assignment_id })
         && contractAccepted(bodies.failed);
       if (matchedCompleted && matchedFailed) {
         // §13 R4 — a completed+failed contradiction WITHHOLDS both (never a

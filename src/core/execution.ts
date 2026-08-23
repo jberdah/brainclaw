@@ -68,13 +68,16 @@ function sleep(ms: number): Promise<void> {
  * bclaw_assignment_update; the ack file lets us recognize a healthy
  * spawn anyway).
  */
-export function getAssignmentAckPath(cwd: string, assignmentId: string): string {
-  return getRuntimeSignalPath(cwd, assignmentId, 'ack');
+export function getAssignmentAckPath(cwd: string, assignmentId: string, runId?: string): string {
+  return getRuntimeSignalPath(cwd, assignmentId, 'ack', runId);
 }
 
-function isAssignmentAcked(assignmentId: string, cwd: string): boolean {
+function isAssignmentAcked(assignmentId: string, cwd: string, runId?: string): boolean {
   // Fast path: the brief-ack sentinel was written by the worker shell.
-  if (fs.existsSync(getAssignmentAckPath(cwd, assignmentId))) return true;
+  if (fs.existsSync(getAssignmentAckPath(cwd, assignmentId, runId))) return true;
+  // A v2 generation must acknowledge its own run-scoped bootstrap. The stable
+  // Assignment may already be running/completed because of a prior epoch.
+  if (runId) return false;
   // Standard path: the worker called bclaw_assignment_update via MCP and
   // moved the assignment past the offered/created state.
   const assignment = loadAssignment(assignmentId, cwd);
@@ -85,24 +88,43 @@ async function waitForAssignmentHandshake(
   assignmentId: string,
   cwd: string,
   timeoutMs: number,
+  runId?: string,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (isAssignmentAcked(assignmentId, cwd)) return true;
+    if (isAssignmentAcked(assignmentId, cwd, runId)) return true;
     await sleep(100);
   }
-  return isAssignmentAcked(assignmentId, cwd);
+  return isAssignmentAcked(assignmentId, cwd, runId);
 }
 
-function contractAckMatches(assignmentId: string, cwd: string, turnEcho: TurnEcho): boolean {
+function normalizeWorkspacePath(value: string): string | undefined {
+  try {
+    const resolved = fs.realpathSync.native(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return undefined;
+  }
+}
+
+function contractAckMatches(
+  assignmentId: string,
+  cwd: string,
+  turnEcho: TurnEcho,
+  expectedWorkspacePath?: string,
+): boolean {
   if (!turnEcho.contract_hash || !turnEcho.capability_snapshot_hash) return true;
-  const parsed = readContractAck(cwd, assignmentId);
+  const parsed = readContractAck(cwd, assignmentId, turnEcho.run_id);
+  const expectedWorkspace = expectedWorkspacePath ? normalizeWorkspacePath(expectedWorkspacePath) : undefined;
   return parsed?.status === 'accepted'
     && parsed.turn_id === turnEcho.turn_id
     && parsed.run_id === turnEcho.run_id
     && parsed.nonce === turnEcho.nonce
     && parsed.contract_hash === turnEcho.contract_hash
-    && parsed.capability_snapshot_hash === turnEcho.capability_snapshot_hash;
+    && parsed.capability_snapshot_hash === turnEcho.capability_snapshot_hash
+    && (turnEcho.attempt_epoch === undefined || parsed.attempt_epoch === turnEcho.attempt_epoch)
+    && (turnEcho.workspace_digest === undefined || parsed.workspace_digest === turnEcho.workspace_digest)
+    && (!expectedWorkspace || parsed.cwd === expectedWorkspace);
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -404,7 +426,12 @@ export async function attemptExecution(
       const handshakeTimeoutMs =
         options.handshakeTimeoutMs ??
         (Number.isFinite(parsedEnvTimeout) && parsedEnvTimeout > 0 ? parsedEnvTimeout : 30_000);
-      const handshakeOk = await waitForAssignmentHandshake(options.assignmentId, options.cwd, handshakeTimeoutMs);
+      const handshakeOk = await waitForAssignmentHandshake(
+        options.assignmentId,
+        options.cwd,
+        handshakeTimeoutMs,
+        options.turnEcho?.run_id,
+      );
       if (!handshakeOk) {
         appendAuditEntry({
           actor: options.dispatcherAgent,
@@ -433,8 +460,13 @@ export async function attemptExecution(
           pid: result.pid,
         };
       }
-      if (options.turnEcho && !contractAckMatches(options.assignmentId, options.cwd, options.turnEcho)) {
-        const accepted = readContractAck(options.cwd, options.assignmentId);
+      if (options.turnEcho && !contractAckMatches(
+        options.assignmentId,
+        options.cwd,
+        options.turnEcho,
+        options.worktreePath,
+      )) {
+        const accepted = readContractAck(options.cwd, options.assignmentId, options.turnEcho.run_id);
         let anomalyPersistenceError: string | undefined;
         try {
           recordExecutionContractAnomaly(options.turnEcho.run_id, {

@@ -17,6 +17,13 @@ import {
 } from '../execution-contract.js';
 import { ExpectedArtifactSchema, type ExpectedArtifact } from './artifact-contract.js';
 import { acquireLock } from './lock.js';
+import {
+  readLaunchDecision as readV2LaunchDecision,
+  readInitialGeneration,
+  listAttemptGenerations,
+  resolveTurnGenerationChain,
+  type AttemptGeneration,
+} from './attempt-generations.js';
 
 export { ExpectedArtifactSchema, type ExpectedArtifact } from './artifact-contract.js';
 
@@ -515,7 +522,16 @@ export function listReservations(filter: { decision?: ReservationDecision } = {}
  * or legacy (→ presence-based acceptance). Returns undefined for legacy runs.
  */
 export function findReservationByRunId(runId: string, cwd?: string): TurnReservation | undefined {
-  return listReservations({}, cwd).find((r) => r.child_ids.run_id === runId);
+  return listReservations({}, cwd).find((reservation) => {
+    if (reservation.child_ids.run_id === runId) return true;
+    try {
+      const root = cwd ?? reservation.store_root;
+      const initial = readInitialGeneration(root, reservation.turn_id);
+      return initial ? listAttemptGenerations(root, initial).some((generation) => generation.run_id === runId) : false;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -533,6 +549,13 @@ export function findReservationByAssignmentId(assignmentId: string, cwd?: string
   // the turn-owned discriminator explicit — a `prepared`/`aborted` reservation must never
   // route a lane to reconcileTurn (it has no live launch generation to accept evidence for).
   return listReservations({ decision: 'committed' }, cwd).find((r) => r.child_ids.assignment_id === assignmentId);
+}
+
+/** Run-scoping key for runtime evidence; undefined preserves legacy assignment-scoped paths. */
+export function currentAttemptRunIdForAssignment(assignmentId: string, cwd?: string): string | undefined {
+  const reservation = findReservationByAssignmentId(assignmentId, cwd);
+  if (!reservation) return undefined;
+  return resolveTurnGenerationChain(reservation.store_root, reservation.turn_id)?.latest_generation.run_id;
 }
 
 /* ============================ launch-grant fence (PR2a, dec#138) ========== */
@@ -759,6 +782,16 @@ export function launchGrant(turnId: string, cwd?: string): TurnReservation['laun
  * read-strict acceptance path (PR2b-c) matches on. `undefined` until armed.
  */
 export function currentNonce(reservation: TurnReservation): string | undefined {
+  try {
+    const resolved = resolveTurnGenerationChain(reservation.store_root, reservation.turn_id);
+    if (resolved && (resolved.status === 'active' || resolved.status === 'settled')) {
+      const generation = resolved.latest_generation;
+      const launch = readV2LaunchDecision(reservation.store_root, reservation.turn_id, generation.attempt_epoch);
+      return launch?.decision === 'crossed' ? generation.launch_nonce : undefined;
+    }
+  } catch {
+    return undefined;
+  }
   // Only a LIVE generation (armed or crossed) has a current nonce. A revoked
   // grant means the worker never crossed → never spawned, so its token is a
   // dead generation and must not be reported as current (review PR2b-a #1).
@@ -777,8 +810,36 @@ export function currentNonce(reservation: TurnReservation): string | undefined {
  */
 export function evidenceMatchesAttempt(
   reservation: TurnReservation,
-  evidence: { turn_id?: string; run_id?: string; nonce?: string },
+  evidence: {
+    assignment_id?: string;
+    turn_id?: string;
+    run_id?: string;
+    nonce?: string;
+    attempt_epoch?: number;
+    contract_hash?: string;
+    workspace_digest?: string;
+  },
 ): boolean {
+  try {
+    const resolved = resolveTurnGenerationChain(reservation.store_root, reservation.turn_id);
+    if (resolved && (resolved.status === 'active' || resolved.status === 'settled')) {
+      const generation: AttemptGeneration = resolved.latest_generation;
+      const launch = readV2LaunchDecision(reservation.store_root, reservation.turn_id, generation.attempt_epoch);
+      if (launch?.decision !== 'crossed') return false;
+      return (
+        evidence.assignment_id === generation.assignment_id
+        && evidence.turn_id === generation.turn_id
+        && evidence.run_id === generation.run_id
+        && evidence.nonce === generation.launch_nonce
+        && evidence.attempt_epoch === generation.attempt_epoch
+        && evidence.contract_hash === generation.contract_hash
+        && evidence.workspace_digest === generation.workspace_digest
+      );
+    }
+    if (resolved) return false;
+  } catch {
+    return false;
+  }
   const nonce = currentNonce(reservation);
   if (!nonce) return false;
   return (

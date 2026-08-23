@@ -1,4 +1,7 @@
 export * from './types.js';
+export * from './attempt-generations.js';
+export * from './attempt-rollout.js';
+export * from './attempt-takeover.js';
 export {
   GATE_POLICY_VERSION,
   artifactEvidenceDigest,

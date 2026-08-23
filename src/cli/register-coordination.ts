@@ -425,7 +425,7 @@ export function registerCoordinationCommands(program: Command): void {
   // --- loop (drive loop turn verbs; pln#517 step 2) ---
   const loopCmd = program
     .command('loop')
-    .description('Drive a loop turn (turn / complete-turn / advance / add-artifact)');
+    .description('Drive loop turns, fenced takeovers, phase advances, and artifacts');
 
   loopCmd
     .command('turn <loop_id>')
@@ -456,6 +456,25 @@ export function registerCoordinationCommands(program: Command): void {
     });
 
   loopCmd
+    .command('takeover <loop_id>')
+    .description('Fence the active physical run and arm a fresh generation')
+    .requiredOption('--slot <slot_id>', 'Target slot id (lsl_...)')
+    .requiredOption('--turn-id <turn_id>', 'Stable logical turn id')
+    .requiredOption('--expected-epoch <n>', 'Currently active generation epoch')
+    .requiredOption('--cause <text>', 'Audited takeover cause')
+    .requiredOption('--liveness-evidence <text>', 'Evidence that the prior producer cannot safely continue')
+    .requiredOption('--external-effect-policy <policy>', 'none, idempotent, or externally_fenced')
+    .requiredOption('--next-workspace-path <path>', 'Existing isolated workspace for the new generation')
+    .requiredOption('--agent <agent>', 'Loop coordinator identity')
+    .option('--mode <mode>', 'takeover or retry', 'takeover')
+    .option('--json', 'Machine-readable output')
+    .action(async (loop_id, options) => {
+      const globalOpts = program.opts();
+      const { runLoopCommand } = await import('../commands/loop.js');
+      await runLoopCommand('takeover', { loop_id }, options, globalOpts.cwd);
+    });
+
+  loopCmd
     .command('advance <loop_id>')
     .description('Advance a loop to its next phase')
     .option('--to-phase <name>', 'Explicit target phase')
@@ -481,6 +500,54 @@ export function registerCoordinationCommands(program: Command): void {
       const globalOpts = program.opts();
       const { runLoopCommand } = await import('../commands/loop.js');
       await runLoopCommand('add-artifact', { loop_id }, options, globalOpts.cwd);
+    });
+
+  // --- attempt-authority (two-release writer guard; P4) ---
+  const attemptAuthorityCmd = program
+    .command('attempt-authority')
+    .description('Prepare, acknowledge and activate AttemptAuthority v2 writer compatibility');
+
+  attemptAuthorityCmd
+    .command('status')
+    .option('--json', 'Machine-readable output')
+    .action((options) => {
+      const globalOpts = program.opts();
+      return import('../commands/attempt-authority.js').then(({ runAttemptAuthorityCommand }) =>
+        runAttemptAuthorityCommand('status', { ...options, cwd: globalOpts.cwd }));
+    });
+
+  attemptAuthorityCmd
+    .command('prepare')
+    .requiredOption('--writers <agent_ids...>', 'Complete Release-A writer membership (registered agent ids)')
+    .option('--membership-epoch <n>', 'Membership epoch; defaults to active+1')
+    .option('--prepared-by <actor>', 'Audited operator/coordinator identity', 'operator')
+    .option('--json', 'Machine-readable output')
+    .action((options) => {
+      const globalOpts = program.opts();
+      return import('../commands/attempt-authority.js').then(({ runAttemptAuthorityCommand }) =>
+        runAttemptAuthorityCommand('prepare', { ...options, cwd: globalOpts.cwd }));
+    });
+
+  attemptAuthorityCmd
+    .command('ack')
+    .requiredOption('--membership-epoch <n>', 'Prepared membership epoch')
+    .requiredOption('--agent-id <agent_id>', 'Writer signing this ACK')
+    .option('--json', 'Machine-readable output')
+    .action((options) => {
+      const globalOpts = program.opts();
+      return import('../commands/attempt-authority.js').then(({ runAttemptAuthorityCommand }) =>
+        runAttemptAuthorityCommand('ack', { ...options, cwd: globalOpts.cwd }));
+    });
+
+  attemptAuthorityCmd
+    .command('activate')
+    .requiredOption('--membership-epoch <n>', 'Fully acknowledged membership epoch')
+    .option('--activated-by <actor>', 'Audited operator/coordinator identity', 'operator')
+    .option('--json', 'Machine-readable output')
+    .action((options) => {
+      const globalOpts = program.opts();
+      return import('../commands/attempt-authority.js').then(({ runAttemptAuthorityCommand }) =>
+        runAttemptAuthorityCommand('activate', { ...options, cwd: globalOpts.cwd }));
     });
 
   // --- reply (provide_input to an operator_question; pln#508 step 4) ---

@@ -28,6 +28,7 @@ import { closeIdeationLoopFromLaneResult } from '../core/ideation-loop-close.js'
 import { dispatchReviewLoopTurn, turnOwnedLoopEnabled } from '../core/review-loop-turn-dispatch.js';
 import { reconcileTurn, type ReconcileTurnResult } from '../core/loops/reconcile-turn.js';
 import { findReservationByAssignmentId, type TurnReservation } from '../core/loops/attempt-reservation.js';
+import { resolveTurnGenerationChain } from '../core/loops/attempt-generations.js';
 import { getLoop } from '../core/loops/store.js';
 import { phasePolicy } from '../core/loops/kind-policies.js';
 import { readCompletionSignals } from '../core/runtime-signals.js';
@@ -77,7 +78,12 @@ interface TurnOwnedLaneEvidence {
 function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): TurnOwnedLaneEvidence | undefined {
   const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
   if (!reservation) return undefined; // legacy lane (no reservation)
-  const completion = readCompletionSignals(cwd, reservation.child_ids.assignment_id).completed;
+  const chain = resolveTurnGenerationChain(cwd, reservation.turn_id);
+  const completion = readCompletionSignals(
+    cwd,
+    reservation.child_ids.assignment_id,
+    chain?.latest_generation.run_id,
+  ).completed;
   const nonce = lane.nonce ?? completion?.nonce;
   if (!nonce && !reservation.execution_contract_ref) return undefined;
   return {

@@ -9,6 +9,8 @@ export interface HarnessLaneIdentity {
   nonce?: string;
   execution_contract_hash?: string;
   capability_snapshot_hash?: string;
+  attempt_epoch?: number;
+  workspace_digest?: string;
 }
 
 export function parseHarnessOutcome(adapterId: string, observation: TransportObservation, adapterVersion?: string): HarnessResultClaim {

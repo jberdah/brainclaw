@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { loadAgentRun, recordRuntimeCapabilityObservation } from '../agentruns.js';
 import { loadAssignment } from '../assignments.js';
 import { findReservationByAssignmentId } from '../loops/attempt-reservation.js';
+import { executionContractForGeneration } from '../loops/attempt-authority.js';
+import { resolveTurnGenerationChain } from '../loops/attempt-generations.js';
 import { getRuntimeLogPath, readCompletionSignals, readContractAck } from '../runtime-signals.js';
 import type { LaneResult } from '../schema.js';
 import { normalizeHarnessClaimToLaneResult, parseHarnessOutcome } from './result.js';
@@ -29,7 +31,14 @@ export function harvestHarnessObservation(
 ): HarvestedHarnessObservation | undefined {
   const assignment = loadAssignment(assignmentId, cwd);
   const reservation = findReservationByAssignmentId(assignmentId, cwd);
-  const ref = reservation?.execution_contract_ref;
+  const resolvedGeneration = reservation ? resolveTurnGenerationChain(cwd, reservation.turn_id) : undefined;
+  const generation = resolvedGeneration && (resolvedGeneration.status === 'active' || resolvedGeneration.status === 'settled')
+    ? resolvedGeneration.latest_generation
+    : undefined;
+  const generationContract = reservation && generation
+    ? executionContractForGeneration(reservation, generation)
+    : undefined;
+  const ref = generationContract?.ref ?? reservation?.execution_contract_ref;
   const reservedHarness = reservation?.capability_snapshot?.resolved.harness;
   const projectedHarness = assignment?.capability_snapshot?.resolved.harness;
   if (reservedHarness && projectedHarness && JSON.stringify(reservedHarness) !== JSON.stringify(projectedHarness)) {
@@ -38,12 +47,12 @@ export function harvestHarnessObservation(
   const harness = reservedHarness ?? projectedHarness;
   if (!assignment || !reservation || !ref || !harness || harness.adapter_id === 'prompt-only') return undefined;
 
-  const signals = readCompletionSignals(cwd, assignmentId);
+  const signals = readCompletionSignals(cwd, assignmentId, generation?.run_id);
   const terminal = signals.completed ?? signals.failed;
   if (!terminal) return undefined;
 
-  const stdoutLog = getRuntimeLogPath(cwd, assignmentId, 'stdout');
-  const stderrLog = getRuntimeLogPath(cwd, assignmentId, 'stderr');
+  const stdoutLog = getRuntimeLogPath(cwd, assignmentId, 'stdout', generation?.run_id);
+  const stderrLog = getRuntimeLogPath(cwd, assignmentId, 'stderr', generation?.run_id);
   const bothTerminalSignals = Boolean(signals.completed && signals.failed);
   const observation = {
     exit_code: bothTerminalSignals ? undefined : signals.completed ? 0 : 1,
@@ -71,7 +80,7 @@ export function harvestHarnessObservation(
   const protocolStatus = claim.status === 'partial'
     ? 'partial'
     : protocolDiagnostics.length > 0 ? 'invalid' : claim.body ? 'valid' : 'absent';
-  const ack = readContractAck(cwd, assignmentId);
+  const ack = readContractAck(cwd, assignmentId, generation?.run_id);
   const missingHash = '0'.repeat(64);
   const runtimeObservation = {
     contract_hash: terminal.contract_hash ?? missingHash,
@@ -83,7 +92,8 @@ export function harvestHarnessObservation(
     accepted_contract_hash: ack?.contract_hash,
     accepted_capability_snapshot_hash: ack?.capability_snapshot_hash,
   };
-  const run = loadAgentRun(reservation.child_ids.run_id, cwd);
+  const activeRunId = generation?.run_id ?? reservation.child_ids.run_id;
+  const run = loadAgentRun(activeRunId, cwd);
   if (run && persist) {
     recordRuntimeCapabilityObservation(run.id, runtimeObservation, {
       adapter_id: harness.adapter_id,
@@ -98,8 +108,10 @@ export function harvestHarnessObservation(
     lane: normalizeHarnessClaimToLaneResult(claim, {
       assignment_id: assignmentId,
       turn_id: reservation.turn_id,
-      run_id: reservation.child_ids.run_id,
+      run_id: activeRunId,
       nonce: terminal.nonce,
+      attempt_epoch: terminal.attempt_epoch,
+      workspace_digest: terminal.workspace_digest,
       execution_contract_hash: terminal.contract_hash,
       capability_snapshot_hash: terminal.capability_snapshot_hash,
     }),

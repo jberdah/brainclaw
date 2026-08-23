@@ -80,6 +80,13 @@ export const ReleaseClaimRequestSchema = z.object({
       'Opt-in override for a trusted+ caller releasing a claim they do NOT own (cross-agent teardown, ghost-claim cleanup). Rejected for contributor-level callers; audited when used. trp#928.',
     )
     .optional(),
+  /** AttemptAuthority v2 fence; mandatory for a worker-owned claim linked to a v2 Assignment. */
+  turn_id: z.string().optional(),
+  run_id: z.string().optional(),
+  nonce: z.string().optional(),
+  attempt_epoch: z.number().int().nonnegative().optional(),
+  execution_contract_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  workspace_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 export type ClaimRequest = z.infer<typeof ClaimRequestSchema>;

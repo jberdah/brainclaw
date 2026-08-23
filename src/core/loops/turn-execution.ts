@@ -17,8 +17,16 @@ import {
 } from '../execution-contract.js';
 import { resolveHarnessBinding } from '../harness-adapters/index.js';
 import { bindTurnProjection } from './verbs.js';
-import { deriveChildIds, deriveTurnId, getReservation, type TurnReservation } from './attempt-reservation.js';
-import { prepareAttempt, projectAndCross } from './attempt-authority.js';
+import { deriveChildIds, deriveTurnId, getReservation, launchGrant, type TurnReservation } from './attempt-reservation.js';
+import {
+  bootstrapAttemptAuthorityV2,
+  crossActiveAttemptGenerationV2,
+  executionContractForGeneration,
+  prepareAttempt,
+  projectAndCross,
+} from './attempt-authority.js';
+import { resolveTurnGenerationChain } from './attempt-generations.js';
+import { readLocalAuthorityHome, resolveActiveAttemptRollout } from './attempt-rollout.js';
 import { getLoop } from './store.js';
 import { phasePolicy } from './kind-policies.js';
 import type { LoopKind } from './types.js';
@@ -42,6 +50,10 @@ export interface TurnExecutionProjectionInput {
   worktree_path?: string;
   assignment_tags?: string[];
   run_tags?: string[];
+  /** Physical generation index (1-based AgentRun projection). */
+  attempt_index?: number;
+  execution_contract_ref?: ExecutionContractRef;
+  capability_snapshot?: CapabilitySnapshot;
   on_projection?: (stage: TurnProjectionStage) => void;
 }
 
@@ -62,6 +74,8 @@ export function ensureTurnExecutionProjections(
     dispatcher_session_id: input.dispatcher_session_id,
     scope: input.scope,
     description: input.description,
+    // Assignment is the stable logical attempt. Its contract projection stays
+    // generation-zero; each physical AgentRun below carries its own contract.
     execution_contract_ref: reservation.execution_contract_ref,
     capability_snapshot: reservation.capability_snapshot,
     tags: input.assignment_tags ?? ['coordinate', 'loop', 'turn-owned'],
@@ -73,7 +87,7 @@ export function ensureTurnExecutionProjections(
     short_label: input.run_id,
     assignment_id: input.assignment_id,
     claim_id: reservation.claim_id,
-    attempt_index: 1,
+    attempt_index: input.attempt_index ?? 1,
     agent: input.agent,
     agent_id: input.agent_id,
     transport: 'cli_spawn',
@@ -81,8 +95,8 @@ export function ensureTurnExecutionProjections(
     scope: input.scope,
     description: input.description,
     worktree_path: input.worktree_path,
-    execution_contract_ref: reservation.execution_contract_ref,
-    capability_snapshot: reservation.capability_snapshot,
+    execution_contract_ref: input.execution_contract_ref ?? reservation.execution_contract_ref,
+    capability_snapshot: input.capability_snapshot ?? reservation.capability_snapshot,
     tags: input.run_tags ?? ['turn-owned', 'loop'],
   }, cwd);
   input.on_projection?.('run');
@@ -138,6 +152,8 @@ export interface PrepareTurnExecutionInput {
   };
   on_authority_stage?: (stage: 'reserved' | 'committed' | 'armed') => void;
   on_projection?: (stage: TurnProjectionStage) => void;
+  /** Fault-injection/telemetry seam around the one-time v1→v2 cutover. */
+  on_cutover_stage?: (stage: 'legacy_crossed' | 'initial_anchored' | 'v2_anchored') => void;
 }
 
 export type PrepareTurnExecutionResult =
@@ -150,6 +166,10 @@ export type PrepareTurnExecutionResult =
     contract_status: 'contracted' | 'legacy_uncontracted';
     execution_contract_ref?: ExecutionContractRef;
     capability_snapshot?: CapabilitySnapshot;
+    attempt_epoch?: number;
+    workspace_digest?: string;
+    /** Authoritative physical workspace for this generation. */
+    workspace_path: string;
   }
   | {
     kind: 'denied';
@@ -347,15 +367,148 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   const contractRef = contract
     ? (existingReservation?.execution_contract_ref ?? executionContractRef(contract, capabilitySnapshot))
     : undefined;
+  const v2 = resolveTurnGenerationChain(input.cwd, turnId);
+  const activeRollout = resolveActiveAttemptRollout(input.cwd);
+  const localHome = readLocalAuthorityHome(input.cwd);
+  if (activeRollout && (!localHome || !contractRef)) {
+    return preconditionDenied(
+      !localHome
+        ? 'AttemptAuthority v2 rollout is active but this store/device has no local authority_home'
+        : 'AttemptAuthority v2 rollout is active but the turn has no immutable execution contract',
+    );
+  }
+  // Crash-safe v1→v2 cutover repair. The legacy launch fence is crossed before
+  // the immutable generation-zero cells are published. If the coordinator dies
+  // in that narrow window, a replay must materialize/adopt the v2 anchor so the
+  // turn can be fenced/taken over. It MUST NOT return spawn authority: the
+  // pre-crash caller may have received the crossed grant, so only a successor
+  // generation can safely recover liveness without a duplicate launch.
+  if (
+    activeRollout
+    && localHome
+    && contractRef
+    && !v2
+    && existingReservation?.decision === 'committed'
+    && launchGrant(turnId, input.cwd)?.status === 'crossed'
+  ) {
+    try {
+      bootstrapAttemptAuthorityV2({
+        turn_id: turnId,
+        authority_home: localHome,
+        actor: input.dispatcher_agent_id ?? input.dispatcher_agent,
+        writer_id: input.dispatcher_agent_id ?? input.dispatcher_agent,
+        cwd: input.cwd,
+        workspace_path: input.worktree_path ?? input.cwd,
+        on_stage: (stage) => input.on_cutover_stage?.(
+          stage === 'initial_anchored' ? 'initial_anchored' : 'v2_anchored'
+        ),
+      });
+      return authorityDenied(
+        input,
+        turnId,
+        'repaired v1→v2 cutover after a crossed legacy launch; spawn authority remains fenced — use takeover',
+      );
+    } catch (error) {
+      return authorityDenied(input, turnId, error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (v2?.status === 'active' && v2.latest_generation.attempt_epoch === 0) {
+    if (activeRollout && localHome && contractRef) {
+      try {
+        bootstrapAttemptAuthorityV2({
+          turn_id: turnId,
+          authority_home: localHome,
+          actor: input.dispatcher_agent_id ?? input.dispatcher_agent,
+          writer_id: input.dispatcher_agent_id ?? input.dispatcher_agent,
+          cwd: input.cwd,
+          workspace_path: v2.latest_generation.workspace_path,
+        });
+      } catch (error) {
+        return authorityDenied(input, turnId, error instanceof Error ? error.message : String(error));
+      }
+    }
+    return authorityDenied(input, turnId, 'generation zero launch is already crossed; use takeover for recovery');
+  }
   if (input.accepted_execution_contract && !contractRef) {
     return preconditionDenied('legacy uncontracted reservation cannot claim worker contract acceptance');
   }
-  if (input.accepted_execution_contract && contractRef) {
+  if (input.accepted_execution_contract && contractRef && !(v2?.status === 'active' && v2.latest_generation.attempt_epoch > 0)) {
     const acceptance = validateWorkerContractAcceptance(contractRef, input.accepted_execution_contract, undefined);
     if (acceptance.kind !== 'accepted') {
       return preconditionDenied(
         `worker contract mismatch before crossing: expected ${contractRef.hash}/${contractRef.snapshot_hash}, accepted ${input.accepted_execution_contract.contract_hash}/${input.accepted_execution_contract.capability_snapshot_hash}; abort and reselect`,
       );
+    }
+  }
+
+  // A takeover closes the old epoch and embeds a fresh active generation in
+  // close(epoch). Re-entering the common worker path projects that generation
+  // and contends on its immutable launch cell; the first caller wins spawn
+  // authority, every replay is adopted and MUST NOT spawn.
+  if (v2?.status === 'active' && v2.latest_generation.attempt_epoch > 0) {
+    const reservation = existingReservation;
+    if (!reservation || !localHome) {
+      return authorityDenied(input, turnId, 'AttemptAuthority v2 authority_home is unavailable');
+    }
+    try {
+      const generation = v2.latest_generation;
+      const generationContract = executionContractForGeneration(reservation, generation);
+      if (input.accepted_execution_contract) {
+        const acceptance = validateWorkerContractAcceptance(
+          generationContract.ref,
+          input.accepted_execution_contract,
+          undefined,
+        );
+        if (acceptance.kind !== 'accepted') {
+          return preconditionDenied('worker rejected the active generation execution contract before crossing');
+        }
+      }
+      ensureTurnExecutionProjections(reservation, {
+        loop_id: loop.id,
+        slot_id: input.slot_id,
+        turn_id: turnId,
+        assignment_id: generation.assignment_id,
+        run_id: generation.run_id,
+        agent: input.agent,
+        agent_id: input.agent_id,
+        dispatcher_agent: input.dispatcher_agent,
+        dispatcher_agent_id: input.dispatcher_agent_id,
+        dispatcher_session_id: input.dispatcher_session_id,
+        scope: input.scope,
+        description: input.description,
+        task: input.task,
+        worktree_path: generation.workspace_path,
+        assignment_tags: input.assignment_tags,
+        run_tags: [...(input.run_tags ?? ['turn-owned', 'loop']), `attempt-generation:${generation.attempt_epoch}`],
+        attempt_index: generation.attempt_epoch + 1,
+        execution_contract_ref: generationContract.ref,
+        capability_snapshot: reservation.capability_snapshot,
+        on_projection: input.on_projection,
+      }, input.cwd);
+      const crossing = crossActiveAttemptGenerationV2(
+        turnId,
+        generation.attempt_epoch,
+        localHome,
+        input.dispatcher_agent_id ?? input.dispatcher_agent,
+        input.dispatcher_agent_id ?? input.dispatcher_agent,
+        input.cwd,
+      );
+      if (!crossing.won) return authorityDenied(input, turnId, 'attempt generation launch already crossed');
+      return {
+        kind: 'won',
+        turn_id: turnId,
+        assignment_id: generation.assignment_id,
+        run_id: generation.run_id,
+        nonce: generation.launch_nonce,
+        attempt_epoch: generation.attempt_epoch,
+        workspace_digest: generation.workspace_digest,
+        workspace_path: generation.workspace_path,
+        contract_status: 'contracted',
+        execution_contract_ref: generationContract.ref,
+        capability_snapshot: reservation.capability_snapshot,
+      };
+    } catch (error) {
+      return authorityDenied(input, turnId, error instanceof Error ? error.message : String(error));
     }
   }
   try {
@@ -406,6 +559,25 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
       on_projection: input.on_projection,
     }, input.cwd), input.cwd, input.dispatcher_agent_id ?? input.dispatcher_agent);
     if (crossing.kind !== 'won') return authorityDenied(input, turnId, 'launch grant already crossed');
+    input.on_cutover_stage?.('legacy_crossed');
+    let generationFence: { attempt_epoch?: number; workspace_digest?: string } = {};
+    if (activeRollout && localHome && contractRef) {
+      const generation = bootstrapAttemptAuthorityV2({
+        turn_id: turnId,
+        authority_home: localHome,
+        actor: input.dispatcher_agent_id ?? input.dispatcher_agent,
+        writer_id: input.dispatcher_agent_id ?? input.dispatcher_agent,
+        cwd: input.cwd,
+        workspace_path: input.worktree_path ?? input.cwd,
+        on_stage: (stage) => input.on_cutover_stage?.(
+          stage === 'initial_anchored' ? 'initial_anchored' : 'v2_anchored'
+        ),
+      });
+      generationFence = {
+        attempt_epoch: generation.attempt_epoch,
+        workspace_digest: generation.workspace_digest,
+      };
+    }
     return {
       kind: 'won',
       turn_id: turnId,
@@ -415,6 +587,8 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
       contract_status: contractRef ? 'contracted' : 'legacy_uncontracted',
       execution_contract_ref: contractRef,
       capability_snapshot: contractRef ? capabilitySnapshot : undefined,
+      workspace_path: input.worktree_path ?? input.cwd,
+      ...generationFence,
     };
   } catch (error) {
     return authorityDenied(input, turnId, error instanceof Error ? error.message : String(error));

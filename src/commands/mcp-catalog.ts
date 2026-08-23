@@ -878,7 +878,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_loop',
-    description: 'Loop engine facade: open/turn/complete_turn/advance/add_artifact/pause/resume/close/get/list multi-turn work loops (review, ideation, implementation, research, debug). Returns a FacadeResponse with the loop thread, the newly-appended event, and a next_expected hint describing the natural next intent. Experimental — schema may evolve; gate production callers behind MCP versioning (pln#392).',
+    description: 'Loop engine facade: open/turn/complete_turn/takeover/advance/add_artifact/pause/resume/close/verify/request_input/provide_input/get/list multi-turn work loops (review, ideation, implementation, research, debug). Direct open requires allow_orphan=true because the caller owns subsequent dispatch. `takeover` fences one physical run and arms a fresh generation; it never changes protocol gates.',
     // schemaSource is informational for now — grep target so future migrators
     // can locate zod-derived tools quickly. The parity test in
     // tests/unit/mcp-zod-parity.test.ts hard-codes its (tool, zod-schema)
@@ -896,12 +896,8 @@ const MCP_WRITE_TOOLS = [
       properties: {
         intent: {
           type: 'string',
-          // 'open' is intentionally NOT exposed standalone (pln#542): it
-          // created a loop structure without dispatching the first turn, so
-          // nothing ever ran. Loops are opened via
-          // bclaw_coordinate(intent='review', open_loop=true) or intent='ideate'.
-          enum: ['get', 'list', 'turn', 'complete_turn', 'advance', 'add_artifact', 'pause', 'resume', 'close', 'bind'],
-          description: 'Loop lifecycle intent for driving turns inside a loop that was already opened via the coordinate facade. To START a loop, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` or `intent="ideate"` — that opens the loop AND dispatches the first turn. `bind` (implementation loops only) dispatches the loop\'s linked sequence and advances bind→execute — the engine action for the `bind` phase. See docs/concepts/loop-engine.md.',
+          enum: ['open', 'get', 'list', 'turn', 'complete_turn', 'takeover', 'advance', 'add_artifact', 'pause', 'resume', 'close', 'verify', 'bind', 'request_input', 'provide_input'],
+          description: 'Loop lifecycle intent. Review/ideation normally start via bclaw_coordinate; implementation/research/debug may use open with allow_orphan=true and then explicitly bind/turn/dispatch. `verify` runs the configured verification; request_input/provide_input are cross-kind clarification primitives.',
         },
         loop_id: { type: 'string', description: 'Target loop id (lop_…). Required for every intent except open and list.' },
         kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
@@ -912,11 +908,20 @@ const MCP_WRITE_TOOLS = [
         linked: { type: 'object', description: 'Optional top-level plan/sequence refs (open).' },
         stop_condition: { type: 'object', description: 'Optional stop_condition override (open). Composite any/all supported.' },
         mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Review mode selector for open (review kind only).' },
+        allow_orphan: { type: 'boolean', description: 'Required true for direct open: acknowledges that the caller owns subsequent turn/bind/dispatch.' },
+        verify: { type: 'object', description: 'Optional open-time verification policy, e.g. { command: ["npm", "test"] }.' },
         status: { type: 'string', description: 'For intent="list": filter value (any loop status). For intent="close": target final status — accepted values are `completed` | `cancelled` | `blocked` only (NOT `failed`; map crashed/dead loops to `cancelled` with a `reason`).' },
         include_events: { type: 'boolean', description: 'get: include the event journal in the response.' },
         limit: { type: 'number', description: 'list: max loops returned.' },
         offset: { type: 'number', description: 'list: pagination offset.' },
-        slot_id: { type: 'string', description: 'Slot id for turn / complete_turn.' },
+        slot_id: { type: 'string', description: 'Slot id for turn / complete_turn / takeover.' },
+        turn_id: { type: 'string', description: 'takeover: stable logical turn id.' },
+        expected_epoch: { type: 'number', description: 'takeover: active physical generation epoch expected by the caller.' },
+        cause: { type: 'string', description: 'takeover: audited reason for fencing the current producer.' },
+        liveness_evidence: { type: 'string', description: 'takeover: concrete evidence that the current producer cannot safely continue.' },
+        external_effect_policy: { type: 'string', enum: ['none', 'idempotent', 'externally_fenced'], description: 'takeover: declaration required before automatic re-execution.' },
+        next_workspace_path: { type: 'string', description: 'takeover: existing isolated workspace for the successor generation.' },
+        takeover_mode: { type: 'string', enum: ['takeover', 'retry'], description: 'takeover: causal close decision kind (default takeover).' },
         role: { type: 'string', description: 'Slot role for turn (resolves the first non-done slot with that role).' },
         input: { type: 'string', description: 'turn: free-form input passed to the slot.' },
         assignment_id: { type: 'string', description: 'turn: assignment id produced by the dispatcher to be recorded on the slot.' },
@@ -933,6 +938,19 @@ const MCP_WRITE_TOOLS = [
         force: { type: 'boolean', description: 'advance: allow going backwards (increments iteration_count).' },
         reason: { type: 'string', description: 'advance / pause / close: optional reason string.' },
         expected_version: { type: 'number', description: 'Accepted for RFC compatibility on mutating intents, but not enforced until lock/CAS wiring lands.' },
+        phase: { type: 'string', description: 'request_input: current loop phase.' },
+        question_text: { type: 'string', description: 'request_input: operator question (max 500 characters).' },
+        evidence: { type: 'array', items: { type: 'string' }, description: 'request_input: concrete evidence motivating the question.' },
+        suggested_default: { type: 'string', description: 'request_input: optional default answer.' },
+        options: { type: 'array', items: { type: 'object' }, description: 'request_input: optional 2-4 structured choices.' },
+        pause_scope: { type: 'string', enum: ['slot', 'loop'], description: 'request_input: pause only the slot or the whole loop.' },
+        on_timeout: { type: 'string', enum: ['use_default', 'cancel_loop', 'continue_incomplete'], description: 'request_input: timeout policy.' },
+        timeout_at: { type: 'string', description: 'request_input: optional ISO timestamp.' },
+        replies_to: { type: 'string', description: 'provide_input: question id (qst_…).' },
+        resolved_via: { type: 'string', enum: ['answer', 'choose', 'skip', 'timeout_default'], description: 'provide_input: how the answer was resolved.' },
+        answer_text: { type: 'string', description: 'provide_input: free-form answer.' },
+        chosen_option_id: { type: 'string', description: 'provide_input: selected option id.' },
+        by: { type: 'string', enum: ['operator', 'system'], description: 'provide_input: answer actor (default operator).' },
         client_request_id: { type: 'string', description: 'Accepted for RFC compatibility on mutating intents, but not enforced until lock/idempotency wiring lands.' },
         project: { type: 'string', description: 'Optional linked project name/path. Routes loop reads and mutations to that project. Defaults to the current cwd.' },
         agent: { type: 'string', description: 'Caller agent name.' },
@@ -943,7 +961,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_assignment_update',
-    description: 'Report assignment lifecycle status. Part of the Agent SDK runtime protocol. Workers call this to report: accepted (acknowledging receipt), started (work begun), progress (heartbeat), completed (done with artifacts), failed (error), or blocked (external blocker). The assignment_id is provided in the dispatch brief. OWNERSHIP (trp#291): only the agent the assignment is OWNED BY (the dispatched worker) may update it — a different agent (e.g. the coordinator) gets `Agent <x> cannot update assignment owned by <y>`. If you are the coordinator and need to converge a worker run, do NOT call this; verify via bclaw_dispatch_status instead (the reconciler infers completion from sentinels/commits).',
+    description: 'Report assignment lifecycle status. Part of the Agent SDK runtime protocol. Legacy workers may report accepted/started/progress/completed/failed/blocked. For an AttemptAuthority v2 logical Assignment, the complete current generation fence is mandatory and only accepted/started/progress are allowed; terminal outcome goes through full-fence LANE-RESULT settlement, which then projects Assignment/Claim convergence. The assignment_id is provided in the dispatch brief. OWNERSHIP (trp#291): only the assigned agent may update it. Coordinators should verify via bclaw_dispatch_status rather than impersonating the worker.',
     annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
     inputSchema: { ...generatedSchemas.AssignmentUpdateRequest },
   },

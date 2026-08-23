@@ -404,7 +404,7 @@ export function buildLivenessSection(
   cwd: string,
   assignmentId: string,
   worktreePath?: string,
-  opts?: { sandboxed?: boolean },
+  opts?: { sandboxed?: boolean; runId?: string },
 ): string {
   // sprint 1.5 (dogfooding): the project-root signal path is NOT writable from
   // inside worker sandboxes (Claude Code restricts writes to its working dirs;
@@ -420,9 +420,11 @@ export function buildLivenessSection(
   // cwd is the worktree root) — same file, sandbox-proof spelling.
   const sandboxRelative = opts?.sandboxed === true && !!worktreePath;
   const hbPath = worktreePath
-    ? getWorktreeHeartbeatPath(worktreePath, assignmentId)
-    : getRuntimeSignalPath(cwd, assignmentId, 'heartbeat');
-  const targetPath = sandboxRelative ? `.brainclaw-heartbeat-${assignmentId}` : hbPath;
+    ? getWorktreeHeartbeatPath(worktreePath, assignmentId, opts?.runId)
+    : getRuntimeSignalPath(cwd, assignmentId, 'heartbeat', opts?.runId);
+  const targetPath = sandboxRelative
+    ? `.brainclaw-heartbeat-${assignmentId}${opts?.runId ? `-${opts.runId}` : ''}`
+    : hbPath;
   const isWin = process.platform === 'win32';
   const writeCmd = isWin
     ? `echo work_loop_reached ${assignmentId} > "${targetPath}"`
@@ -498,21 +500,36 @@ export function buildWorkingDefaultsSection(opts: { canCommit: boolean }): strin
  * because the contract had nowhere to put the reasoning). Caught in review by
  * Fable before this shipped.
  */
-export function laneResultShape(assignmentId?: string, contractRef?: ExecutionContractRef): string {
+export interface AttemptFenceBrief {
+  turn_id: string;
+  run_id: string;
+  nonce: string;
+  attempt_epoch: number;
+  workspace_digest: string;
+}
+
+export function laneResultShape(assignmentId?: string, contractRef?: ExecutionContractRef, fence?: AttemptFenceBrief): string {
   const asgn = assignmentId ?? '<assignment_id>';
+  const generation = fence
+    ? `,"turn_id":"${fence.turn_id}","run_id":"${fence.run_id}","nonce":"${fence.nonce}","attempt_epoch":${fence.attempt_epoch},"workspace_digest":"${fence.workspace_digest}"`
+    : '';
   const contract = contractRef
     ? `,"execution_contract_hash":"${contractRef.hash}","capability_snapshot_hash":"${contractRef.snapshot_hash}"`
     : '';
-  return `{"assignment_id":"${asgn}"${contract},"status":"completed|blocked|failed","summary":"<one line>","body":"<your full output — the reasoning, not just a label>","files_changed":["..."],"artifacts":["..."]}`;
+  return `{"assignment_id":"${asgn}"${generation}${contract},"status":"completed|blocked|failed","summary":"<one line>","body":"<your full output — the reasoning, not just a label>","files_changed":["..."],"artifacts":["..."]}`;
 }
 
-export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: string; executionContractRef?: ExecutionContractRef }): string {
-  const laneResult = `write LANE-RESULT.json at the worktree ROOT: ${laneResultShape(opts.assignmentId, opts.executionContractRef)}`;
+export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: string; executionContractRef?: ExecutionContractRef; attemptFence?: AttemptFenceBrief }): string {
+  const laneResult = `write LANE-RESULT.json at the worktree ROOT: ${laneResultShape(opts.assignmentId, opts.executionContractRef, opts.attemptFence)}`;
   const acceptance = opts.executionContractRef
     ? [
       `Execution contract: ${opts.executionContractRef.hash}`,
       `Capability snapshot: ${opts.executionContractRef.snapshot_hash}`,
       'These values are also available as BRAINCLAW_EXECUTION_CONTRACT_HASH and BRAINCLAW_CAPABILITY_SNAPSHOT_HASH. Echo both unchanged in LANE-RESULT.json. If either differs from what your runtime accepted, report blocked immediately; Brainclaw withholds convergence and never respawns this crossed generation.',
+      ...(opts.attemptFence ? [
+        `Attempt generation fence: turn=${opts.attemptFence.turn_id}, run=${opts.attemptFence.run_id}, nonce=${opts.attemptFence.nonce}, epoch=${opts.attemptFence.attempt_epoch}, workspace_digest=${opts.attemptFence.workspace_digest}.`,
+        'Include every fence field in bclaw_assignment_update as well as LANE-RESULT.json; an incomplete or stale update is rejected before mutating Assignment, AgentRun, or Claim.',
+      ] : []),
     ]
     : [];
 
@@ -563,7 +580,12 @@ export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: st
  *   - business closure         → the coordinator's harvest/report path.
  *     Transport completion never releases claims or triggers review.
  */
-export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string; assignmentId?: string }): string {
+export function buildProtocolSection(options?: {
+  claimId?: string;
+  worktreePath?: string;
+  assignmentId?: string;
+  attemptFence?: AttemptFenceBrief;
+}): string {
   const parts: string[] = [];
 
   parts.push('## Protocol');
@@ -617,11 +639,16 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     parts.push(`${options.worktreePath ? '3' : '2'}. Call bclaw_assignment_update(assignment_id: "${options.assignmentId}", status: "started")`);
     parts.push(`${options.worktreePath ? '4' : '3'}. Work on the assigned scope`);
     parts.push(`${options.worktreePath ? '5' : '4'}. Periodically call bclaw_assignment_update(status: "progress", message: "...") as heartbeat`);
-    parts.push(`${options.worktreePath ? '6' : '5'}. When done: bclaw_assignment_update(status: "completed", artifacts: [...])`);
-    const claimRef = options?.claimId ? `id: "${options.claimId}"` : 'id: "<claim_id>"';
-    parts.push(`${options.worktreePath ? '7' : '6'}. Release the claim: bclaw_release_claim(${claimRef}, planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
-    parts.push(`${options.worktreePath ? '8' : '7'}. If blocked: bclaw_assignment_update(status: "blocked", blocker: "...")`);
-    parts.push(`${options.worktreePath ? '9' : '8'}. If failed: bclaw_assignment_update(status: "failed", error_message: "...")`);
+    if (options.attemptFence) {
+      parts.push(`${options.worktreePath ? '6' : '5'}. Report the terminal outcome in full-fence LANE-RESULT.json; do NOT terminalize the logical Assignment or release its Claim. Brainclaw settles close(epoch) first, then replays those projections.`);
+      parts.push(`${options.worktreePath ? '7' : '6'}. If blocked or failed, encode that status and explanation in LANE-RESULT.json with the same complete generation fence.`);
+    } else {
+      parts.push(`${options.worktreePath ? '6' : '5'}. When done: bclaw_assignment_update(status: "completed", artifacts: [...])`);
+      const claimRef = options?.claimId ? `id: "${options.claimId}"` : 'id: "<claim_id>"';
+      parts.push(`${options.worktreePath ? '7' : '6'}. Release the claim: bclaw_release_claim(${claimRef}, planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
+      parts.push(`${options.worktreePath ? '8' : '7'}. If blocked: bclaw_assignment_update(status: "blocked", blocker: "...")`);
+      parts.push(`${options.worktreePath ? '9' : '8'}. If failed: bclaw_assignment_update(status: "failed", error_message: "...")`);
+    }
     // pln#479: compile-check contract for code workers — a per-worktree
     // pre-commit gate may HARD-block a commit that fails tsc (opt-in).
     if (options.worktreePath) {
@@ -885,6 +912,8 @@ export interface DispatchBriefOptions {
   contextEnvelope?: boolean;
   /** Immutable worker contract reference to deliver and require in evidence. */
   executionContractRef?: ExecutionContractRef;
+  /** AttemptAuthority v2 generation fields required on worker mutations/evidence. */
+  attemptFence?: AttemptFenceBrief;
 }
 
 /** Character budget for the inlined context envelope — bounded by design
@@ -972,7 +1001,10 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
   // sprint 1.5 — task-based briefs get the same step-0 liveness contract as
   // plan-based briefs (worktree-local heartbeat, writable from any sandbox).
   if (options.assignmentId && options.worktreePath) {
-    parts.push(buildLivenessSection(options.worktreePath, options.assignmentId, options.worktreePath, { sandboxed: taskSandboxed }));
+    parts.push(buildLivenessSection(options.worktreePath, options.assignmentId, options.worktreePath, {
+      sandboxed: taskSandboxed,
+      runId: options.attemptFence?.run_id,
+    }));
   }
 
   // pln#554 step 4 — working defaults (incremental commits + validation bar).
@@ -990,6 +1022,7 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
       claimId: options.claimId,
       worktreePath: options.worktreePath,
       assignmentId: options.assignmentId,
+      attemptFence: options.attemptFence,
     }));
   }
 
@@ -1005,6 +1038,7 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
       hasMcp: taskBriefProfile ? dispatchHasMcp(taskBriefProfile) : true,
       assignmentId: options.assignmentId,
       executionContractRef: options.executionContractRef,
+      attemptFence: options.attemptFence,
     }));
   }
 

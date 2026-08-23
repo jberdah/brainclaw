@@ -28,7 +28,8 @@ import { loadClaim } from './claims.js';
 import { getLoop, listLoops } from './loops/store.js';
 import { isProcessAlive } from './agentrun-reconciler.js';
 import { findRuntimeNoteById } from './runtime.js';
-import { latestActivityMs, decodeOemAwareBuffer } from './runtime-signals.js';
+import { latestActivityMs, decodeOemAwareBuffer, getRuntimeLogPath, getRuntimeSignalPath } from './runtime-signals.js';
+import { currentAttemptRunIdForAssignment } from './loops/attempt-reservation.js';
 import { LaneResultSchema } from './schema.js';
 import type { Assignment, AgentRun, Claim } from './schema.js';
 import type { LoopThread } from './loops/types.js';
@@ -586,10 +587,19 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
   // coordination root. Use the cwd or the runtime cwd as the anchor; the
   // dispatcher writes them under cwd/.brainclaw/coordination/runtime/...
   const projectRoot = cwd ?? process.cwd();
-  const runtimeRoot = path.join(projectRoot, '.brainclaw', 'coordination', 'runtime');
-  const ackPath = assignmentId ? path.join(runtimeRoot, 'ack', `${assignmentId}.ack`) : undefined;
-  const stdoutPath = assignmentId ? path.join(runtimeRoot, 'log', `${assignmentId}.stdout.log`) : undefined;
-  const stderrPath = assignmentId ? path.join(runtimeRoot, 'log', `${assignmentId}.stderr.log`) : undefined;
+  const currentAttemptRunId = assignmentId
+    ? currentAttemptRunIdForAssignment(assignmentId, cwd)
+    : undefined;
+  const runtimeRunId = currentAttemptRunId ? (agentRun?.id ?? currentAttemptRunId) : undefined;
+  const ackPath = assignmentId
+    ? getRuntimeSignalPath(projectRoot, assignmentId, 'ack', runtimeRunId)
+    : undefined;
+  const stdoutPath = assignmentId
+    ? getRuntimeLogPath(projectRoot, assignmentId, 'stdout', runtimeRunId)
+    : undefined;
+  const stderrPath = assignmentId
+    ? getRuntimeLogPath(projectRoot, assignmentId, 'stderr', runtimeRunId)
+    : undefined;
 
   // pln#527 — filesystem-activity age: max mtime across the captured logs + the
   // run's worktree files (skipping junctions). The truer liveness signal when
@@ -601,7 +611,7 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
   const worktreeForFs = agentRun?.worktree_path ?? claim?.worktree_path ?? assignment?.worktree_path;
   let lastFsActivityMs: number | undefined;
   if (assignmentId) {
-    const lastFs = latestActivityMs(projectRoot, assignmentId, worktreeForFs);
+    const lastFs = latestActivityMs(projectRoot, assignmentId, worktreeForFs, runtimeRunId);
     if (lastFs !== undefined) lastFsActivityMs = nowMs - lastFs;
   }
 

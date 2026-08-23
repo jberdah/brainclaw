@@ -79,18 +79,21 @@ describe('Loop Engine documentation surface', () => {
     assert.match(guide, /attempt-authority\.md/, 'engine guide must link to attempt-authority.md');
     assert.match(authority, /AttemptAuthority/, 'attempt-authority guide must name AttemptAuthority');
     assert.match(authority, /TurnReservation/, 'attempt-authority guide must reference the TurnReservation core');
-    assert.match(authority, /launch decision cell/i, 'attempt-authority guide must reference the launch decision cell');
-    assert.match(authority, /one normative dispatch shape/i, 'attempt-authority must describe one normative dispatch order');
-    assert.match(authority, /Durable projections/, 'attempt-authority must place durable projections before crossing');
-    assert.doesNotMatch(authority, /### Target order/, 'a shipped invariant must no longer be documented as a future target');
-    // Identity matrix + numbered invariants
+    assert.match(authority, /`launch\(epoch\)`/, 'attempt-authority guide must reference immutable launch cells');
+    assert.match(authority, /settlement and takeover contend on (?:the same|one immutable) `close\(epoch\)`/i);
+    assert.match(authority, /common worker path/i, 'attempt-authority must describe one cross-kind dispatch path');
+    assert.match(authority, /durable projections/i, 'attempt-authority must place durable projections before crossing');
+    assert.match(authority, /hard-link create-if-absent/i, 'the Windows-safe no-clobber publish primitive must be explicit');
+    assert.match(authority, /two-release activation/i, 'the incompatible-writer activation boundary must be explicit');
+    assert.doesNotMatch(authority, /future multi-run|takeover model.*deferred/is, 'the shipped multi-run model must not be described as deferred');
+    // Stable logical identity + fresh physical-generation identity.
     assert.match(authority, /\| `turn_id`/, 'attempt-authority must ship an identity matrix row for turn_id');
+    assert.match(authority, /\| `assignment_id`/, 'attempt-authority must ship an identity matrix row for assignment_id');
+    assert.match(authority, /\| `attempt_epoch`/, 'attempt-authority must ship an identity matrix row for attempt_epoch');
     assert.match(authority, /\| `run_id`/, 'attempt-authority must ship an identity matrix row for run_id');
-    assert.match(authority, /\| `launch\.epoch`/, 'attempt-authority must ship an identity matrix row for launch.epoch');
-    assert.match(authority, /\| `launch\.token`/, 'attempt-authority must ship an identity matrix row for launch.token (nonce)');
-    for (let i = 1; i <= 18; i++) {
-      assert.match(authority, new RegExp(`\\*\\*I${i} —`), `attempt-authority must document invariant I${i}`);
-    }
+    assert.match(authority, /\| `launch_nonce`/, 'attempt-authority must ship an identity matrix row for launch nonce');
+    assert.match(authority, /\| `contract_hash`/, 'attempt-authority must ship an identity matrix row for contract hash');
+    assert.match(authority, /\| `workspace_digest`/, 'attempt-authority must ship an identity matrix row for workspace digest');
   });
 
   it('ships one guide per shipped LoopKind with a comparable template', () => {

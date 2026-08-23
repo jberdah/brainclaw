@@ -18,6 +18,7 @@ import { listAssignments, transitionAssignment } from './assignments.js';
 import { signalExists, readHeartbeat, latestActivityMs } from './runtime-signals.js';
 import { DEFAULT_HYGIENE_POLICY, type HygienePolicy } from './hygiene-policy.js';
 import type { Assignment } from './schema.js';
+import { currentAttemptRunIdForAssignment } from './loops/attempt-reservation.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ function collectImplicitEvidence(
   freshTtlMs: number,
 ): ImplicitEvidence {
   const root = cwd ?? process.cwd();
+  const runId = currentAttemptRunIdForAssignment(assignment.id, cwd);
   const parts: string[] = [];
   let freshest: number | undefined;
   const bump = (ageMs: number | undefined): void => {
@@ -78,11 +80,11 @@ function collectImplicitEvidence(
   };
 
   try {
-    if (signalExists(root, assignment.id, 'ack')) parts.push('ack sentinel');
+    if (signalExists(root, assignment.id, 'ack', runId)) parts.push('ack sentinel');
   } catch { /* defensive */ }
 
   try {
-    const hb = readHeartbeat(root, assignment.id, assignment.worktree_path);
+    const hb = readHeartbeat(root, assignment.id, assignment.worktree_path, runId);
     if (hb.exists && hb.mtimeMs !== undefined) {
       const age = nowMs - hb.mtimeMs;
       parts.push(`heartbeat ${Math.round(age / 1000)}s old`);
@@ -91,7 +93,7 @@ function collectImplicitEvidence(
   } catch { /* defensive */ }
 
   try {
-    const lastFs = latestActivityMs(root, assignment.id, assignment.worktree_path);
+    const lastFs = latestActivityMs(root, assignment.id, assignment.worktree_path, runId);
     if (lastFs !== undefined) {
       const age = nowMs - lastFs;
       parts.push(`fs activity ${Math.round(age / 1000)}s old`);

@@ -651,6 +651,28 @@ export const generatedSchemas = {
       "coordinator_override": {
         "type": "boolean",
         "description": "Opt-in override for a trusted+ caller releasing a claim they do NOT own (cross-agent teardown, ghost-claim cleanup). Rejected for contributor-level callers; audited when used. trp#928."
+      },
+      "turn_id": {
+        "type": "string"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "nonce": {
+        "type": "string"
+      },
+      "attempt_epoch": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "execution_contract_hash": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "workspace_digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
       }
     },
     "required": [
@@ -1014,6 +1036,28 @@ export const generatedSchemas = {
           "prompt"
         ],
         "description": "Optional ActionRequired payload when status=blocked. Lets the worker request approval, user input, or clarification before resuming."
+      },
+      "turn_id": {
+        "type": "string"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "nonce": {
+        "type": "string"
+      },
+      "attempt_epoch": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "execution_contract_hash": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "workspace_digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
       },
       "agent": {
         "type": "string",
