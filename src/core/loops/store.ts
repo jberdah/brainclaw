@@ -11,6 +11,7 @@ import { gcWorktreeIfHarvested } from '../worktree.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
 import { reconstructConsistentThread } from './commit-intent.js';
+import { evidencePolicyForNewLoop, evidenceWriterEnabled, sealArtifactEvidence, validateThreadEvidence } from './evidence.js';
 import {
   DEFAULT_PROTOCOLS,
   LoopArtifactSchema,
@@ -234,6 +235,7 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
     open_questions: [],
     linked: input.linked,
     stop_condition: input.stop_condition ?? protocolDefaults.stop_condition,
+    evidence_policy: evidencePolicyForNewLoop(),
     created_at: now,
     updated_at: now,
     created_by: input.created_by,
@@ -268,7 +270,12 @@ export function getLoop(id: string, cwd?: string): LoopThread | undefined {
   // the on-disk thread, return the reconstructed consistent view. The mutation
   // is durable in the intent; persistence catches up at the next lock-entry
   // recovery (never a write on this read path — cf. trp_fdf3e590 / dec#137).
-  return reconstructConsistentThread(id, onDisk, cwd);
+  const thread = reconstructConsistentThread(id, onDisk, cwd);
+  if (thread) {
+    const diagnostics = validateThreadEvidence(thread);
+    if (diagnostics.length > 0) logger.warn(`loop ${id}: rejected evidence envelopes ${JSON.stringify(diagnostics)}`);
+  }
+  return thread;
 }
 
 export function listLoops(
@@ -283,6 +290,8 @@ export function listLoops(
     try {
       const raw = fs.readFileSync(path.join(dir, file), 'utf8');
       const loop = LoopThreadSchema.parse(JSON.parse(raw));
+      const diagnostics = validateThreadEvidence(loop);
+      if (diagnostics.length > 0) logger.warn(`loop ${loop.id}: rejected evidence envelopes ${JSON.stringify(diagnostics)}`);
       if (filters.kind && loop.kind !== filters.kind) continue;
       if (filters.status && loop.status !== filters.status) continue;
       loops.push(loop);
@@ -462,6 +471,22 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
         project_md_final_id,
         now: pauseNow,
       });
+      const persistedDiffArtifact = (current.evidence_policy !== undefined || evidenceWriterEnabled())
+        ? LoopArtifactSchema.parse(sealArtifactEvidence(current, writeResult.diff_artifact, {
+            channel: 'system_hook',
+            producer_kind: 'engine',
+            producer_id: 'brainclaw:bootstrap-write',
+          }))
+        : writeResult.diff_artifact;
+      const persistedQuestionArtifact = (current.evidence_policy !== undefined || evidenceWriterEnabled())
+        ? LoopArtifactSchema.parse(sealArtifactEvidence(current, questionArtifact, {
+            channel: 'system_hook',
+            producer_kind: 'engine',
+            producer_id: 'brainclaw:bootstrap-write',
+            slot_id: slot.slot_id,
+            slot_role: slot.role,
+          }))
+        : questionArtifact;
 
       const pausedThread: LoopThread = {
         ...current,
@@ -472,9 +497,9 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
         pending_file_apply: {
           artifact_id: project_md_final_id,
           target_path: writeResult.target_path,
-          diff_artifact_id: writeResult.diff_artifact.artifact_id,
+          diff_artifact_id: persistedDiffArtifact.artifact_id,
         },
-        artifacts: [...current.artifacts, writeResult.diff_artifact, questionArtifact],
+        artifacts: [...current.artifacts, persistedDiffArtifact, persistedQuestionArtifact],
         open_questions: [...current.open_questions, question_id],
         updated_at: pauseNow,
       };

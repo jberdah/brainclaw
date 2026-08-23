@@ -32,6 +32,8 @@ over the reservation core — see
 [Attempt authority](./attempt-authority.md). The exact worker, workspace,
 artifact and evidence expectations for each physical turn are frozen by the
 [Execution contract and capability snapshot](./execution-contract.md).
+Artifacts then cross the server-controlled commit boundary described in
+[Evidence envelopes, attestations, and protocol gates](./evidence-attestations.md).
 
 ## Why
 
@@ -134,6 +136,10 @@ interface LoopThread {
   artifacts: LoopArtifact[];
   linked?: LoopLinks;                   // top-level context only (plan/sequence). Other refs live on artifacts/slots.
   stop_condition?: StopCondition;
+  evidence_policy?: {                    // absent only on explicit/pre-policy threads
+    version: 'gate-policy-v1';
+    mode: 'shadow' | 'strict';
+  };
 
   created_at: string;                   // ISO
   updated_at: string;
@@ -145,12 +151,19 @@ type LoopStatus = 'open' | 'paused' | 'completed' | 'blocked' | 'cancelled';
 type ReviewMode = 'asymmetric' | 'symmetric';
 
 interface LoopProtocolConfig {
-  review_mode?: ReviewMode;             // review loops persist their selected mode so resume/turn handlers are deterministic
+  review_mode?: ReviewMode;
+  iteration?: { cycle: string[]; max_iterations: number; exit_when: 'critic_signal' | 'no_new_critique_artifacts' | 'command_green' };
+  verify?: { command: string[]; timeout_ms?: number };
+  preset?: string;
+  max_operator_questions?: number;
+  max_pause_duration?: string;           // ISO-8601 duration
 }
 
 interface LoopPhase {
   name: string;
   advance_when?: 'all' | 'any';         // default 'all' — every slot turn in this phase must be `done` before advance
+  context_filter?: LoopContextCategory[];
+  advance_gate?: StopCondition;
 }
 
 interface LoopSlot {
@@ -161,7 +174,8 @@ interface LoopSlot {
   assignment_id?: string;               // set when a turn is dispatched
   claim_id?: string;                    // for execution loops, the claim held by this slot
   phase?: string;                       // which phase this slot currently participates in (supports parallel slots per phase)
-  status: 'open' | 'assigned' | 'working' | 'done';
+  status: 'open' | 'assigned' | 'working' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
+  current_turn_id?: string;             // immutable attempt currently owning this reusable slot
 }
 
 interface LoopArtifact {
@@ -170,8 +184,9 @@ interface LoopArtifact {
   type: string;                         // "finding" | "synthesis" | "verdict" | "plan_draft" | ...
   ref?: LoopRef;                        // preferred: link to an existing primitive
   body?: string;                        // inline content ≤ 4 KB; else force `ref`
-  produced_by?: SlotId;
+  produced_by?: string;                 // derived server-side from slot/engine/coordinator context
   produced_at: string;
+  evidence?: EvidenceEnvelope;           // server-sealed; never caller-authored
 }
 
 type LoopRef =
@@ -193,7 +208,10 @@ type AtomicStopCondition =
   | { kind: 'phase_reached'; phase: string }
   | { kind: 'reviewer_green' }                          // an `accepted` verdict artifact in any phase
   | { kind: 'max_iterations'; n: number }               // hard cap; on hit, close with status=blocked
+  | { kind: 'min_iterations'; n: number }
   | { kind: 'artifact_produced'; phase: string; type: string }
+  | { kind: 'min_artifacts_by_type'; type: string; n: number; scope: 'phase' | 'loop' }
+  | { kind: 'no_open_questions' }
   | { kind: 'manual' };                                 // only closes on explicit close
 
 type StopCondition =
@@ -202,6 +220,9 @@ type StopCondition =
   | { kind: 'all'; conditions: StopCondition[] };       // AND — every clause must match
 
 // LoopEvent is a discriminated union with typed per-kind payloads (no loose `payload` map).
+// The excerpt below shows the base lifecycle. The shipped union also includes
+// turn_reserved, phase_advance_blocked, max_iterations_reached, input/file-apply,
+// and slot-status events. Gate-driving transitions carry GateDecision.
 interface LoopEventBase {
   event_id: string;                                     // ULID
   loop_id: LoopId;
@@ -293,18 +314,32 @@ file lists which artifact types are ref-based and which use inline JSON bodies.
 
 ## Lifecycle verbs
 
-The engine exposes four active verbs. Each one mutates state, appends an event, and returns the updated `LoopThread`. **All verbs are strictly synchronous-on-state and asynchronous-on-work**: any downstream dispatch (spawning a CLI, calling another MCP tool) is fire-and-forget from the commit window, so the per-loop lock is always released quickly.
+The engine exposes one shared lifecycle for every protocol. Mutating verbs
+persist state plus causal events and return the updated `LoopThread`.
+**All verbs are strictly synchronous-on-state and asynchronous-on-work**: any
+downstream dispatch continues outside the commit window so the per-loop lock
+is released quickly.
 
 - **open** — create a new loop. Inserts `opened` event; `current_phase` set to `phases[0].name`.
 - **turn** — record that a phase's work is assigned to a slot. Fire-and-forget dispatch: the handler kicks off the downstream call (e.g. `bclaw_coordinate` to spawn a CLI) and returns immediately. `slot.status` flips to `'assigned'` with an `assignment_id`; the actual work continues outside the lock. Inserts `turn_assigned`. The slot reports back later via a separate `complete_turn` call.
 - **advance** — evaluate `stop_condition`; if satisfied, `close` with `status=completed`. Otherwise, transition `current_phase` to the next phase (or a specified one). Inserts `phase_advanced`. If `advance` revisits an earlier phase (e.g. a fixup round re-enters `findings`), `iteration_count` increments.
 - **close** — terminal: set `status` to `completed | cancelled | blocked` and `closed_at`. Inserts `closed`.
 
-Two auxiliary verbs cover quality of life:
+Additional shared and engine-owned actions complete the lifecycle:
 
 - **pause** / **resume** — suspend a loop without closing (e.g. waiting on an external input).
 - **add_artifact** — attach an artifact to a phase without moving on.
 - **complete_turn** — close out a previously-assigned turn: flips `slot.status` to `'done'` (or `'failed' | 'cancelled'`), optionally attaches an artifact carrying the outcome. Emitted by the slot agent itself when its dispatched work returns. Separate from `turn` precisely because the dispatch is async. Authorization is strict: the caller's `agentId` must equal that slot's `agent_id`, unless the caller is the loop's `created_by`, which is the only admin override.
+- **request_input** / **provide_input** — bounded, evidence-backed operator clarification usable by any protocol.
+- **bind** — implementation-loop engine action that binds and dispatches the linked sequence.
+- **verify** — implementation/debug engine action that runs the opener-configured command outside the loop lock, then records a verification-attested report.
+
+Artifact authority is sealed at these verb boundaries. `produced_by` is
+derived from the authenticated slot/engine/coordinator context. A narrative
+`accepted` verdict or `{passed:true}` report is stored but cannot open a gate
+unless its envelope carries the policy-specific approval or verification
+attestation. Gate decisions and rejection reasons are persisted on causal
+LoopEvents; RuntimeEvents remain telemetry only.
 
 ## MCP facade: `bclaw_loop(intent)`
 
@@ -322,9 +357,9 @@ interface BclawLoopCallerEnvelope {
 type BclawLoopInput = BclawLoopCallerEnvelope & (
   | { intent: 'open';          kind: LoopKind; title: string; goal?: string; phases?: LoopPhase[]; slots?: Partial<LoopSlot>[]; linked?: LoopLinks; stop_condition?: StopCondition; mode?: ReviewMode /* review only; persisted to loop.protocol.review_mode; default 'asymmetric' */ }
   | { intent: 'turn';          loop_id: LoopId; slot_id?: SlotId; role?: string; input?: string; dispatch?: boolean; expected_version?: number }
-  | { intent: 'complete_turn'; loop_id: LoopId; slot_id: SlotId; artifact?: Omit<LoopArtifact, 'artifact_id' | 'produced_at'>; outcome?: 'done' | 'failed' | 'cancelled'; failure_reason?: string; expected_version?: number }
+  | { intent: 'complete_turn'; loop_id: LoopId; slot_id: SlotId; artifact?: Pick<LoopArtifact, 'phase' | 'type' | 'body' | 'ref' | 'addresses_critique'>; outcome?: 'done' | 'failed' | 'cancelled'; failure_reason?: string; expected_version?: number }
   | { intent: 'advance';       loop_id: LoopId; to_phase?: string; reason?: string; force?: boolean; expected_version?: number }
-  | { intent: 'add_artifact';  loop_id: LoopId; artifact: Omit<LoopArtifact, 'artifact_id' | 'produced_at'>; expected_version?: number }
+  | { intent: 'add_artifact';  loop_id: LoopId; artifact: Pick<LoopArtifact, 'phase' | 'type' | 'body' | 'ref' | 'addresses_critique'>; expected_version?: number }
   | { intent: 'pause';         loop_id: LoopId; reason?: string; expected_version?: number }
   | { intent: 'resume';        loop_id: LoopId; expected_version?: number }
   | { intent: 'close';         loop_id: LoopId; status: 'completed' | 'cancelled' | 'blocked'; reason?: string; expected_version?: number }

@@ -339,6 +339,17 @@ function convergeLockedTurn(
           add_artifact({
             id: loop.id,
             actor,
+            evidence_context: {
+              channel: 'reconcile_turn',
+              producer_kind: 'slot',
+              producer_id: reservation.agent,
+              agent_id: reservation.agent_id,
+              slot_id: slot.slot_id,
+              slot_role: slot.role,
+              turn_id,
+              assignment_id: reservation.child_ids.assignment_id,
+              claim_id: reservation.claim_id,
+            },
             artifact: {
               phase: a.phase,
               type: a.type,
@@ -354,6 +365,17 @@ function convergeLockedTurn(
         id: loop.id,
         slot_id: slot.slot_id,
         actor,
+        evidence_context: {
+          channel: 'reconcile_turn',
+          producer_kind: 'slot',
+          producer_id: reservation.agent,
+          agent_id: reservation.agent_id,
+          slot_id: slot.slot_id,
+          slot_role: slot.role,
+          turn_id,
+          assignment_id: reservation.child_ids.assignment_id,
+          claim_id: reservation.claim_id,
+        },
         outcome: reduced.slot_outcome,
         failure_reason: reduced.failure_reason,
         ...(primary ? {

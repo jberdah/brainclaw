@@ -82,7 +82,7 @@ describe('advance() — phase_advance_blocked on unmet gate (pln#492 phase 2.b)'
         {
           id: loop.id,
           actor: 'agt_test',
-          artifact: { phase: 'critique', type: 'critique', body: 'critique content' },
+          artifact: { phase: 'critique', type: 'critique', body: `critique content ${i}` },
         },
         cwd,
       );
@@ -115,7 +115,7 @@ describe('advance() — iteration cycle (pln#492 phase 2.b)', () => {
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: `critique content ${i}` } },
         cwd,
       );
     }
@@ -131,7 +131,7 @@ describe('advance() — iteration cycle (pln#492 phase 2.b)', () => {
     advance({ id: loop.id, actor: 'agt_test' }, cwd);
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: `critique content ${i}` } },
         cwd,
       );
     }
@@ -168,7 +168,7 @@ describe('advance() — max_iterations event (pln#492 phase 2.b)', () => {
   function fillCritique(loopId: string, cwd: string, n: number) {
     for (let i = 0; i < n; i++) {
       add_artifact(
-        { id: loopId, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
+        { id: loopId, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: `critique content ${i}` } },
         cwd,
       );
     }
@@ -223,7 +223,7 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // → critique iter 0
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: `critique content ${i}` } },
         cwd,
       );
     }
@@ -233,7 +233,7 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     // to leave critique → advance to revision still works.
     for (let i = 0; i < 3; i++) {
       add_artifact(
-        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: 'critique content' } },
+        { id: loop.id, actor: 'agt_test', artifact: { phase: 'critique', type: 'critique', body: `critique content ${i}` } },
         cwd,
       );
     }
@@ -248,9 +248,8 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
     // step of iteration 2 to bypass the gate so we can exercise exit_when.
     advance({ id: loop.id, actor: 'agt_test' }, cwd); // iterate → critique iter 2
     // No critiques produced in iteration 2.
-    advance({ id: loop.id, actor: 'agt_test', force: true }, cwd); // forced → revision iter 2
-    // From revision iter 2 (end of cycle): exit_when fires because no
-    // critique-typed artifact was produced in iteration 2.
+    // The engine observes saturation BEFORE the quantitative critique gate:
+    // requiring a force here made no_new_critique_artifacts unreachable.
     const result = advance({ id: loop.id, actor: 'agt_test' }, cwd);
     assert.equal(result.loop.current_phase, 'synthesis');
   });

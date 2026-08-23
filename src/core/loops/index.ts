@@ -1,5 +1,29 @@
 export * from './types.js';
 export {
+  GATE_POLICY_VERSION,
+  artifactEvidenceDigest,
+  evidenceDigest,
+  evidencePolicyForNewLoop,
+  evidenceWriterEnabled,
+  sealArtifactEvidence,
+  validateArtifactEvidence,
+  validateThreadEvidence,
+  type EvidenceCommitContext,
+  type EvidenceValidationResult,
+  type ThreadEvidenceDiagnostic,
+} from './evidence.js';
+export {
+  GATE_POLICIES,
+  eligibleArtifactsForPurpose,
+  evaluateCommandGreen,
+  evaluateCriticSignal,
+  evaluateGateCondition,
+  evaluateNoNewCritique,
+  type EvidencePurpose,
+  type GatePolicy,
+  type GateRequirement,
+} from './gate-policy.js';
+export {
   EXECUTION_CONTRACT_PROTOCOL_VERSION,
   EXECUTION_CONTRACT_VERSION,
   CapabilityRequirementSchema,

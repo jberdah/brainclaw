@@ -341,17 +341,21 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
         kind: 'review',
         title: 'auto-close',
         agentId: 'agt_a',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
       },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
+    const reviewerSlotId = payload(opened.response.result).loop.slots[0].slot_id;
 
     await handleBclawLoop({
       args: {
-        intent: 'add_artifact',
+        intent: 'complete_turn',
         loop_id: loopId,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
         artifact: { phase: 'verdict', type: 'verdict', body: 'accepted' },
-        agentId: 'agt_a',
+        agentId: 'agt_reviewer',
       },
       cwd,
     });

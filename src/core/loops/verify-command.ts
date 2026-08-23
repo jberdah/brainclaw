@@ -239,6 +239,11 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
         {
           id: input.loop_id,
           actor: input.actor,
+          evidence_context: {
+            channel: 'verify_command',
+            producer_kind: 'engine',
+            producer_id: 'brainclaw:verify-command',
+          },
           artifact: {
             // Stamp the SNAPSHOT phase + iteration so the report is attributed to the
             // iteration whose code it actually tested — never a later iteration a
@@ -247,7 +252,6 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
             iteration,
             type: 'verify_report',
             body: JSON.stringify(report),
-            produced_by: 'engine',
           },
         },
         cwd,

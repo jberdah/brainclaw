@@ -13,10 +13,22 @@ import {
 } from './store.js';
 import { commitViaIntent } from './commit-intent.js';
 import {
+  evidenceWriterEnabled,
+  sealArtifactEvidence,
+  type EvidenceCommitContext,
+} from './evidence.js';
+import {
+  evaluateCommandGreen,
+  evaluateCriticSignal,
+  evaluateGateCondition,
+  evaluateNoNewCritique,
+} from './gate-policy.js';
+import {
   LoopArtifactSchema,
   PAUSE_REASONS,
   type LoopArtifact,
   type LoopEvent,
+  type GateDecision,
   type LoopSlot,
   type LoopStatus,
   type LoopThread,
@@ -74,12 +86,6 @@ function convergeSlotAssignmentsForClosedLoop(
 
 /* ========================= Stop-condition evaluator ======================= */
 
-function isVerdictAccepted(artifact: LoopArtifact): boolean {
-  if (artifact.type !== 'verdict') return false;
-  const body = (artifact.body ?? '').trim().toLowerCase();
-  return /^accepted(?:\b|[:\s])/.test(body);
-}
-
 /**
  * pln#639 BUG-1 — does this artifact carry anything a reader could USE?
  *
@@ -106,70 +112,7 @@ function hasUsableContent(artifact: LoopArtifact): boolean {
 }
 
 export function evaluateStopCondition(thread: LoopThread, condition?: StopCondition): boolean {
-  if (!condition) return false;
-  switch (condition.kind) {
-    case 'phase_reached':
-      return thread.current_phase === condition.phase;
-    case 'reviewer_green':
-      return thread.artifacts.some(isVerdictAccepted);
-    case 'max_iterations':
-      return thread.iteration_count >= condition.n;
-    case 'min_iterations':
-      return thread.iteration_count >= condition.n;
-    case 'artifact_produced':
-      return thread.artifacts.some(
-        (artifact) => artifact.phase === condition.phase && artifact.type === condition.type,
-      );
-    case 'min_artifacts_by_type': {
-      // pln#492 — count artifacts of `type` in the requested scope.
-      // Phase scope counts artifacts whose phase matches the thread's
-      // current_phase. When the thread is iterating (iteration_count > 0
-      // OR any artifact carries an iteration field), phase scope is
-      // refined to the current iteration window — that's what makes
-      // "≥3 critiques in current critique round" work without the
-      // previous round leaking in. loop scope counts across all phases
-      // and all iterations.
-      const matches = thread.artifacts.filter((artifact) => {
-        if (artifact.type !== condition.type) return false;
-        // pln#639 BUG-1 — an artifact with no usable content never counts.
-        if (!hasUsableContent(artifact)) return false;
-        if (condition.scope === 'phase') {
-          if (artifact.phase !== thread.current_phase) return false;
-          // pln#492 phase 2.b — iteration-window awareness. If either the
-          // thread or the artifact carries iteration info, only count the
-          // artifacts produced in the thread's current iteration. Legacy
-          // loops without iteration tracking are unaffected (both fields
-          // default to 0).
-          if (
-            thread.iteration_count > 0 ||
-            thread.artifacts.some((a) => a.iteration !== undefined)
-          ) {
-            const artifactIteration = artifact.iteration ?? 0;
-            if (artifactIteration !== thread.iteration_count) return false;
-          }
-          return true;
-        }
-        return true;
-      });
-      return matches.length >= condition.n;
-    }
-    case 'no_open_questions':
-      // pln#511 step 1 — bootstrap preset clarify-phase primitive. Mirrors
-      // the persisted `thread.open_questions` set (kept in sync by
-      // request_input / provide_input — see reconcileOpenQuestions).
-      return thread.open_questions.length === 0;
-    case 'manual':
-      return false;
-    case 'any':
-      return condition.conditions.some((c) => evaluateStopCondition(thread, c));
-    case 'all':
-      return condition.conditions.every((c) => evaluateStopCondition(thread, c));
-    default: {
-      const exhaustive: never = condition;
-      void exhaustive;
-      return false;
-    }
-  }
+  return evaluateGateCondition(thread, condition).passed;
 }
 
 /**
@@ -195,6 +138,7 @@ export function evaluateStopCondition(thread: LoopThread, condition?: StopCondit
 export interface PhaseAdvanceOutcome {
   advance: boolean;
   gate_reason?: string;
+  gate_decision?: GateDecision;
 }
 
 export function evaluatePhaseAdvanceGate(
@@ -202,14 +146,16 @@ export function evaluatePhaseAdvanceGate(
   gate: StopCondition | undefined,
 ): PhaseAdvanceOutcome {
   if (!gate) return { advance: true };
-  if (evaluateStopCondition(thread, gate)) return { advance: true };
+  const gate_decision = evaluateGateCondition(thread, gate);
+  if (gate_decision.passed) return { advance: true, gate_decision };
   return {
     advance: false,
-    gate_reason: describeUnmetGate(thread, gate),
+    gate_reason: describeUnmetGate(thread, gate, gate_decision),
+    gate_decision,
   };
 }
 
-function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
+function describeUnmetGate(thread: LoopThread, gate: StopCondition, decision?: GateDecision): string {
   switch (gate.kind) {
     case 'min_artifacts_by_type': {
       // Mirror the iteration-aware filter used in evaluateStopCondition so
@@ -243,7 +189,13 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
       const emptyNote = emptyOfType > 0
         ? ` (${emptyOfType} artifact(s) of this type carry no usable content and do not count)`
         : '';
-      return `min_artifacts_by_type unmet: ${gate.scope}-scope count of type "${gate.type}" = ${matches.length} < n=${gate.n}${emptyNote}`;
+      const eligibleCount = decision && decision.mode !== 'legacy'
+        ? decision.accepted_evidence_ids.length
+        : matches.length;
+      const policyNote = decision && decision.rejected.length > 0
+        ? ` (${decision.rejected.length} rejected by evidence policy: ${[...new Set(decision.rejected.map((item) => item.reason))].join(', ')})`
+        : '';
+      return `min_artifacts_by_type unmet: ${gate.scope}-scope count of type "${gate.type}" = ${eligibleCount} < n=${gate.n}${emptyNote}${policyNote}`;
     }
     case 'phase_reached':
       return `phase_reached unmet: current_phase="${thread.current_phase}" expected="${gate.phase}"`;
@@ -267,7 +219,7 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
       // first sub-condition that evaluates false and report its reason so
       // the journal records what is actually blocking the advance.
       const failing = gate.conditions.find((c) => !evaluateStopCondition(thread, c));
-      if (failing) return describeUnmetGate(thread, failing);
+      if (failing) return describeUnmetGate(thread, failing, evaluateGateCondition(thread, failing));
       return `all-of unmet: at least one of ${gate.conditions.length} sub-conditions failed`;
     }
     default: {
@@ -319,10 +271,24 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
   // is forcing an explicit to_phase or passing { force: true }. On block,
   // emit a `phase_advance_blocked` system event into the journal and throw
   // an actionable error (not a silent hang — mitigates trp#160 wiring class).
-  if (input.to_phase === undefined && input.force !== true) {
+  let phaseGateDecision: GateDecision | undefined;
+  let earlyIterationDecision: NextPhaseDecision | undefined;
+  if (
+    input.to_phase === undefined &&
+    current.protocol?.iteration?.exit_when === 'no_new_critique_artifacts' &&
+    current.protocol.iteration.cycle[0] === current.current_phase &&
+    current.iteration_count > 0
+  ) {
+    const candidate = decideNextPhase(current, { phases: current.phases, iteration: current.protocol.iteration });
+    if (candidate.kind === 'exit_cycle' && candidate.reason === 'no_new_critique_artifacts') {
+      earlyIterationDecision = candidate;
+    }
+  }
+  if (input.to_phase === undefined && input.force !== true && !earlyIterationDecision) {
     const currentPhaseDef = current.phases[currentIndex];
     const gate = currentPhaseDef?.advance_gate;
     const gateOutcome = evaluatePhaseAdvanceGate(current, gate);
+    phaseGateDecision = gateOutcome.gate_decision;
     if (!gateOutcome.advance) {
       const blockSeq = nextSeq(current.id, cwd);
       const blockMutation = generateMutationId();
@@ -338,6 +304,7 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
           kind: 'phase_advance_blocked',
           phase: current.current_phase,
           gate_reason: gateOutcome.gate_reason ?? 'gate evaluation returned no reason',
+          gate_decision: gateOutcome.gate_decision,
         },
         cwd,
       );
@@ -354,14 +321,15 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
   // satisfied AT the last phase (the bootstrap preset's converge case after
   // project_md_final lands), the right behavior is auto-close, not throw.
   // Field-observed during pln#514 v1.1 validation (run_79f8443a).
-  if (input.to_phase === undefined && evaluateStopCondition(current, current.stop_condition)) {
+  const preAdvanceStopDecision = evaluateGateCondition(current, current.stop_condition);
+  if (input.to_phase === undefined && preAdvanceStopDecision.passed) {
     const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
       current,
       current.stop_condition,
     )
       ? 'blocked'
       : 'completed';
-    const closed = commitClosedTransition(current, finalStatus, input.actor, input.reason, cwd);
+    const closed = commitClosedTransition(current, finalStatus, input.actor, input.reason, cwd, preAdvanceStopDecision);
     return { loop: closed, auto_closed: true };
   }
 
@@ -390,19 +358,27 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
       phases: current.phases,
       iteration: current.protocol?.iteration,
     };
-    iterationDecision = decideNextPhase(current, protocol);
+    iterationDecision = earlyIterationDecision ?? decideNextPhase(current, protocol);
     to_phase = iterationDecision.target;
     iteration_count = iterationDecision.iteration;
+    if (!phaseGateDecision && iterationDecision.kind === 'exit_cycle') {
+      phaseGateDecision = iterationDecision.reason === 'command_green'
+        ? evaluateCommandGreen(current, current.iteration_count)
+        : iterationDecision.reason === 'critic_signal'
+          ? evaluateCriticSignal(current, current.iteration_count)
+          : evaluateNoNewCritique(current, current.iteration_count);
+    }
   }
 
-  if (evaluateStopCondition(current, current.stop_condition)) {
+  const stopDecision = evaluateGateCondition(current, current.stop_condition);
+  if (stopDecision.passed) {
     const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
       current,
       current.stop_condition,
     )
       ? 'blocked'
       : 'completed';
-    const closed = commitClosedTransition(current, finalStatus, input.actor, input.reason, cwd);
+    const closed = commitClosedTransition(current, finalStatus, input.actor, input.reason, cwd, stopDecision);
     return { loop: closed, auto_closed: true };
   }
 
@@ -457,20 +433,21 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
       to_phase,
       iteration: iteration_count,
       reason: input.reason,
+      gate_decision: phaseGateDecision,
     },
     cwd,
   );
   writeThreadFile(next, cwd);
 
-  const postAdvance = evaluateStopCondition(next, next.stop_condition);
-  if (postAdvance) {
+  const postAdvanceDecision = evaluateGateCondition(next, next.stop_condition);
+  if (postAdvanceDecision.passed) {
     const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
       next,
       next.stop_condition,
     )
       ? 'blocked'
       : 'completed';
-    const closed = commitClosedTransition(next, finalStatus, input.actor, input.reason, cwd);
+    const closed = commitClosedTransition(next, finalStatus, input.actor, input.reason, cwd, postAdvanceDecision);
     return { loop: closed, auto_closed: true };
   }
 
@@ -495,6 +472,7 @@ function commitClosedTransition(
   actor: string,
   reason: string | undefined,
   cwd: string | undefined,
+  gate_decision?: GateDecision,
 ): LoopThread {
   // pln#514 post-validation fix (can_27ebf1a0, run_79f8443a) — when the
   // auto-close path completes a bootstrap-preset loop, delegate to
@@ -542,6 +520,7 @@ function commitClosedTransition(
       kind: 'closed',
       final_status,
       reason,
+      gate_decision,
     },
     cwd,
   );
@@ -713,7 +692,7 @@ export interface CompleteTurnInput {
   id: string;
   slot_id: string;
   outcome?: 'done' | 'failed' | 'cancelled';
-  artifact?: Omit<LoopArtifact, 'artifact_id' | 'produced_at' | 'produced_by'>;
+  artifact?: Omit<LoopArtifact, 'artifact_id' | 'produced_at' | 'produced_by' | 'evidence'>;
   failure_reason?: string;
   actor: string;
   /** Override the slot-owner auth check. Default false. */
@@ -727,6 +706,8 @@ export interface CompleteTurnInput {
    * are different principals.
    */
   caller_claim_id?: string;
+  /** Internal-only provenance supplied by the reconciler/engine. */
+  evidence_context?: EvidenceCommitContext;
 }
 
 export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThread {
@@ -758,13 +739,31 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
 
   let nextArtifacts = current.artifacts;
   let artifactId: string | undefined;
+  let committedArtifact: LoopArtifact | undefined;
   if (input.artifact) {
-    const newArtifact = LoopArtifactSchema.parse({
+    const evidenceContext: EvidenceCommitContext = input.evidence_context ?? {
+      channel: 'complete_turn',
+      producer_kind: 'slot',
+      producer_id: slot.slot_id,
+      agent_id: slot.agent_id,
+      slot_id: slot.slot_id,
+      slot_role: slot.role,
+      turn_id: slot.current_turn_id,
+      assignment_id: slot.assignment_id,
+      claim_id: slot.claim_id,
+    };
+    const parsedArtifact = LoopArtifactSchema.parse({
       ...input.artifact,
       artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
-      produced_by: slot.slot_id,
+      produced_by: evidenceContext.producer_id,
       produced_at: now,
+      iteration: input.artifact.iteration ?? current.iteration_count,
+      evidence: undefined,
     });
+    const newArtifact = (current.evidence_policy !== undefined || evidenceWriterEnabled())
+      ? LoopArtifactSchema.parse(sealArtifactEvidence(current, parsedArtifact, evidenceContext))
+      : parsedArtifact;
+    committedArtifact = newArtifact;
     artifactId = newArtifact.artifact_id;
     nextArtifacts = [...nextArtifacts, newArtifact];
   }
@@ -798,7 +797,8 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
       artifact_id: artifactId,
       phase: input.artifact.phase,
       type: input.artifact.type,
-      produced_by: slot.slot_id,
+      produced_by: committedArtifact?.produced_by,
+      evidence_id: committedArtifact?.evidence?.evidence_id,
     });
   }
   events.push({
@@ -833,8 +833,10 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
 
 export interface AddArtifactInput {
   id: string;
-  artifact: Omit<LoopArtifact, 'artifact_id' | 'produced_at'>;
+  artifact: Omit<LoopArtifact, 'artifact_id' | 'produced_at' | 'evidence'>;
   actor: string;
+  /** Internal-only provenance. Caller-provided produced_by is never authoritative. */
+  evidence_context?: EvidenceCommitContext;
 }
 
 export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread {
@@ -851,12 +853,22 @@ export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread 
   // accurate per-iteration counts without callers having to track the
   // index; non-iterating loops are unaffected because iteration_count
   // stays at 0.
-  const newArtifact = LoopArtifactSchema.parse({
+  const evidenceContext: EvidenceCommitContext = input.evidence_context ?? {
+    channel: 'add_artifact',
+    producer_kind: 'coordinator',
+    producer_id: input.actor,
+  };
+  const parsedArtifact = LoopArtifactSchema.parse({
     ...input.artifact,
     artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
     produced_at: now,
+    produced_by: evidenceContext.producer_id,
     iteration: input.artifact.iteration ?? current.iteration_count,
+    evidence: undefined,
   });
+  const newArtifact = (current.evidence_policy !== undefined || evidenceWriterEnabled())
+    ? LoopArtifactSchema.parse(sealArtifactEvidence(current, parsedArtifact, evidenceContext))
+    : parsedArtifact;
 
   const next: LoopThread = {
     ...current,
@@ -880,6 +892,7 @@ export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread 
       phase: newArtifact.phase,
       type: newArtifact.type,
       produced_by: newArtifact.produced_by,
+      evidence_id: newArtifact.evidence?.evidence_id,
     },
     cwd,
   );
@@ -1104,7 +1117,7 @@ export function requestInput(input: RequestInputInput, cwd?: string): RequestInp
   // type='operator_question' via KNOWN_ARTIFACT_BODY_SCHEMAS — so any
   // invariant violation (empty evidence, options size, on_timeout vs
   // suggested_default) surfaces here.
-  const newArtifact = LoopArtifactSchema.parse({
+  const parsedArtifact = LoopArtifactSchema.parse({
     artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
     phase: input.phase,
     type: 'operator_question',
@@ -1113,6 +1126,19 @@ export function requestInput(input: RequestInputInput, cwd?: string): RequestInp
     produced_at: now,
     iteration: current.iteration_count,
   });
+  const newArtifact = (current.evidence_policy !== undefined || evidenceWriterEnabled())
+    ? LoopArtifactSchema.parse(sealArtifactEvidence(current, parsedArtifact, {
+        channel: 'operator_input',
+        producer_kind: 'slot',
+        producer_id: slot.agent_id ?? slot.agent ?? input.actor,
+        agent_id: slot.agent_id,
+        slot_id: slot.slot_id,
+        slot_role: slot.role,
+        turn_id: slot.current_turn_id,
+        assignment_id: slot.assignment_id,
+        claim_id: slot.claim_id,
+      }))
+    : parsedArtifact;
 
   let nextStatus: LoopStatus = current.status;
   let nextPauseReason = current.pause_reason;
@@ -1310,7 +1336,7 @@ export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInp
   const mutation_id = generateMutationId();
   const version = current.version + 1;
 
-  const newArtifact = LoopArtifactSchema.parse({
+  const parsedArtifact = LoopArtifactSchema.parse({
     artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
     phase: sourceQuestion.phase,
     type: 'operator_answer',
@@ -1319,6 +1345,13 @@ export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInp
     produced_at: now,
     iteration: current.iteration_count,
   });
+  const newArtifact = (current.evidence_policy !== undefined || evidenceWriterEnabled())
+    ? LoopArtifactSchema.parse(sealArtifactEvidence(current, parsedArtifact, {
+        channel: 'operator_input',
+        producer_kind: by === 'system' ? 'engine' : 'operator',
+        producer_id: by === 'system' ? 'brainclaw:pause-timeout' : input.actor,
+      }))
+    : parsedArtifact;
 
   const nextOpenQuestions = current.open_questions.filter((q) => q !== input.replies_to);
 

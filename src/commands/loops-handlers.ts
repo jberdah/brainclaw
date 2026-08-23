@@ -528,7 +528,6 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
                 phase: req.artifact.phase,
                 type: req.artifact.type,
                 body: req.artifact.body,
-                produced_by: req.artifact.produced_by,
                 ref: req.artifact.ref,
                 addresses_critique: req.artifact.addresses_critique,
               },

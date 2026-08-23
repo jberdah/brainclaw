@@ -363,6 +363,84 @@ export const REF_BASED_ARTIFACT_TYPES = new Set<string>([
   'file_diff',
 ]);
 
+export const EVIDENCE_ATTESTATION_KINDS = ['claim', 'observation', 'verification', 'approval'] as const;
+export type EvidenceAttestationKind = (typeof EVIDENCE_ATTESTATION_KINDS)[number];
+
+export const EVIDENCE_PRODUCER_KINDS = ['engine', 'slot', 'coordinator', 'operator'] as const;
+export type EvidenceProducerKind = (typeof EVIDENCE_PRODUCER_KINDS)[number];
+
+export const EVIDENCE_CHANNELS = [
+  'complete_turn',
+  'reconcile_turn',
+  'verify_command',
+  'add_artifact',
+  'operator_input',
+  'system_hook',
+] as const;
+export type EvidenceChannel = (typeof EVIDENCE_CHANNELS)[number];
+
+export const EvidenceSubjectSchema = z.object({
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  artifact_id: z.string().min(1),
+  phase: z.string().min(1),
+  iteration: z.number().int().nonnegative(),
+  slot_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  assignment_id: z.string().optional(),
+  claim_id: z.string().optional(),
+});
+export type EvidenceSubject = z.infer<typeof EvidenceSubjectSchema>;
+
+export const EvidenceProducerSchema = z.object({
+  kind: z.enum(EVIDENCE_PRODUCER_KINDS),
+  id: z.string().min(1),
+  agent_id: z.string().optional(),
+  channel: z.enum(EVIDENCE_CHANNELS),
+});
+export type EvidenceProducer = z.infer<typeof EvidenceProducerSchema>;
+
+export const EvidenceAttestationSchema = z.object({
+  kind: z.enum(EVIDENCE_ATTESTATION_KINDS),
+  issuer: z.string().min(1),
+  issued_at: z.string().datetime(),
+  subject_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  rights: z.array(z.string().min(1)).min(1),
+});
+export type EvidenceAttestation = z.infer<typeof EvidenceAttestationSchema>;
+
+/**
+ * EvidenceEnvelope v1 is sealed by the loop engine at the artifact commit
+ * boundary. The seal is an integrity checksum, not a remote identity
+ * signature: ingress schemas never accept this object from a caller.
+ */
+export const EvidenceEnvelopeSchema = z.object({
+  version: z.literal(1),
+  evidence_id: z.string().regex(/^evd_[0-9a-z]+$/),
+  evidence_type: z.literal('artifact_commit'),
+  policy_version: z.literal('gate-policy-v1'),
+  subject: EvidenceSubjectSchema,
+  producer: EvidenceProducerSchema,
+  artifact_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  issued_at: z.string().datetime(),
+  observed_at: z.string().datetime(),
+  validity: z.object({
+    not_before: z.string().datetime(),
+    not_after: z.string().datetime().optional(),
+  }),
+  attestations: z.array(EvidenceAttestationSchema).min(1),
+  seal: z.object({
+    algorithm: z.literal('sha256'),
+    digest: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+});
+export type EvidenceEnvelope = z.infer<typeof EvidenceEnvelopeSchema>;
+
+export const EvidencePolicyBindingSchema = z.object({
+  version: z.literal('gate-policy-v1'),
+  mode: z.enum(['shadow', 'strict']),
+});
+export type EvidencePolicyBinding = z.infer<typeof EvidencePolicyBindingSchema>;
+
 /**
  * Lookup table mapping known artifact types to their body Zod schemas.
  * Step 2 handlers (request_input/provide_input) parse `artifact.body` as
@@ -454,6 +532,8 @@ export const LoopArtifactSchema = z
      * at artifact creation time so callers don't have to track it.
      */
     iteration: z.number().int().nonnegative().optional(),
+    /** Server-sealed provenance and independent attestations (P2). */
+    evidence: EvidenceEnvelopeSchema.optional(),
   })
   .superRefine((artifact, ctx) => {
     if (artifact.body !== undefined && Buffer.byteLength(artifact.body, 'utf8') > LOOP_ARTIFACT_BODY_MAX_BYTES) {
@@ -576,6 +656,8 @@ export const LoopThreadSchema = z
     artifacts: z.array(LoopArtifactSchema),
     linked: LoopLinksSchema.optional(),
     stop_condition: StopConditionSchema.optional(),
+    /** Absent means a pre-policy/legacy thread. New loops bind this at open. */
+    evidence_policy: EvidencePolicyBindingSchema.optional(),
 
     /**
      * pln#508 step 1 — set of unresolved operator_question artifact ids.
@@ -662,6 +744,16 @@ const LoopEventBaseShape = {
   mutation_id: z.string().min(1),
 };
 
+export const GateDecisionSchema = z.object({
+  passed: z.boolean(),
+  policy_version: z.enum(['legacy', 'gate-policy-v1']),
+  mode: z.enum(['legacy', 'shadow', 'strict']),
+  condition_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  accepted_evidence_ids: z.array(z.string()),
+  rejected: z.array(z.object({ artifact_id: z.string(), reason: z.string() })),
+});
+export type GateDecision = z.infer<typeof GateDecisionSchema>;
+
 export const LoopEventSchema = z.discriminatedUnion('kind', [
   z.object({
     ...LoopEventBaseShape,
@@ -676,6 +768,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     to_phase: z.string().min(1),
     iteration: z.number().int().nonnegative(),
     reason: z.string().optional(),
+    gate_decision: GateDecisionSchema.optional(),
   }),
   z.object({
     ...LoopEventBaseShape,
@@ -713,6 +806,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     phase: z.string().min(1),
     type: z.string().min(1),
     produced_by: z.string().optional(),
+    evidence_id: z.string().optional(),
   }),
   z.object({
     ...LoopEventBaseShape,
@@ -733,6 +827,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     kind: z.literal('closed'),
     final_status: z.enum(['completed', 'cancelled', 'blocked']),
     reason: z.string().optional(),
+    gate_decision: GateDecisionSchema.optional(),
   }),
   // pln#492 — system events emitted by the iteration / phase-advance gate.
   // Carried in the same event journal rather than as artifacts so consumers
@@ -742,6 +837,7 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     kind: z.literal('phase_advance_blocked'),
     phase: z.string().min(1),
     gate_reason: z.string().min(1),
+    gate_decision: GateDecisionSchema.optional(),
   }),
   z.object({
     ...LoopEventBaseShape,
