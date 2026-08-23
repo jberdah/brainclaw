@@ -189,6 +189,8 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
     assert.ok(baselineArtifact, 'opened loop must carry a signals_baseline artifact');
     assert.equal(baselineArtifact?.phase, 'survey');
     assert.equal(baselineArtifact?.produced_by, 'brainclaw-scanner');
+    assert.equal(baselineArtifact?.evidence?.producer.channel, 'system_hook');
+    assert.equal(baselineArtifact?.evidence?.producer.kind, 'engine');
     const body = JSON.parse(baselineArtifact?.body ?? '{}') as { source: string; summary: string; seeds: unknown[]; seed_count: number };
     assert.equal(body.source, 'deterministic_scanner');
     assert.ok(body.summary.length > 0);
