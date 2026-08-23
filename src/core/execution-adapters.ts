@@ -194,6 +194,17 @@ export interface ManualExecutionCommand {
   contractWrapped?: boolean;
 }
 
+/** Raw transport facts only; HarnessAdapter owns semantic parsing. */
+export interface TransportObservation {
+  exit_code?: number;
+  stdout: string;
+  stderr: string;
+  timed_out?: boolean;
+  cancelled?: boolean;
+  started_at?: string;
+  completed_at?: string;
+}
+
 export interface ExecutionAdapterStartOptions {
   worktreePath?: string;
   claimId?: string;
@@ -232,6 +243,7 @@ export interface ExecutionAdapter {
   interrupt?(runId: string, reason?: string): Promise<unknown> | unknown;
   cancel?(runId: string, reason?: string): Promise<unknown> | unknown;
   collectArtifacts?(runId: string): Promise<unknown> | unknown;
+  collectObservation?(runId: string): Promise<TransportObservation> | TransportObservation;
 }
 
 /**

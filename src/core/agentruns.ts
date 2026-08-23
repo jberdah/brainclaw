@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AgentRunSchema, type AgentRun, type AgentRunStatus, type AgentRunTransport, type Assignment, type AssignmentArtifact } from './schema.js';
-import type { CapabilitySnapshot, ExecutionContractRef } from './execution-contract.js';
+import { RuntimeCapabilityObservationSchema, type CapabilitySnapshot, type ExecutionContractRef, type RuntimeCapabilityObservation } from './execution-contract.js';
 import { resolveOwnerProjectId } from './config.js';
 import { entityRecordDirs, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
@@ -134,6 +134,67 @@ export function recordExecutionContractAnomaly(
       accepted_contract_hash: anomaly.accepted_contract_hash,
       accepted_capability_snapshot_hash: anomaly.accepted_capability_snapshot_hash,
     };
+    run.updated_at = now;
+    run.last_event_at = now;
+    saveAgentRunUnlocked(run, cwd);
+    return run;
+  });
+}
+
+/** Persist a post-start observation without ever rewriting the frozen snapshot. */
+export function recordRuntimeCapabilityObservation(
+  id: string,
+  observation: RuntimeCapabilityObservation,
+  diagnostic?: AgentRun['harness_exit_diagnostic'],
+  cwd?: string,
+): AgentRun {
+  return mutate({ cwd }, () => {
+    const run = loadAgentRun(id, cwd);
+    if (!run) throw new Error(`AgentRun not found: ${id}`);
+    const parsed = RuntimeCapabilityObservationSchema.parse(observation);
+    if (run.runtime_capability_observation) {
+      if (JSON.stringify(run.runtime_capability_observation) !== JSON.stringify(parsed)) {
+        throw new Error(`AgentRun ${id} already has a different runtime capability observation`);
+      }
+      return run;
+    }
+    const now = nowISO();
+    run.runtime_capability_observation = parsed;
+    if (diagnostic) run.harness_exit_diagnostic = diagnostic;
+    const frozenRef = run.execution_contract_ref;
+    const frozenHarness = run.capability_snapshot?.resolved.harness;
+    const resolvedModel = frozenHarness?.resolved_model ?? run.capability_snapshot?.resolved.model;
+    const mismatches: string[] = [];
+    if (frozenRef?.hash !== parsed.contract_hash) {
+      mismatches.push(`observed contract hash '${parsed.contract_hash}' differs from frozen '${frozenRef?.hash ?? 'absent'}'`);
+    }
+    if (frozenRef?.snapshot_hash !== parsed.capability_snapshot_hash) {
+      mismatches.push(`observed capability snapshot hash '${parsed.capability_snapshot_hash}' differs from frozen '${frozenRef?.snapshot_hash ?? 'absent'}'`);
+    }
+    if (parsed.accepted_contract_hash && parsed.accepted_contract_hash !== frozenRef?.hash) {
+      mismatches.push(`accepted contract hash '${parsed.accepted_contract_hash}' differs from frozen '${frozenRef?.hash ?? 'absent'}'`);
+    }
+    if (parsed.accepted_capability_snapshot_hash && parsed.accepted_capability_snapshot_hash !== frozenRef?.snapshot_hash) {
+      mismatches.push(`accepted capability snapshot hash '${parsed.accepted_capability_snapshot_hash}' differs from frozen '${frozenRef?.snapshot_hash ?? 'absent'}'`);
+    }
+    if (frozenHarness && parsed.adapter_id && frozenHarness.adapter_id !== parsed.adapter_id) {
+      mismatches.push(`observed adapter '${parsed.adapter_id}' differs from frozen '${frozenHarness.adapter_id}'`);
+    }
+    if (frozenHarness && parsed.adapter_version && frozenHarness.adapter_version !== parsed.adapter_version) {
+      mismatches.push(`observed adapter version '${parsed.adapter_version}' differs from frozen '${frozenHarness.adapter_version}'`);
+    }
+    if (resolvedModel && parsed.observed_model && resolvedModel !== parsed.observed_model) {
+      mismatches.push(`observed model '${parsed.observed_model}' differs from frozen resolved model '${resolvedModel}'`);
+    }
+    if (mismatches.length > 0 && !run.execution_contract_anomaly) {
+      run.execution_contract_anomaly = {
+        detected_at: now,
+        source: 'reconciler',
+        reason: mismatches.join('; '),
+        accepted_contract_hash: parsed.accepted_contract_hash,
+        accepted_capability_snapshot_hash: parsed.accepted_capability_snapshot_hash,
+      };
+    }
     run.updated_at = now;
     run.last_event_at = now;
     saveAgentRunUnlocked(run, cwd);

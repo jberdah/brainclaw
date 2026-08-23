@@ -89,6 +89,13 @@ dispatch substrate for all five protocols, not protocol-specific review
 metadata, and it adds no journal. See
 [Execution contract and capability snapshot](./execution-contract.md).
 
+The contracted attempt then passes through a
+[Harness adapter](./harness-adapters.md). That adapter binds a concrete agent
+harness and normalizes its output, while the existing `ExecutionAdapter` owns
+the process transport. Neither layer owns phases, artifacts, evidence, gates,
+or convergence: those remain here in the shared engine. The same boundary is
+used for every worker phase in the five-kind table below.
+
 Phase-specific execution metadata lives in `LOOP_KIND_POLICIES`; phase graphs,
 gates, iteration and stop conditions remain exclusively in `DEFAULT_PROTOCOLS`.
 The current execution split is deliberately visible here for all five protocols:

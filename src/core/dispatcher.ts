@@ -44,7 +44,8 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, dispatchHasMcp, dispatchCanCommit, isSandboxedSpawn, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { resolveBriefMode, getCapabilityProfile, dispatchHasMcp, dispatchCanCommit, isSandboxedSpawn, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { buildHarnessInvocation } from './harness-adapters/index.js';
 import { getRuntimeSignalPath, getWorktreeHeartbeatPath } from './runtime-signals.js';
 import { attemptExecution } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
@@ -1403,7 +1404,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
       // `sandboxed` flag. A --dry-run that previews a DIFFERENT brief than the one
       // that ships is worse than no preview.
       const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId, worktreePath, agent: targetAgent });
-      const invokeCmd = buildInvokeCommand(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) });
+      const invokeCmd = buildHarnessInvocation(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) })?.invoke;
       if (invokeCmd) {
         const cmdPrefix = buildEnvPrefix(claimId);
         result.commands.push({ agent: targetAgent, lane: readyItem.lane, plan_id: readyItem.plan.id, command: `${cmdPrefix}${invokeCmd.bashCommand}`, shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh') });
@@ -1461,7 +1462,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
     });
 
     // Step 3: Build invoke command
-    const invokeCmd = buildInvokeCommand(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) });
+    const invokeCmd = buildHarnessInvocation(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) })?.invoke;
     if (invokeCmd) {
       const cmdPrefix = buildEnvPrefix(claimId);
       result.commands.push({

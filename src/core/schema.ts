@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { CapabilitySnapshotSchema, ExecutionContractRefSchema } from './execution-contract.js';
+import { CapabilitySnapshotSchema, ExecutionContractRefSchema, RuntimeCapabilityObservationSchema } from './execution-contract.js';
 
 // --- Helpers ---
 
@@ -908,7 +908,6 @@ export const AssignmentSchema = z.object({
   /** Immutable attempt contract identity; optional for legacy records. */
   execution_contract_ref: ExecutionContractRefSchema.optional(),
   capability_snapshot: CapabilitySnapshotSchema.optional(),
-
   // Status FSM
   status: AssignmentStatusSchema,
   status_reason: z.string().optional(),
@@ -1004,6 +1003,15 @@ export const AgentRunSchema = z.object({
   /** Immutable attempt contract identity; optional for legacy records. */
   execution_contract_ref: ExecutionContractRefSchema.optional(),
   capability_snapshot: CapabilitySnapshotSchema.optional(),
+  /** Runtime observation is additive and never mutates the hashed capability snapshot. */
+  runtime_capability_observation: RuntimeCapabilityObservationSchema.optional(),
+  harness_exit_diagnostic: z.object({
+    adapter_id: z.string().min(1),
+    adapter_version: z.string().min(1),
+    transport_status: z.enum(['completed', 'failed', 'timed_out', 'cancelled']),
+    protocol_status: z.enum(['valid', 'invalid', 'partial', 'absent']),
+    message: z.string().min(1).optional(),
+  }).optional(),
   /** Monotone fence: once present, no reconciler may auto-converge or respawn this generation. */
   execution_contract_anomaly: z.object({
     detected_at: z.string().min(1),

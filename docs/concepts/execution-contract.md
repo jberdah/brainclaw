@@ -63,6 +63,15 @@ Current profiles do not attest an exact tool catalog, so a named
 `required_tools` list fails closed with `tool_catalog_unattested`; Brainclaw
 does not infer tool availability from generic MCP or skill support.
 
+For worker-backed turns, the resolved snapshot also freezes a
+`HarnessCapabilityBinding`: adapter id/version plus requested and selected model
+string. A CLI model selector is marked `unattested` unless the harness can
+actually attest account-specific availability; it is never mislabeled as an
+exact capability merely because `--model` exists. The adapter cannot change on
+replay or after a feature-flag flip. Runtime model and adapter observations are
+stored separately on AgentRun and compared with the contract-bound snapshot.
+See [Harness adapters](./harness-adapters.md).
+
 Default roles follow the work performed by each worker phase: review findings
 and follow-up plus ideation critique require `review`; research requires
 `consult`; review author response, implementation and debug require `execute`.

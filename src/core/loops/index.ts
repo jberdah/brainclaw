@@ -27,6 +27,7 @@ export {
   CapabilityRequirementSchema,
   CapabilityResolutionReasonSchema,
   CapabilitySnapshotSchema,
+  HarnessCapabilityBindingSchema,
   ExecutionContractRefSchema,
   ExecutionContractSchema,
   RuntimeCapabilityObservationSchema,
@@ -44,6 +45,7 @@ export {
   type ContractAcceptanceVerdict,
   type ExecutionContract,
   type ExecutionContractRef,
+  type HarnessCapabilityBinding,
   type RuntimeCapabilityObservation,
 } from '../execution-contract.js';
 export {

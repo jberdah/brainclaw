@@ -46,12 +46,13 @@ import { ackMessage, getThread, hasActiveAssignment, sendMessage } from '../core
 import { dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
 import { CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import {
-  buildInvokeCommand,
   getCapabilityProfile,
   getSpawnableAgents,
   resolveModel,
   validateAgentForDispatch,
+  type InvokeCommand,
 } from '../core/agent-capability.js';
+import { buildHarnessInvocation, resolveHarnessBinding, type HarnessBinding } from '../core/harness-adapters/index.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import { prepareTurnOwnedReviewDispatch, turnOwnedReviewEnabled } from '../core/review-loop-turn-dispatch.js';
@@ -435,7 +436,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   }
 
   const commandHints: Array<{ agent: string; command: string; shell: string }> = [];
-  type PreparedInvoke = { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand>; worktreePath?: string; turnEcho?: TurnEcho };
+  type PreparedInvoke = { entry: CoordinateDeliveryEntry; invoke: InvokeCommand | undefined; worktreePath?: string; turnEcho?: TurnEcho };
   const preparedInvokes: PreparedInvoke[] = [];
 
   // pln#359 phase 1b — cross-project routing. When `project` is set, all
@@ -752,7 +753,8 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     tags?: string[];
     payload?: Record<string, unknown>;
     commandMode?: 'worker' | 'consult';
-  }): { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand> } => {
+    harnessBinding?: HarnessBinding;
+  }): { entry: CoordinateDeliveryEntry; invoke: PreparedInvoke['invoke'] } => {
     const msgResult = sendMessage({
       from: senderAgent,
       to: input.agent,
@@ -772,7 +774,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     artifacts.push({ type: 'message', id: msgResult.id });
     side_effects.push({ action: 'create', entity: 'message', id: msgResult.id });
 
-    const invoke = buildInvokeCommand(input.agent, input.text, {
+    const invoke = buildHarnessInvocation(input.agent, input.text, {
       mode: input.commandMode ?? 'worker',
       // pln#520/#606 — decouple model from agent identity. req.model is the
       // override link; when unset, resolveModel intentionally falls back to
@@ -783,7 +785,8 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       // (gpt-5.6-luna review). Flows to both the manual commandHint and the
       // auto-spawn path (runCoordinateExecution reuses this invoke).
       model: resolveModel(input.agent, { override: req.model }),
-    });
+      binding: input.harnessBinding,
+    })?.invoke;
     // Build env prefix for claim routing — centralised in
     // execution-profile.ts:buildClaimEnvPrefix as of pln#496 step
     // stp_a9afe59d (handles all five shells, not just Windows/POSIX).
@@ -1925,6 +1928,8 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             // P0C / dec#171 — ideation crosses the same attempt fence as every
             // worker-backed LoopKind phase. Assignment, AgentRun, claim binding
             // and slot binding are all durable before the irreversible crossing.
+            const criticModel = resolveModel(slot.agent, { override: req.model });
+            const criticHarnessBinding = resolveHarnessBinding(slot.agent, criticModel);
             const attempt = prepareTurnExecution({
               kind: 'ideation',
               loop_id: loopId,
@@ -1941,7 +1946,8 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               task: briefResult.text,
               cwd: dispatchCwd,
               worktree_path: claimResult.worktreePath,
-              model: resolveModel(slot.agent, { override: req.model }),
+              model: criticModel,
+              harness_binding: criticHarnessBinding,
               assignment_tags: ['coordinate', 'ideate', 'loop', 'turn-owned'],
               run_tags: ['turn-owned', 'ideate', 'loop'],
             });
@@ -2026,6 +2032,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
                 worktree_path: claimResult.worktreePath,
               },
               commandMode: 'worker',
+              harnessBinding: criticHarnessBinding,
             });
 
             if (criticAssignmentId) {

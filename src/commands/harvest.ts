@@ -34,6 +34,7 @@ import { readCompletionSignals } from '../core/runtime-signals.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
 import { toWarningDetail } from '../core/warnings.js';
 import type { WarningDetail } from '../core/facade-schema.js';
+import { harvestHarnessObservation } from '../core/harness-adapters/index.js';
 
 /**
  * pln#630 PR3a — finalize a TURN-OWNED review lane via the exactly-once `reconcileTurn`
@@ -507,14 +508,28 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
 
   for (const worktreePath of worktreePaths) {
     const file = getLaneResultPath(worktreePath);
-    if (!fs.existsSync(file)) continue;
+    const fileExists = fs.existsSync(file);
+    let nativeObservation: ReturnType<typeof harvestHarnessObservation>;
+    if (options.assignmentId) {
+      try {
+        nativeObservation = harvestHarnessObservation(options.assignmentId, cwd, !options.dryRun);
+      } catch (err) {
+        result.errors.push(`Failed to harvest native harness output for ${options.assignmentId}: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+    }
+    if (!fileExists && !nativeObservation) continue;
 
     let lane: LaneResult;
-    try {
-      lane = LaneResultSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
-    } catch (err) {
-      result.errors.push(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
-      continue;
+    if (fileExists) {
+      try {
+        lane = LaneResultSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
+      } catch (err) {
+        result.errors.push(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+    } else {
+      lane = nativeObservation!.lane;
     }
 
     // Assignment filter (when harvesting a specific lane).
@@ -695,6 +710,8 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
             ideation_loop: ideationLoop ?? null,
             files_changed: lane.files_changed ?? [],
             source_worktree: worktreePath,
+            harness_stdout_log: nativeObservation?.stdout_log ?? null,
+            harness_stderr_log: nativeObservation?.stderr_log ?? null,
           },
         }, cwd);
         fs.mkdirSync(path.dirname(marker), { recursive: true });

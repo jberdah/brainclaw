@@ -50,6 +50,15 @@ export const CapabilityResolutionReasonSchema = z.object({
 });
 export type CapabilityResolutionReason = z.infer<typeof CapabilityResolutionReasonSchema>;
 
+export const HarnessCapabilityBindingSchema = z.object({
+  adapter_id: z.string().min(1),
+  adapter_version: z.string().min(1),
+  requested_model: z.string().min(1).optional(),
+  resolved_model: z.string().min(1).optional(),
+  model_resolution: z.enum(['exact', 'defaulted', 'unattested']),
+});
+export type HarnessCapabilityBinding = z.infer<typeof HarnessCapabilityBindingSchema>;
+
 export const CapabilitySnapshotSchema = z.object({
   schema_version: z.literal(1),
   agent: z.string().min(1),
@@ -64,6 +73,7 @@ export const CapabilitySnapshotSchema = z.object({
     model: z.string().min(1).optional(),
     invoke_binary: z.string().min(1).optional(),
     tool_catalog_attested: z.boolean(),
+    harness: HarnessCapabilityBindingSchema.optional(),
   }),
   reasons: z.array(CapabilityResolutionReasonSchema),
 });
@@ -122,6 +132,8 @@ export type ExecutionContractRef = z.infer<typeof ExecutionContractRefSchema>;
 export const RuntimeCapabilityObservationSchema = z.object({
   contract_hash: z.string().regex(/^[a-f0-9]{64}$/),
   capability_snapshot_hash: z.string().regex(/^[a-f0-9]{64}$/),
+  adapter_id: z.string().min(1).optional(),
+  adapter_version: z.string().min(1).optional(),
   observed_surfaces: z.array(z.string().min(1)).default([]),
   observed_model: z.string().min(1).optional(),
   accepted_contract_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -182,8 +194,10 @@ export function resolveCapabilitySnapshot(
   agent: string,
   requirementInput: CapabilityRequirement,
   agentId?: string,
+  harness?: HarnessCapabilityBinding,
 ): CapabilitySnapshot {
   const requested = CapabilityRequirementSchema.parse(requirementInput);
+  const harnessBinding = harness ? HarnessCapabilityBindingSchema.parse(harness) : undefined;
   const profile = getCapabilityProfile(agent);
   const reasons: CapabilityResolutionReason[] = [];
   if (!profile) {
@@ -265,6 +279,7 @@ export function resolveCapabilitySnapshot(
       model,
       invoke_binary: profile.invoke_binary,
       tool_catalog_attested: false,
+      harness: harnessBinding,
     },
     reasons,
   });

@@ -24,7 +24,8 @@ import { turn } from './loops/verbs.js';
 import { getLoop } from './loops/store.js';
 import { generateDispatchBrief } from './dispatcher.js';
 import { sendMessage } from './messaging.js';
-import { buildInvokeCommand, resolveModel } from './agent-capability.js';
+import { resolveModel } from './agent-capability.js';
+import { buildHarnessInvocation, resolveHarnessBinding, type HarnessBinding } from './harness-adapters/index.js';
 import { attemptExecution } from './execution.js';
 import type { TurnEcho } from './execution-adapters.js';
 import type { ExecutionContractRef } from './execution-contract.js';
@@ -92,7 +93,7 @@ const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
 type TurnOwnedPrep =
   | { kind: 'legacy' }
   | { kind: 'denied'; reason: string }
-  | { kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string; executionContractRef?: ExecutionContractRef };
+  | { kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string; executionContractRef?: ExecutionContractRef; harnessBinding: HarnessBinding };
 
 export interface PrepareTurnOwnedReviewInput {
   loopId: string;
@@ -191,6 +192,7 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
   // used by ideation, implementation, research and debug.
   // Only the loop snapshot above can safely choose the legacy path.
   try {
+    const harnessBinding = resolveHarnessBinding(input.agent, input.model);
     const prepared = prepareTurnExecution({
       kind: 'review',
       loop_id: loopId,
@@ -210,6 +212,7 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
       dispatch_lease_ms: TURN_OWNED_DISPATCH_LEASE_MS,
       grant_lease_ms: TURN_OWNED_LEASE_MS,
       model: input.model,
+      harness_binding: harnessBinding,
       assignment_tags: ['coordinate', 'review', 'loop', 'turn-owned', input.isReviewer ? 're-review' : 'author-fix'],
       run_tags: ['turn-owned', 'review', 'loop'],
       on_authority_stage: (stage) => turnProjectionFaultPoint(input, stage === 'reserved'
@@ -238,6 +241,7 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
       turnId: prepared.turn_id,
       nonce: prepared.nonce,
       executionContractRef: prepared.execution_contract_ref,
+      harnessBinding,
     };
   } catch (err) {
     // FAIL-CLOSED: identity reserved; degrade to denied, NEVER legacy.
@@ -353,6 +357,7 @@ export async function dispatchReviewLoopTurn(
 
     let assignmentId: string | undefined;
     let turnEcho: TurnEcho | undefined;
+    let harnessBinding: HarnessBinding | undefined;
     let runLegacyProjection = true;
 
     // pln#630 — turn-owned (exactly-once) dispatch, now the DEFAULT + FAIL-CLOSED after
@@ -413,6 +418,7 @@ export async function dispatchReviewLoopTurn(
             capability_snapshot_hash: prep.executionContractRef.snapshot_hash,
           } : {}),
         };
+        harnessBinding = prep.harnessBinding;
         runLegacyProjection = false;
       }
       // prep.kind === 'legacy' (fail-open BEFORE identity) → fall through unchanged.
@@ -520,10 +526,11 @@ export async function dispatchReviewLoopTurn(
       }
     }
 
-    const invoke = buildInvokeCommand(agent, brief, {
+    const invoke = buildHarnessInvocation(agent, brief, {
       mode: 'worker',
       model: resolveModel(agent, { override: input.model }),
-    });
+      binding: harnessBinding,
+    })?.invoke;
 
     const execResult = await attemptExecution(invoke, {
       agent,

@@ -12,7 +12,10 @@ import {
   type CapabilityRequirement,
   type CapabilitySnapshot,
   type ExecutionContractRef,
+  HarnessCapabilityBindingSchema,
+  type HarnessCapabilityBinding,
 } from '../execution-contract.js';
+import { resolveHarnessBinding } from '../harness-adapters/index.js';
 import { bindTurnProjection } from './verbs.js';
 import { deriveChildIds, deriveTurnId, getReservation, type TurnReservation } from './attempt-reservation.js';
 import { prepareAttempt, projectAndCross } from './attempt-authority.js';
@@ -124,6 +127,8 @@ export interface PrepareTurnExecutionInput {
   model?: string;
   /** Required runtime capabilities; defaults to a CLI-spawnable executor. */
   capability_requirement?: CapabilityRequirement;
+  /** Harness identity resolved before crossing and frozen into the capability snapshot. */
+  harness_binding?: HarnessCapabilityBinding;
   /** Contract + snapshot hashes accepted by a pre-crossing worker adapter. */
   accepted_execution_contract?: AcceptedExecutionContractRef;
   /** Optional policy overrides captured immutably in the contract. */
@@ -279,8 +284,23 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   ) {
     return preconditionDenied('capability requirement differs from the immutable existing execution contract');
   }
+  let requestedHarnessBinding: HarnessCapabilityBinding;
+  try {
+    const resolved = input.harness_binding ?? resolveHarnessBinding(input.agent, input.model);
+    requestedHarnessBinding = HarnessCapabilityBindingSchema.parse(resolved);
+  } catch (error) {
+    return preconditionDenied(error instanceof Error ? error.message : String(error));
+  }
+  const frozenHarnessBinding = existingReservation?.capability_snapshot?.resolved.harness;
+  if (frozenHarnessBinding && JSON.stringify(frozenHarnessBinding) !== JSON.stringify(requestedHarnessBinding)) {
+    return preconditionDenied(
+      `harness binding differs from immutable capability snapshot: frozen `
+      + `${frozenHarnessBinding.adapter_id}@${frozenHarnessBinding.adapter_version}, requested `
+      + `${requestedHarnessBinding.adapter_id}@${requestedHarnessBinding.adapter_version}`,
+    );
+  }
   const capabilitySnapshot = existingReservation?.capability_snapshot
-    ?? resolveCapabilitySnapshot(input.agent, capabilityRequirement, input.agent_id);
+    ?? resolveCapabilitySnapshot(input.agent, capabilityRequirement, input.agent_id, requestedHarnessBinding);
   if (!capabilitySnapshot.accepted) {
     const reasons = capabilitySnapshot.reasons.map((reason) => reason.code).join(', ');
     return preconditionDenied(`capability requirements rejected for ${input.agent}: ${reasons}`);

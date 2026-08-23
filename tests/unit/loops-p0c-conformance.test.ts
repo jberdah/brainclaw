@@ -22,6 +22,7 @@ import type { LaneResult } from '../../src/core/schema.js';
 import { getLaneResultPath, harvestLaneResults } from '../../src/commands/harvest.js';
 import { prepareTurnOwnedReviewDispatch, turnOwnedLoopEnabled, turnOwnedLoopMode } from '../../src/core/review-loop-turn-dispatch.js';
 import { getRuntimeSignalPath, writeCompletionSignal } from '../../src/core/runtime-signals.js';
+import { resolveHarnessBinding, type HarnessBinding } from '../../src/core/harness-adapters/index.js';
 
 function workspace(): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-p0c-'));
@@ -37,7 +38,7 @@ const workerPhase: Record<LoopKind, string> = {
   debug: 'reproduce',
 };
 
-function setupAttempt(cwd: string, kind: LoopKind, selectedPhase = workerPhase[kind]) {
+function setupAttempt(cwd: string, kind: LoopKind, selectedPhase = workerPhase[kind], harnessBinding?: HarnessBinding) {
   const phase = selectedPhase;
   const suffix = `${kind}${phase}`.replace(/_/g, '');
   const slotId = `lsl_${suffix}`;
@@ -72,6 +73,7 @@ function setupAttempt(cwd: string, kind: LoopKind, selectedPhase = workerPhase[k
     scope: `loop:${loop.id}:${slotId}`,
     description: `${kind} conformance attempt`,
     task: `execute ${kind}.${phase}`,
+    harness_binding: harnessBinding,
     cwd,
   });
   assert.equal(result.kind, 'won');
@@ -96,6 +98,7 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
       assert.ok(first.reservation.execution_contract, 'reservation owns the complete contract');
       assert.ok(first.reservation.execution_contract_ref, 'reservation owns the contract hash/reference');
       assert.ok(first.reservation.capability_snapshot?.accepted, 'capability is resolved before crossing');
+      assert.equal(first.reservation.capability_snapshot?.resolved.harness?.adapter_id, 'prompt-only');
       assert.equal(
         first.reservation.execution_contract_ref.hash,
         executionContractHash(first.reservation.execution_contract),
@@ -134,6 +137,22 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
       assert.equal(listReservations({}, cwd).length, 1, 'no second authority record is invented');
     });
   }
+
+  it('rejects replay when the currently selected adapter differs from the frozen binding', () => {
+    const native = resolveHarnessBinding('codex', 'gpt-5.6-sol', true, { resolveExecutable: (binary) => binary });
+    const first = setupAttempt(cwd, 'research', workerPhase.research, native);
+    assert.equal(first.reservation.capability_snapshot?.resolved.harness?.adapter_id, 'codex-cli');
+    const promptOnly = resolveHarnessBinding('codex', 'gpt-5.6-sol', false);
+    const replay = prepareTurnExecution({
+      kind: 'research', loop_id: first.loop.id, slot_id: first.slotId, phase: first.phase,
+      agent: 'codex', claim_id: first.claimId, dispatcher_agent: 'coord',
+      scope: `loop:${first.loop.id}:${first.slotId}`, description: 'replay after adapter flip',
+      task: 'replay', cwd, harness_binding: promptOnly,
+    });
+    assert.equal(replay.kind, 'denied');
+    if (replay.kind === 'denied') assert.match(replay.reason, /harness binding differs from immutable capability snapshot/);
+    assert.equal(listReservations({}, cwd).length, 1);
+  });
 
   it('engine/manual phases never reserve or cross a worker attempt', () => {
     assertLoopKindPoliciesComplete();
