@@ -4169,6 +4169,36 @@
         "variadic": false
       },
       {
+        "flags": "--assignment-id <id>",
+        "long": "--assignment-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--attempt-epoch <n>",
+        "long": "--attempt-epoch",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--execution-contract-hash <sha256>",
+        "long": "--execution-contract-hash",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--failure-reason <text>",
         "long": "--failure-reason",
         "mandatory": false,
@@ -4189,6 +4219,16 @@
         "variadic": false
       },
       {
+        "flags": "--nonce <value>",
+        "long": "--nonce",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--outcome <outcome>",
         "long": "--outcome",
         "mandatory": true,
@@ -4199,9 +4239,39 @@
         "variadic": false
       },
       {
+        "flags": "--run-id <id>",
+        "long": "--run-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--slot <slot_id>",
         "long": "--slot",
         "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--turn-id <id>",
+        "long": "--turn-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--workspace-digest <sha256>",
+        "long": "--workspace-digest",
+        "mandatory": false,
         "negate": false,
         "short": null,
         "valueOptional": false,
