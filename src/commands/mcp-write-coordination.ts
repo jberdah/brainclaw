@@ -1772,6 +1772,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
           goal: req.scope,
           created_by: creatorActor,
           slots,
+          linked: req.linked,
           ...(presetSelected
             ? {
                 phases: presetSelected.phases,
