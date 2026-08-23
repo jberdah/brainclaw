@@ -163,6 +163,24 @@ describe('buildIdeationBrief — context_filter honoured (pln#492 phase 2.d.1)',
 });
 
 describe('buildIdeationBrief — memory bundle rendering (pln#492 phase 2.d.1)', () => {
+  it('keeps project-wide memory but excludes memories scoped to another implementation lane', () => {
+    const thread = makeThread({ kind: 'implementation', phases: [{ name: 'execute', context_filter: ['traps'] }], current_phase: 'execute' });
+    const provider = new FakeMemoryProvider({
+      traps: [
+        { ...makeMemoryItem('traps', 'trp_api', 'API trap'), relatedPaths: ['src/api'] },
+        { ...makeMemoryItem('traps', 'trp_ui', 'UI trap'), relatedPaths: ['src/ui'] },
+        makeMemoryItem('traps', 'trp_global', 'Project-wide trap'),
+      ],
+    });
+    const result = buildIdeationBrief({
+      thread, slotRole: 'implementer', memoryProvider: provider, seedText: 'Change API', scopeHints: ['src/api'],
+    });
+    assert.match(result.text, /# implementation_loop brief/);
+    assert.match(result.text, /trp_api/);
+    assert.match(result.text, /trp_global/);
+    assert.ok(!result.text.includes('trp_ui'));
+  });
+
   it('renders a per-category section with item ids and text', () => {
     const thread = makeThread({ current_phase: 'critique' });
     const provider = new FakeMemoryProvider({

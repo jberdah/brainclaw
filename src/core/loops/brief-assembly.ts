@@ -36,6 +36,7 @@ export interface BriefMemoryItem {
   text: string;
   /** Optional BM25 score (just for diagnostics; not used for ordering). */
   score?: number;
+  relatedPaths?: string[];
 }
 
 export interface BriefMemoryProvider {
@@ -67,6 +68,10 @@ export interface IdeationBriefInput {
    * The provider may return fewer if it has fewer matches.
    */
   topKPerCategory?: number;
+  /** Explicit worker task seed. Defaults to the ideation proposal artifact. */
+  seedText?: string;
+  /** Lane paths used to suppress unrelated path-scoped memories. */
+  scopeHints?: string[];
 }
 
 const DEFAULT_MAX_CHARS = 48_000;
@@ -119,10 +124,12 @@ export function buildIdeationBrief(input: IdeationBriefInput): IdeationBriefResu
     memoryProvider,
     maxChars = DEFAULT_MAX_CHARS,
     topKPerCategory = DEFAULT_TOP_K_PER_CATEGORY,
+    seedText,
+    scopeHints = [],
   } = input;
 
   const proposal = findProposalArtifact(thread);
-  const proposalText = proposal?.body?.trim() ?? '(no proposal seed found)';
+  const proposalText = seedText?.trim() || proposal?.body?.trim() || '(no proposal seed found)';
 
   // Resolve which memory categories the current phase wants. If the
   // current phase has no context_filter, fall back to '*' (full bundle).
@@ -137,7 +144,10 @@ export function buildIdeationBrief(input: IdeationBriefInput): IdeationBriefResu
   const fetchedItemsByCategory = new Map<LoopContextCategory, BriefMemoryItem[]>();
   const categoriesUsed: LoopContextCategory[] = [];
   for (const category of userFacingCategories) {
-    const items = memoryProvider.fetch(category, proposalText, topKPerCategory);
+    const items = scopeMemoryItems(
+      memoryProvider.fetch(category, `${proposalText} ${scopeHints.join(' ')}`.trim(), topKPerCategory),
+      scopeHints,
+    );
     if (items.length > 0) {
       fetchedItemsByCategory.set(category, items);
       categoriesUsed.push(category);
@@ -212,7 +222,7 @@ function expandUserFacingCategories(
 
 function renderHeader(thread: LoopThread, slotRole: string, phase: string): string {
   const lines = [
-    `# ideation_loop brief`,
+    `# ${thread.kind}_loop brief`,
     `loop: ${thread.id}`,
     `phase: ${phase}`,
     `iteration: ${thread.iteration_count}`,
@@ -221,6 +231,23 @@ function renderHeader(thread: LoopThread, slotRole: string, phase: string): stri
   ];
   if (thread.goal) lines.push(`goal: ${thread.goal}`);
   return lines.join('\n');
+}
+
+function normalizeScope(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+}
+
+/** Keep project-wide memories and memories whose related_paths overlap this lane. */
+function scopeMemoryItems(items: BriefMemoryItem[], scopeHints: string[]): BriefMemoryItem[] {
+  const scopes = scopeHints.map(normalizeScope).filter(Boolean);
+  if (scopes.length === 0) return items;
+  return items.filter((item) => {
+    if (!item.relatedPaths || item.relatedPaths.length === 0) return true;
+    return item.relatedPaths.some((related) => {
+      const path = normalizeScope(related);
+      return scopes.some((scope) => path.startsWith(scope) || scope.startsWith(path));
+    });
+  });
 }
 
 function renderProposalBlock(proposalText: string): string {

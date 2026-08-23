@@ -1147,6 +1147,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             created_by: creatorActor,
             slots,
             mode: req.review_mode ?? 'asymmetric',
+            linked: req.linked,
           },
           dispatchCwd,
         );
@@ -1871,6 +1872,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               category,
               text: r.text,
               score: r.score,
+              relatedPaths: r.related_paths,
             }));
           },
         };

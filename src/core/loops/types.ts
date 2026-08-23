@@ -37,6 +37,8 @@ export type LoopRef = z.infer<typeof LoopRefSchema>;
 export const LoopLinksSchema = z.object({
   plan_ids: z.array(z.string().min(1)).optional(),
   sequence_ids: z.array(z.string().min(1)).optional(),
+  /** Upstream loop in an ideation → implementation → review pipeline. */
+  source_loop_id: z.string().regex(/^lop_[0-9a-z]+$/).optional(),
 });
 export type LoopLinks = z.infer<typeof LoopLinksSchema>;
 
@@ -186,6 +188,13 @@ export const LoopSlotSchema = z.object({
   assignment_id: z.string().optional(),
   claim_id: z.string().optional(),
   phase: z.string().optional(),
+  /** Implementation-loop lane bound from the linked sequence at bind time. */
+  lane: z.string().optional(),
+  /** File/path scope carried by the bound sequence lane. */
+  scope_hint: z.string().optional(),
+  /** Plans and steps executed by this lane (derived, never worker-authored). */
+  plan_ids: z.array(z.string().min(1)).optional(),
+  step_ids: z.array(z.string().min(1)).optional(),
   status: z.enum(SLOT_STATUSES),
   /**
    * pln#630 PR2b-a (§13 R1) — pointer to the immutable turn-attempt record for
@@ -485,6 +494,8 @@ export const VerifyReportBodySchema = z.object({
   command_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   workspace_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   workspace_stable: z.boolean().optional(),
+  /** Implementation lane whose worktree was verified. */
+  lane: z.string().optional(),
 });
 export type VerifyReportBody = z.infer<typeof VerifyReportBodySchema>;
 

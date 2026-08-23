@@ -11,7 +11,9 @@
  * inert and reported as a compatibility warning.
  */
 import type { DispatchResult } from '../dispatcher.js';
-import { listSequences } from '../sequence.js';
+import { loadSequence } from '../sequence.js';
+import { loadState } from '../state.js';
+import type { LoopSlot } from './types.js';
 import { withLoopLock } from './lock.js';
 import { getLoop } from './store.js';
 import { advance } from './verbs.js';
@@ -49,6 +51,55 @@ export interface ImplBindResult {
   messages_sent: number;
   warnings: string[];
   reason: string;
+  lanes?: Array<{ lane: string; slot_id: string; scope_hint?: string }>;
+}
+
+type SlotBinding = Pick<LoopSlot, 'lane' | 'scope_hint' | 'plan_ids' | 'step_ids'>;
+
+function deriveBindings(loop: ReturnType<typeof getLoop>, sequenceId: string, cwd?: string): Record<string, SlotBinding> {
+  if (!loop) throw new Error('implementation loop disappeared during bind');
+  const sequence = loadSequence(sequenceId, cwd);
+  if (sequence.items.length === 0) throw new Error(`linked sequence ${sequenceId} has no items`);
+  const linkedPlans = new Set(loop.linked?.plan_ids ?? []);
+  if (linkedPlans.size === 0) {
+    throw new Error(`impl-bind requires linked.plan_ids in addition to linked.sequence_ids`);
+  }
+  const plans = new Map(loadState(cwd).plan_items.map((plan) => [plan.id, plan]));
+  for (const item of sequence.items) {
+    if (!linkedPlans.has(item.planId)) {
+      throw new Error(`sequence item rank ${item.rank} references unlinked plan ${item.planId}`);
+    }
+    const plan = plans.get(item.planId);
+    if (!plan) throw new Error(`linked sequence ${sequenceId} references missing plan ${item.planId}`);
+    if (item.stepId && !(plan.steps ?? []).some((step) => step.id === item.stepId)) {
+      throw new Error(`sequence item rank ${item.rank} references missing step ${item.stepId} on plan ${item.planId}`);
+    }
+  }
+
+  const grouped = new Map<string, typeof sequence.items>();
+  for (const item of sequence.items) {
+    const lane = item.lane?.trim() || 'default';
+    grouped.set(lane, [...(grouped.get(lane) ?? []), item]);
+  }
+  const lanes = [...grouped.keys()].sort();
+  if (loop.slots.length !== lanes.length) {
+    throw new Error(
+      `impl-bind lane/slot mismatch: sequence ${sequenceId} has ${lanes.length} lane(s) (${lanes.join(', ')}) but loop has ${loop.slots.length} slot(s); open one worker slot per lane`,
+    );
+  }
+  const bindings: Record<string, SlotBinding> = {};
+  loop.slots.forEach((slot, index) => {
+    const lane = lanes[index]!;
+    const items = grouped.get(lane)!;
+    const scopes = [...new Set(items.map((item) => item.scope_hint?.trim()).filter((value): value is string => Boolean(value)))];
+    bindings[slot.slot_id] = {
+      lane,
+      scope_hint: scopes.length > 0 ? scopes.join(', ') : undefined,
+      plan_ids: [...new Set(items.map((item) => item.planId))],
+      step_ids: [...new Set(items.flatMap((item) => item.stepId ? [item.stepId] : []))],
+    };
+  });
+  return bindings;
 }
 
 const ENGINE_ONLY_WARNING =
@@ -102,8 +153,13 @@ export async function runImplBind(input: RunImplBindInput, cwd?: string): Promis
       `impl-bind requires a linked sequence: open the implementation loop with linked.sequence_ids=[...] (the sequence whose lanes it executes). None found on ${loop_id}.`,
     );
   }
-  if (!listSequences(cwd).some((sequence) => sequence.id === sequenceId)) {
-    throw new Error(`linked sequence ${sequenceId} not found for loop ${loop_id}`);
+  let bindings: Record<string, SlotBinding>;
+  try { bindings = deriveBindings(loop, sequenceId, cwd); }
+  catch (error) {
+    throw new Error(
+      `impl-bind validation failed: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 
   if (input.dryRun) {
@@ -115,6 +171,7 @@ export async function runImplBind(input: RunImplBindInput, cwd?: string): Promis
       messages_sent: 0,
       warnings: compatibilityWarnings(input),
       reason: `dry run: linked sequence ${sequenceId} is valid; loop stays in 'bind' and no worker is dispatched`,
+      lanes: Object.entries(bindings).map(([slot_id, binding]) => ({ slot_id, lane: binding.lane!, scope_hint: binding.scope_hint })),
     };
   }
 
@@ -127,11 +184,11 @@ export async function runImplBind(input: RunImplBindInput, cwd?: string): Promis
       const fresh = getLoop(loop_id, cwd);
       if (!fresh || fresh.status !== 'open' || fresh.current_phase !== 'bind') return null;
       const freshSequenceId = fresh.linked?.sequence_ids?.[0];
-      if (freshSequenceId !== sequenceId
-        || !listSequences(cwd).some((sequence) => sequence.id === sequenceId)) {
+      if (freshSequenceId !== sequenceId) {
         throw new Error(`linked sequence ${sequenceId} changed or disappeared before bind could advance`);
       }
-      const result = advance({ id: loop_id, actor: dispatcherAgent }, cwd);
+      const freshBindings = deriveBindings(fresh, sequenceId, cwd);
+      const result = advance({ id: loop_id, actor: dispatcherAgent, slot_bindings: freshBindings }, cwd);
       return { phase: result.loop.current_phase, auto_closed: result.auto_closed };
     },
   });
@@ -157,5 +214,6 @@ export async function runImplBind(input: RunImplBindInput, cwd?: string): Promis
     messages_sent: 0,
     warnings: compatibilityWarnings(input),
     reason: `validated linked sequence ${sequenceId}; advanced bind -> ${advanced.phase}; dispatch worker slots with turn(dispatch=true)`,
+    lanes: Object.entries(bindings).map(([slot_id, binding]) => ({ slot_id, lane: binding.lane!, scope_hint: binding.scope_hint })),
   };
 }

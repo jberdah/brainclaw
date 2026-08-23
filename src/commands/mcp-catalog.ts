@@ -860,6 +860,16 @@ const MCP_WRITE_TOOLS = [
         targetAgents: { type: 'array', items: { type: 'string' }, description: 'Agent names to target. If omitted, all spawnable agents are used.' },
         constraints: { type: 'object', description: 'Optional structured constraints passed alongside the brief (e.g. deadline, reviewCriteria).' },
         threadId: { type: 'string', description: 'Thread ID for summarize intent.' },
+        linked: {
+          type: 'object',
+          description: 'Optional pipeline provenance persisted on a review loop opened by this call.',
+          properties: {
+            plan_ids: { type: 'array', items: { type: 'string' } },
+            sequence_ids: { type: 'array', items: { type: 'string' } },
+            source_loop_id: { type: 'string', pattern: '^lop_[0-9a-z]+$' },
+          },
+          additionalProperties: false,
+        },
         autoExecute: { type: 'boolean', description: 'Attempt to spawn target agents after delivery (default: true). Applies to the spawning intents assign/review/reroute AND to multi-agent ideate (with targetAgents, it spawns one worktree-isolated critic worker per target). consult is inbox-only and ignores autoExecute; summarize just reads a thread and ignores it. When false on a spawning intent, returns command_ready_manual with bash commands for the supervisor to run.' },
         open_loop: { type: 'boolean', description: 'For intent=review only: also open a review Loop on top of the candidate (author + reviewer slots, advance to `findings`, dispatch turns). Default false — existing review callers are unaffected. See docs/concepts/loop-engine.md §Automation.' },
         review_mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Optional review Loop mode when open_loop=true. `asymmetric` (default) keeps the classical author→reviewer handoff; `symmetric` lets each reviewer turn also apply fixes directly, halving round-trips for spec/doc reviews. Ignored when open_loop is false.' },

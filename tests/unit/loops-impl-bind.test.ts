@@ -65,10 +65,11 @@ function seedReadySequence(dir: string, seqId = 'seq_ib1', planId = 'pln_ib1'): 
   return seqId;
 }
 
-function openImplLoop(dir: string, linkedSequenceIds?: string[]): string {
+function openImplLoop(dir: string, linkedSequenceIds?: string[], planIds = ['pln_ib1']): string {
   const loop = openLoop({
     kind: 'implementation', title: 'impl-bind test', created_by: 'coord',
-    ...(linkedSequenceIds ? { linked: { sequence_ids: linkedSequenceIds } } : {}),
+    slots: [{ role: 'implementer', agent: 'codex' }],
+    ...(linkedSequenceIds ? { linked: { sequence_ids: linkedSequenceIds, plan_ids: planIds } } : {}),
   }, dir);
   return loop.id;
 }
@@ -128,6 +129,8 @@ describe('pln#632 runImplBind', () => {
     assert.match(res.warnings.join(' '), /launch options are retained but ignored/);
     const loop = getLoop(loopId, cwd)!;
     assert.equal(loop.current_phase, 'execute', 'bind advanced the loop into the execute↔verify cycle');
+    assert.equal(loop.slots[0]!.lane, 'default');
+    assert.deepEqual(loop.slots[0]!.plan_ids, ['pln_ib1']);
     assert.equal(getActiveSequence(cwd), undefined, 'the linked sequence stays draft — no global active-sequence hijack');
     assert.equal(
       fs.existsSync(path.join(cwd, '.brainclaw', 'coordination', 'assignments')),
@@ -180,8 +183,30 @@ describe('pln#632 runImplBind', () => {
     const loopId = openImplLoop(cwd, ['seq_ghost']);
     await assert.rejects(
       () => runImplBind({ loop_id: loopId, dispatcherAgent: 'coord', dryRun: true }, cwd),
-      /linked sequence seq_ghost not found/,
+      /Sequence not found: seq_ghost/,
     );
+  });
+
+  it('binds explicit sequence lanes to slots and rejects a lane/slot mismatch', async () => {
+    persistState({
+      version: 1, write_version: 1, active_constraints: [], recent_decisions: [], known_traps: [], open_handoffs: [],
+      plan_items: [makePlan({ id: 'pln_a', text: 'A' }), makePlan({ id: 'pln_b', text: 'B' })],
+    }, cwd);
+    saveSequence(makeSequence('seq_lanes', [
+      { planId: 'pln_a', rank: 1, lane: 'api', scope_hint: 'src/api', hard_after: [], soft_after: [] },
+      { planId: 'pln_b', rank: 2, lane: 'ui', scope_hint: 'src/ui', hard_after: [], soft_after: [] },
+    ]), cwd);
+    const mismatched = openImplLoop(cwd, ['seq_lanes'], ['pln_a', 'pln_b']);
+    await assert.rejects(() => runImplBind({ loop_id: mismatched, dispatcherAgent: 'coord' }, cwd), /lane\/slot mismatch/);
+
+    const matched = openLoop({
+      kind: 'implementation', title: 'lanes', created_by: 'coord',
+      slots: [{ role: 'implementer' }, { role: 'implementer' }],
+      linked: { sequence_ids: ['seq_lanes'], plan_ids: ['pln_a', 'pln_b'] },
+    }, cwd);
+    await runImplBind({ loop_id: matched.id, dispatcherAgent: 'coord' }, cwd);
+    const bound = getLoop(matched.id, cwd)!;
+    assert.deepEqual(bound.slots.map((slot) => [slot.lane, slot.scope_hint]), [['api', 'src/api'], ['ui', 'src/ui']]);
   });
 
   it('rejects a non-implementation loop (review loops dispatch via coordinate)', async () => {
@@ -242,6 +267,22 @@ describe('P0C bclaw_loop(intent="bind") facade — engine-only handler wiring', 
     const result = handled.response.result as { action: string; loop: { current_phase: string } };
     assert.equal(result.action, 'preview');
     assert.equal(result.loop.current_phase, 'bind');
+  });
+
+  it('surfaces the review-loop handoff when implementation reaches handoff_ready', async () => {
+    const seqId = seedReadySequence(cwd);
+    const loopId = openImplLoop(cwd, [seqId]);
+    await handleBclawLoop({ args: { intent: 'bind', loop_id: loopId, agent: 'coord' }, cwd });
+    const handled = await handleBclawLoop({
+      args: { intent: 'advance', loop_id: loopId, to_phase: 'handoff_ready', force: true, agent: 'coord' }, cwd,
+    });
+    assert.equal(handled.response.next_actions?.[0]?.tool, 'bclaw_coordinate');
+    assert.equal(handled.response.next_actions?.[0]?.args?.intent, 'review');
+    assert.equal(handled.response.next_actions?.[0]?.args?.open_loop, true);
+    assert.equal(
+      (handled.response.next_actions?.[0]?.args?.linked as { source_loop_id?: string })?.source_loop_id,
+      loopId,
+    );
   });
 
   it('a review loop bound via the facade → validation_error (not implementation)', async () => {

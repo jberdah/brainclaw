@@ -202,6 +202,8 @@ export const BclawLoopCloseSchema = z.object({
 export const BclawLoopVerifySchema = z.object({
   intent: z.literal('verify'),
   loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  /** Required when an implementation loop has more than one bound lane. */
+  slot_id: z.string().regex(/^lsl_[0-9a-z]+$/).optional(),
   // No expected_version: runVerify is idempotent by (loop, iteration) via its own
   // two-lock re-check, not optimistic-concurrency CAS (review F3).
   ...CallerEnvelopeFields,

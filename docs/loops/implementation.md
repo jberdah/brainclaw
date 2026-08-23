@@ -19,6 +19,11 @@ validates the plan/sequence link and advances to `execute`. It never launches
 a worker. `execute ↔ verify` iterates until the verify command is green or
 the cycle cap is hit.
 
+Binding validates the complete graph: every sequence item must reference a
+linked, existing plan (and an existing step when `stepId` is present). Explicit
+sequence lanes are paired deterministically with worker slots, one slot per
+lane. Each slot then carries its lane, plan/step ids, and `scope_hint`.
+
 ## Default protocol
 
 ```
@@ -67,6 +72,11 @@ iteration** — this guards the narrated-verify anti-pattern where a slot
 claims it verified without actually running the command. `command_green` in
 the iteration engine reads the reports produced against this gate.
 
+For bound lanes, call `bclaw_loop(intent='verify', slot_id=…)`. The command
+runs in that slot assignment's worktree. Omitting `slot_id` when several lane
+worktrees exist fails closed, and `command_green` requires a current-iteration
+green report from every bound lane.
+
 ## Stop condition
 
 ```ts
@@ -96,6 +106,9 @@ the iteration engine reads the reports produced against this gate.
 scope claim created by `turn(dispatch=true)`, and the common driver runs in
 the worktree bound to that claim. `bind` creates neither claim nor assignment.
 `session_id` is observability-only.
+Dispatch also uses the bound `scope_hint` to retrieve only path-related
+decisions, constraints, traps and runtime context (while retaining unscoped
+project-wide memory).
 [Attempt authority](../concepts/attempt-authority.md#ordered-dispatch)
 mints a deterministic `turn_id` from `(loop_id, slot_id, iteration)` on
 every dispatch, so a concurrent re-dispatch hits `reservation_exists` and
@@ -104,6 +117,13 @@ identity in another worker phase of the same iteration, the common resolver
 uses `(loop_id, slot_id, phase, iteration)` for a versioned successor logical
 turn. This is a Loop Engine rule shared by every kind, not implementation-loop
 special handling.
+
+At `handoff_ready`, the facade emits a structured `next_actions` call for
+`bclaw_coordinate(intent='review', open_loop=true)`. It remains explicit: the
+engine does not invent a reviewer or silently mutate external state. The
+created review loop persists `linked.source_loop_id`, while the implementation
+loop received the same provenance from its ideation source, so `list/get`
+surfaces the pipeline chain without a separate registry.
 
 ## Recovery
 

@@ -16,11 +16,14 @@ import {
   ensureClaimAssignmentBinding,
 } from './claims.js';
 import { generateDispatchBrief } from './dispatcher.js';
+import { search } from './search.js';
 import { attemptExecution } from './execution.js';
 import type { TurnEcho } from './execution-adapters.js';
 import { resolveExecutionCandidate } from './execution-contract.js';
 import { buildHarnessInvocation, resolveHarnessBinding } from './harness-adapters/index.js';
 import { phasePolicy } from './loops/kind-policies.js';
+import { buildIdeationBrief, type BriefMemoryProvider } from './loops/brief-assembly.js';
+import type { LoopContextCategory } from './loops/types.js';
 import { getLoop } from './loops/store.js';
 import { prepareTurnExecution } from './loops/turn-execution.js';
 import { sendMessage } from './messaging.js';
@@ -97,7 +100,32 @@ export async function dispatchLoopTurn(input: DispatchLoopTurnInput): Promise<Di
     result.agent = agent;
   }
 
-  const scope = `loop:${loop.kind}:${loop.id}:slot:${slot.slot_id}`;
+  const scope = slot.scope_hint ?? `loop:${loop.kind}:${loop.id}:slot:${slot.slot_id}`;
+  const sectionByCategory: Partial<Record<LoopContextCategory, string>> = {
+    traps: 'traps', decisions: 'decisions', constraints: 'constraints', handoffs: 'handoffs',
+    plans: 'plans', candidates: 'candidates',
+  };
+  const provider: BriefMemoryProvider = {
+    fetch(category, query, topK) {
+      const section = sectionByCategory[category];
+      if (!section) return [];
+      return search({ query, section, maxResults: topK, cwd: input.cwd, includePending: section === 'candidates' })
+        .map((item) => ({
+          id: item.id, category, text: item.text, score: item.score, relatedPaths: item.related_paths,
+        }));
+    },
+  };
+  const phaseBrief = buildIdeationBrief({
+    thread: loop,
+    slotRole: slot.role,
+    memoryProvider: provider,
+    seedText: input.task,
+    scopeHints: slot.scope_hint ? slot.scope_hint.split(',').map((value) => value.trim()) : [],
+  });
+  const laneContext = slot.lane
+    ? `Lane: ${slot.lane}\nPlans: ${(slot.plan_ids ?? []).join(', ') || '(none)'}\nSteps: ${(slot.step_ids ?? []).join(', ') || '(whole plan)'}`
+    : '';
+  const scopedTask = [phaseBrief.text, laneContext].filter(Boolean).join('\n\n');
   const description = `${loop.kind} loop turn for ${loop.id} slot ${slot.slot_id} phase ${loop.current_phase}. ${input.task}`;
   try {
     const claim = createCoordinatorClaim({
@@ -130,7 +158,7 @@ export async function dispatchLoopTurn(input: DispatchLoopTurnInput): Promise<Di
       dispatcher_session_id: input.session_id,
       scope,
       description,
-      task: input.task,
+      task: scopedTask,
       cwd: input.cwd,
       worktree_path: claim.worktreePath,
       model,
@@ -160,7 +188,7 @@ export async function dispatchLoopTurn(input: DispatchLoopTurnInput): Promise<Di
       ...(prepared.workspace_digest ? { workspace_digest: prepared.workspace_digest } : {}),
     };
     const brief = generateDispatchBrief({
-      task: input.task,
+      task: scopedTask,
       agent,
       claimId: claim.claimId,
       scope,

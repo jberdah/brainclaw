@@ -133,6 +133,10 @@ function buildSlot(partial: Partial<LoopSlot> & { role: string }): LoopSlot {
     assignment_id: partial.assignment_id,
     claim_id: partial.claim_id,
     phase: partial.phase,
+    lane: partial.lane,
+    scope_hint: partial.scope_hint,
+    plan_ids: partial.plan_ids,
+    step_ids: partial.step_ids,
     status: partial.status ?? 'open',
   };
 }

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { add_artifact, advance, openLoop } from '../../src/core/loops/index.js';
+import { createAssignment } from '../../src/core/assignments.js';
 import { addArtifactWithEvidence } from '../../src/core/loops/verbs.js';
 import { getLoop, writeThreadFile } from '../../src/core/loops/store.js';
 import { hasPassingVerifyReportInIteration } from '../../src/core/loops/iteration-engine.js';
@@ -58,6 +59,51 @@ describe('pln#632 verify-command runner', () => {
     assert.equal(res.report?.passed, true);
     const thread = getLoop(loop.id, cwd)!;
     assert.ok(hasPassingVerifyReportInIteration(thread, thread.iteration_count), 'command_green is satisfied');
+  });
+
+  it('verifies an implementation lane in its assignment worktree, never the project root', () => {
+    const cwd = ws();
+    const worktree = path.join(cwd, 'lane-api');
+    fs.mkdirSync(worktree);
+    const loop = openImpl(cwd, ['echo', 'ok']);
+    const assignment = createAssignment({
+      id: 'asgn_laneapi', claim_id: 'clm_laneapi', agent: 'codex', dispatcher_agent: 'coord',
+      scope: 'src/api', description: 'lane', lane: 'api', worktree_path: worktree,
+    }, cwd);
+    writeThreadFile({
+      ...loop,
+      slots: [{ ...loop.slots[0]!, lane: 'api', scope_hint: 'src/api', assignment_id: assignment.id }],
+    }, cwd);
+    let observedCwd = '';
+    const result = runVerify({
+      loop_id: loop.id, slot_id: loop.slots[0]!.slot_id, actor: 'agt_i',
+      runner: (config) => { observedCwd = config.cwd; return GREEN; },
+    }, cwd);
+    assert.equal(observedCwd, path.resolve(worktree));
+    assert.equal(result.report?.cwd, path.resolve(worktree));
+    assert.equal(result.report?.lane, 'api');
+  });
+
+  it('infers the sole lane worktree and fails closed when a bound lane has no assignment worktree', () => {
+    const cwd = ws();
+    const worktree = path.join(cwd, 'lane-only');
+    fs.mkdirSync(worktree);
+    const loop = openImpl(cwd, ['echo', 'ok']);
+    writeThreadFile({ ...loop, slots: [{ ...loop.slots[0]!, lane: 'only' }] }, cwd);
+    assert.throws(
+      () => runVerify({ loop_id: loop.id, actor: 'agt_i', runner: runnerReturning(GREEN) }, cwd),
+      /bound lanes but no assignment worktree/,
+    );
+
+    const assignment = createAssignment({
+      id: 'asgn_laneonly', claim_id: 'clm_laneonly', agent: 'codex', dispatcher_agent: 'coord',
+      scope: 'src/only', description: 'lane', lane: 'only', worktree_path: worktree,
+    }, cwd);
+    const current = getLoop(loop.id, cwd)!;
+    writeThreadFile({ ...current, slots: [{ ...current.slots[0]!, assignment_id: assignment.id }] }, cwd);
+    const inferred = runVerify({ loop_id: loop.id, actor: 'agt_i', runner: runnerReturning(GREEN) }, cwd);
+    assert.equal(inferred.report?.cwd, path.resolve(worktree));
+    assert.equal(inferred.report?.lane, 'only');
   });
 
   it('a RED run records passed:false (command_green NOT satisfied → cycle continues)', () => {

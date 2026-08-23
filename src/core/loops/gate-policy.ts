@@ -159,16 +159,25 @@ function legacyEligibleCount(
   purpose: EvidencePurpose,
   cwd?: string,
 ): number {
+  return legacyEligibleArtifacts(thread, artifacts, purpose, cwd).length;
+}
+
+function legacyEligibleArtifacts(
+  thread: LoopThread,
+  artifacts: LoopArtifact[],
+  purpose: EvidencePurpose,
+  cwd?: string,
+): LoopArtifact[] {
   // Kind-specialized purposes stay fail-closed even for persisted legacy
   // loops. Legacy relaxes envelope presence; it does not invent an authority
   // that the kind's policy explicitly forbids.
-  if (GATE_POLICIES[thread.kind].requirements[purpose].authorities.length === 0) return 0;
+  if (GATE_POLICIES[thread.kind].requirements[purpose].authorities.length === 0) return [];
   return artifacts.filter((artifact) => {
     if (purpose !== 'critic_signal' && !hasUsableContent(artifact)) return false;
     if (!artifact.evidence) return true;
     return validateArtifactEvidence(thread, artifact).valid
       && reconciledV2AuthorityRejection(thread, artifact, cwd) === undefined;
-  }).length;
+  });
 }
 
 function payloadFingerprint(artifact: LoopArtifact): string {
@@ -524,7 +533,26 @@ export function evaluateGateCondition(thread: LoopThread, condition?: StopCondit
     case 'min_artifacts_by_type': {
       const candidates = artifactCandidates(thread, condition);
       const set = selectEligible(thread, candidates, 'artifact', cwd);
-      return decision(thread, condition, set.eligible.length >= condition.n, legacyEligibleCount(thread, candidates, 'artifact', cwd) >= condition.n, set);
+      const requiredLanes = thread.kind === 'implementation' && condition.type === 'verify_report'
+        ? [...new Set(thread.slots.map((slot) => slot.lane).filter((lane): lane is string => Boolean(lane)))]
+        : [];
+      const covers = (artifacts: LoopArtifact[]): boolean => {
+        if (requiredLanes.length === 0) return artifacts.length >= condition.n;
+        const reported = new Set(artifacts.flatMap((artifact) => {
+          try {
+            const lane = (JSON.parse(artifact.body ?? '{}') as { lane?: string }).lane;
+            return lane ? [lane] : [];
+          } catch { return []; }
+        }));
+        return requiredLanes.every((lane) => reported.has(lane));
+      };
+      return decision(
+        thread,
+        condition,
+        covers(set.eligible),
+        covers(legacyEligibleArtifacts(thread, candidates, 'artifact', cwd)),
+        set,
+      );
     }
     case 'any': {
       const children = condition.conditions.map((child) => evaluateGateCondition(thread, child, cwd));
@@ -576,7 +604,29 @@ export function evaluateCommandGreen(thread: LoopThread, iteration: number, cwd?
     }
   });
   const set = selectEligible(thread, candidates, 'command_green', cwd);
-  return decision(thread, { kind: 'command_green', iteration }, set.eligible.length > 0, legacyEligibleCount(thread, candidates, 'command_green', cwd) > 0, set);
+  const requiredLanes = thread.kind === 'implementation'
+    ? [...new Set(thread.slots.map((slot) => slot.lane).filter((lane): lane is string => Boolean(lane)))]
+    : [];
+  const greenLanes = new Set(set.eligible.flatMap((artifact) => {
+    try {
+      const lane = (JSON.parse(artifact.body ?? '{}') as { lane?: string }).lane;
+      return lane ? [lane] : [];
+    } catch { return []; }
+  }));
+  const allLanesGreen = requiredLanes.length === 0
+    ? set.eligible.length > 0
+    : requiredLanes.every((lane) => greenLanes.has(lane));
+  const legacyCandidates = legacyEligibleArtifacts(thread, candidates, 'command_green', cwd);
+  const legacyGreenLanes = new Set(legacyCandidates.flatMap((artifact) => {
+    try {
+      const lane = (JSON.parse(artifact.body ?? '{}') as { lane?: string }).lane;
+      return lane ? [lane] : [];
+    } catch { return []; }
+  }));
+  const legacyAllLanesGreen = requiredLanes.length === 0
+    ? legacyCandidates.length > 0
+    : requiredLanes.every((lane) => legacyGreenLanes.has(lane));
+  return decision(thread, { kind: 'command_green', iteration }, allLanesGreen, legacyAllLanesGreen, set);
 }
 
 export function evaluateCriticSignal(thread: LoopThread, iteration: number, cwd?: string): GateDecision {

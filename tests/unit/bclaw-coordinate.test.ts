@@ -1387,6 +1387,15 @@ describe('bclaw_coordinate — turn-owned INITIAL reviewer dispatch (pln#630)', 
     assert.notEqual(committed[0]!.claim_id, committed[1]!.claim_id, 'parallel slots own distinct claims');
   });
 
+  it('parses pipeline provenance for a downstream review loop', () => {
+    const result = CoordinateRequestSchema.safeParse({
+      intent: 'review', task: 'Review implementation', open_loop: true,
+      linked: { source_loop_id: 'lop_source123', plan_ids: ['pln_a'], sequence_ids: ['seq_a'] },
+    });
+    assert.ok(result.success);
+    assert.equal(result.data.linked?.source_loop_id, 'lop_source123');
+  });
+
   it('non-regression: assign mints NO reservation (turn-owned is review-open_loop only)', async () => {
     delete process.env.BRAINCLAW_TURN_OWNED_REVIEW;
     const res = await coordinate({ intent: 'assign', scope: 'src/feature.ts', targetAgents: ['codex'] });

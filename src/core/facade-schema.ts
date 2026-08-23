@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LoopLinksSchema } from './loops/types.js';
 
 export const ExecutionStatusSchema = z.enum(['delivered_and_started', 'command_ready_manual', 'inbox_only']);
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
@@ -42,6 +43,8 @@ export const CoordinateRequestSchema = z.object({
   targetAgents: z.array(z.string()).optional(),
   constraints: z.record(z.string(), z.unknown()).optional(),
   threadId: z.string().optional(),
+  /** Optional pipeline provenance persisted when open_loop creates a loop. */
+  linked: LoopLinksSchema.optional(),
   autoExecute: z.boolean().optional(),
   /**
    * When intent=review and open_loop=true, a review Loop is opened on top of

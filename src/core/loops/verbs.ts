@@ -258,6 +258,8 @@ export interface AdvanceInput {
   reason?: string;
   force?: boolean;
   actor: string;
+  /** Engine-only metadata applied atomically with a phase transition. */
+  slot_bindings?: Record<string, Pick<LoopSlot, 'lane' | 'scope_hint' | 'plan_ids' | 'step_ids'>>;
 }
 
 export interface AdvanceResult {
@@ -404,6 +406,9 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
     mutation_id,
     current_phase: to_phase,
     iteration_count,
+    slots: input.slot_bindings
+      ? current.slots.map((slot) => ({ ...slot, ...(input.slot_bindings?.[slot.slot_id] ?? {}) }))
+      : current.slots,
     updated_at: now,
   };
 
