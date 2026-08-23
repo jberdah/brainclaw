@@ -5,6 +5,7 @@ import { ensureClaimAssignmentBinding, loadClaim } from '../claims.js';
 import {
   CapabilityRequirementSchema,
   ExecutionContractSchema,
+  attestHarnessContractAcceptance,
   executionContractRef,
   resolveCapabilitySnapshot,
   validateWorkerContractAcceptance,
@@ -432,11 +433,18 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   if (input.accepted_execution_contract && !contractRef) {
     return preconditionDenied('legacy uncontracted reservation cannot claim worker contract acceptance');
   }
-  if (input.accepted_execution_contract && contractRef && !(v2?.status === 'active' && v2.latest_generation.attempt_epoch > 0)) {
-    const acceptance = validateWorkerContractAcceptance(contractRef, input.accepted_execution_contract, undefined);
+  if (contractRef && !(v2?.status === 'active' && v2.latest_generation.attempt_epoch > 0)) {
+    let accepted: AcceptedExecutionContractRef;
+    try {
+      accepted = input.accepted_execution_contract
+        ?? attestHarnessContractAcceptance(contractRef, capabilitySnapshot, requestedHarnessBinding);
+    } catch (error) {
+      return preconditionDenied(`worker contract acceptance unavailable before crossing: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const acceptance = validateWorkerContractAcceptance(contractRef, accepted, undefined);
     if (acceptance.kind !== 'accepted') {
       return preconditionDenied(
-        `worker contract mismatch before crossing: expected ${contractRef.hash}/${contractRef.snapshot_hash}, accepted ${input.accepted_execution_contract.contract_hash}/${input.accepted_execution_contract.capability_snapshot_hash}; abort and reselect`,
+        `worker contract mismatch before crossing: expected ${contractRef.hash}/${contractRef.snapshot_hash}, accepted ${accepted.contract_hash}/${accepted.capability_snapshot_hash}; abort and reselect`,
       );
     }
   }
@@ -453,15 +461,16 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
     try {
       const generation = v2.latest_generation;
       const generationContract = executionContractForGeneration(reservation, generation);
-      if (input.accepted_execution_contract) {
-        const acceptance = validateWorkerContractAcceptance(
-          generationContract.ref,
-          input.accepted_execution_contract,
-          undefined,
-        );
-        if (acceptance.kind !== 'accepted') {
-          return preconditionDenied('worker rejected the active generation execution contract before crossing');
-        }
+      let accepted: AcceptedExecutionContractRef;
+      try {
+        accepted = input.accepted_execution_contract
+          ?? attestHarnessContractAcceptance(generationContract.ref, reservation.capability_snapshot!, requestedHarnessBinding);
+      } catch (error) {
+        return preconditionDenied(`worker contract acceptance unavailable before crossing: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const acceptance = validateWorkerContractAcceptance(generationContract.ref, accepted, undefined);
+      if (acceptance.kind !== 'accepted') {
+        return preconditionDenied('worker rejected the active generation execution contract before crossing; abort and reselect');
       }
       ensureTurnExecutionProjections(reservation, {
         loop_id: loop.id,

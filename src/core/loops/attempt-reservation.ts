@@ -295,8 +295,9 @@ function writeReservation(record: TurnReservation, cwd?: string): void {
 
 /**
  * Run `fn` under the per-reservation exclusive lock. Reuses the loop lock
- * primitive (stale-reaping, O_EXCL, fencing) so the decision CAS is atomic
- * across processes — two racing writers cannot both mutate the decision.
+ * primitive (generation-fenced dead-owner reaping, exclusive hard-link
+ * creation, fencing) so the decision CAS is atomic across processes — two
+ * racing writers cannot both mutate the decision.
  */
 function withReservationLock<R>(turnId: string, agentId: string, fn: (fence: () => void) => R, cwd?: string): R {
   ensureDirs(cwd);
@@ -308,10 +309,10 @@ function withReservationLock<R>(turnId: string, agentId: string, fn: (fence: () 
   });
   try {
     // PR2a review (BLOCKING): the callback MUST invoke `fence()` immediately
-    // before any durable write. If this lock was reaped (holder suspended past
-    // the hard deadline) and re-acquired by another writer, fenceCheck throws
-    // LockLostError so a stale holder can never overwrite the other terminal
-    // transition — the consume-XOR-revoke fence stays durable across recovery.
+    // before any durable write. If a proven-dead owner's generation was reaped
+    // and re-acquired by another writer, fenceCheck throws LockLostError so a
+    // stale holder can never overwrite the other terminal transition — the
+    // consume-XOR-revoke fence stays durable across recovery.
     return fn(lock.fenceCheck);
   } finally {
     lock.release();

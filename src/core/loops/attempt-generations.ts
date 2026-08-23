@@ -275,6 +275,17 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right));
 }
 
+function canonicalWorkspacePath(workspacePath: string): string {
+  const absolute = path.resolve(workspacePath);
+  let canonical: string;
+  try {
+    canonical = fs.realpathSync.native(absolute);
+  } catch {
+    canonical = absolute;
+  }
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
 export function fenceMatchesGeneration(generation: AttemptGeneration, fence: GenerationFence): boolean {
   return sameJson(fenceForGeneration(generation), GenerationFenceSchema.parse(fence));
 }
@@ -296,7 +307,8 @@ function assertValidSuccessor(current: AttemptGeneration, next: AttemptGeneratio
     next.run_id === current.run_id && 'run_id',
     next.launch_nonce === current.launch_nonce && 'launch_nonce',
     next.workspace_id === current.workspace_id && 'workspace_id',
-    next.workspace_path === current.workspace_path && 'workspace_path',
+    canonicalWorkspacePath(next.workspace_path) === canonicalWorkspacePath(current.workspace_path)
+      && 'workspace_path',
   ].find(Boolean);
   if (invalid) {
     throw new AttemptGenerationError('invalid_transition', `invalid generation successor: ${invalid}`);

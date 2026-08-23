@@ -72,6 +72,16 @@ export function artifactEvidenceDigest(artifact: Omit<LoopArtifact, 'evidence'>)
   });
 }
 
+/**
+ * Classify both new and historical artifacts without a migration rewrite.
+ * Old sealed envelopes predate the explicit field but are still attested;
+ * old unsealed records remain legacy. The marker is intentionally excluded
+ * from artifactEvidenceDigest so adding it cannot invalidate a v1 seal.
+ */
+export function artifactEvidenceProvenance(artifact: LoopArtifact): 'legacy' | 'attested' {
+  return artifact.provenance ?? (artifact.evidence ? 'attested' : 'legacy');
+}
+
 function isAcceptedVerdict(artifact: Omit<LoopArtifact, 'evidence'>): boolean {
   return artifact.type === 'verdict' && /^accepted(?:\b|[:\s])/.test((artifact.body ?? '').trim().toLowerCase());
 }
@@ -161,7 +171,7 @@ export function sealArtifactEvidence(
     ...unsigned,
     seal: { algorithm: 'sha256', digest: evidenceDigest(unsigned) },
   };
-  return { ...committedArtifact, evidence: envelope };
+  return { ...committedArtifact, provenance: 'attested', evidence: envelope };
 }
 
 /** Validate every binding before an envelope may influence a gate. */

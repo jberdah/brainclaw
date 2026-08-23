@@ -32,6 +32,8 @@ import type { ExecutionContractRef } from './execution-contract.js';
 import { transitionAgentRun } from './agentruns.js';
 import { prepareTurnExecution } from './loops/turn-execution.js';
 import { phasePolicy } from './loops/kind-policies.js';
+import { deriveChildIds } from './loops/attempt-reservation.js';
+import { readHeartbeat, signalExists } from './runtime-signals.js';
 import type { LoopKind, LoopSlot } from './loops/types.js';
 
 /**
@@ -92,7 +94,7 @@ const TURN_OWNED_DISPATCH_LEASE_MS = 30 * 60_000;
  */
 type TurnOwnedPrep =
   | { kind: 'legacy' }
-  | { kind: 'denied'; reason: string }
+  | { kind: 'denied'; reason: string; turnId?: string; alreadyCrossed?: boolean }
   | {
     kind: 'won'; assignmentId: string; runId: string; turnId: string; nonce: string;
     attemptEpoch?: number; workspaceDigest?: string;
@@ -130,9 +132,13 @@ export type TurnProjectionFaultPoint =
   | 'after_claim_binding'
   | 'after_slot_binding'
   | 'before_consume'
-  | 'after_consume';
+  | 'after_consume'
+  | 'after_spawn';
 
-function turnProjectionFaultPoint(input: PrepareTurnOwnedReviewInput, point: TurnProjectionFaultPoint): void {
+function turnProjectionFaultPoint(
+  input: { faultInjector?: (point: TurnProjectionFaultPoint) => void },
+  point: TurnProjectionFaultPoint,
+): void {
   input.faultInjector?.(point);
   if (process.env.BRAINCLAW_FAULT_POINT === `turn_projection_${point}`) {
     throw new Error(`fault-injection: turn_projection_${point}`);
@@ -235,7 +241,12 @@ export function prepareTurnOwnedReviewDispatch(input: PrepareTurnOwnedReviewInpu
         : /lock_timeout/.test(prepared.reason)
           ? `indeterminate reservation; fail-closed: ${prepared.reason}`
           : prepared.reason;
-      return { kind: 'denied', reason: `launch_denied: ${reason}` };
+      return {
+        kind: 'denied',
+        reason: `launch_denied: ${reason}`,
+        turnId: prepared.turn_id,
+        alreadyCrossed: prepared.code === 'already_crossed',
+      };
     }
     turnProjectionFaultPoint(input, 'after_consume');
 
@@ -294,6 +305,10 @@ export interface DispatchReviewLoopTurnInput {
   /** Model override, decoupled from agent identity (resolveModel chain). */
   model?: string;
   cwd?: string;
+  /** Test-only deterministic crash seam shared with preparation boundaries. */
+  faultInjector?: (point: TurnProjectionFaultPoint) => void;
+  /** Test-only execution seam; production callers use attemptExecution. */
+  executionAttempt?: typeof attemptExecution;
 }
 
 export interface DispatchReviewLoopTurnResult {
@@ -310,8 +325,27 @@ export interface DispatchReviewLoopTurnResult {
   /** Manual launch command when the spawn did not auto-start (fallback for the operator). */
   command?: string;
   shell?: string;
+  /** Observability only: a crossed fence with no runtime signal is not re-spawnable. */
+  authority_state?: 'crossed_unknown';
+  needs_operator?: boolean;
   /** Populated when the whole dispatch failed before/at spawn (never thrown to the caller). */
   error?: string;
+}
+
+function hasTurnRuntimeSignal(
+  cwd: string,
+  turnId: string,
+  worktreePath?: string,
+): boolean {
+  const { assignment_id: assignmentId, run_id: runId } = deriveChildIds(turnId);
+  const signalPresent = (signal: 'ack' | 'completed' | 'failed'): boolean =>
+    signalExists(cwd, assignmentId, signal, runId)
+    || signalExists(cwd, assignmentId, signal);
+  return signalPresent('ack')
+    || readHeartbeat(cwd, assignmentId, worktreePath, runId).exists
+    || readHeartbeat(cwd, assignmentId, worktreePath).exists
+    || signalPresent('completed')
+    || signalPresent('failed');
 }
 
 /**
@@ -390,6 +424,7 @@ export async function dispatchReviewLoopTurn(
         model: resolveModel(agent, { override: input.model }),
         isReviewer,
         cwd,
+        faultInjector: input.faultInjector,
       });
       if (prep.kind === 'denied') {
         // The exactly-once fence says this dispatch is NOT the spawner (adopted /
@@ -410,6 +445,14 @@ export async function dispatchReviewLoopTurn(
         // sabotaging a live winner is high-harm and not self-healing. So we leave it.
         result.execution_status = 'inbox_only';
         result.error = prep.reason;
+        if (
+          prep.alreadyCrossed
+          && prep.turnId
+          && !hasTurnRuntimeSignal(cwd, prep.turnId, claimResult.worktreePath)
+        ) {
+          result.authority_state = 'crossed_unknown';
+          result.needs_operator = true;
+        }
         return result;
       }
       if (prep.kind === 'won') {
@@ -557,7 +600,7 @@ export async function dispatchReviewLoopTurn(
       binding: harnessBinding,
     })?.invoke;
 
-    const execResult = await attemptExecution(invoke, {
+    const execResult = await (input.executionAttempt ?? attemptExecution)(invoke, {
       agent,
       autoExecute: true,
       worktreePath: executionWorktreePath,
@@ -573,6 +616,9 @@ export async function dispatchReviewLoopTurn(
     result.command = execResult.command;
     result.shell = execResult.shell;
     if (execResult.error && !result.error) result.error = execResult.error;
+    if (execResult.execution_status === 'delivered_and_started') {
+      turnProjectionFaultPoint(input, 'after_spawn');
+    }
 
     // pln#630 PR2c-b — a turn-owned run was preallocated `created`; once the
     // worker actually spawned, move it to `running` so it leaves the PR2c-lease

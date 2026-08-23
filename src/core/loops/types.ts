@@ -542,6 +542,12 @@ export const LoopArtifactSchema = z
      * at artifact creation time so callers don't have to track it.
      */
     iteration: z.number().int().nonnegative().optional(),
+    /**
+     * Explicit migration provenance. Optional on read so artifacts persisted
+     * before P2 remain valid; use artifactEvidenceProvenance() to infer their
+     * effective value without rewriting historical records.
+     */
+    provenance: z.enum(['legacy', 'attested']).optional(),
     /** Server-sealed provenance and independent attestations (P2). */
     evidence: EvidenceEnvelopeSchema.optional(),
   })
@@ -994,8 +1000,9 @@ export const DEFAULT_PROTOCOLS: Record<
   },
   // pln#609 — implementation loop v2. The loop ADDS to the dispatch pipeline
   // what it lacked: a deterministic command_green gate + a bounded fix↔verify
-  // cycle + per-phase context sculpting. `bind` is an ENGINE action (bind
-  // plan+sequence and dispatch) not narration; execute↔verify iterates until
+  // cycle + per-phase context sculpting. `bind` is an engine-only link
+  // validation/advance; worker launch belongs to turn(dispatch=true).
+  // execute↔verify iterates until
   // the verify command is green (a passing verify_report this iteration) or
   // the cycle cap is hit (→ handoff_ready with the red report → blocked).
   implementation: {

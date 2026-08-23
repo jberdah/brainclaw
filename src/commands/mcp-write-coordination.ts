@@ -2257,24 +2257,18 @@ export async function handleBclawLoop(args: Record<string, unknown>, ctx: McpWri
   // The facade schema requires allow_orphan=true, making the caller explicitly
   // own the subsequent bind/turn/dispatch. Review and ideation still have the
   // higher-level coordinate shortcuts that open and dispatch together.
-  // pln#632 — `bind` SPAWNE de vrais workers (il dispatche la séquence liée de la
-  // boucle), donc il est protégé au barreau 'trusted' comme les autres surfaces de
-  // dispatch.
-  //
-  // LA BRANCHE `turn && dispatch === true` A ÉTÉ RETIRÉE (pln#626 phase 4). Le drapeau
-  // `TurnInput.dispatch` était déclaré, transporté jusqu'à `turn()` — et JAMAIS LU. Une
-  // porte de confiance sur un no-op est pire qu'absente : elle fait croire qu'un chemin
-  // sensible est gardé, et un lecteur qui la voit conclut à tort que `dispatch: true` a
-  // un effet. Le drapeau lui-même est supprimé dans le même commit ; garder la porte
-  // aurait laissé la fausse impression intacte.
+  // `turn(dispatch=true)` is now a REAL generic spawn path (claim + immutable
+  // attempt + inbox + execution adapter). Plain turn remains a pure Loop Engine
+  // mutation. `bind` is also engine-only; takeover and real turn dispatch are
+  // the two trusted authority-changing paths here.
   const targetCwd = resolveProjectCwd(args?.project as string | undefined, cwd);
   let effectiveArgs = args;
-  if (args?.intent === 'bind' || args?.intent === 'takeover') {
+  if (args?.intent === 'takeover' || (args?.intent === 'turn' && args?.dispatch === true)) {
     const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', targetCwd, connectionSessionId);
     if (resolved.error) {
       return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
     }
-    if (args.intent === 'takeover' && resolved.identity) {
+    if ((args.intent === 'takeover' || args.intent === 'turn') && resolved.identity) {
       effectiveArgs = {
         ...args,
         agent: resolved.identity.agent_name,

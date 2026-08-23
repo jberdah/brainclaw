@@ -89,7 +89,11 @@ export const BclawLoopTurnSchema = z.object({
   assignment_id: z.string().optional(),
   /** pln#562 step 4 — claim binding the turn's slot to a dispatched instance. */
   claim_id: z.string().optional(),
+  /** Trusted production driver: claim + AttemptAuthority + message + worker spawn. */
   dispatch: z.boolean().optional(),
+  auto_execute: z.boolean().optional(),
+  model: z.string().min(1).optional(),
+  target_agents: z.array(z.string().min(1)).min(1).optional(),
   expected_version: z.number().int().nonnegative().optional(),
   ...CallerEnvelopeFields,
 });
@@ -98,6 +102,18 @@ export const BclawLoopCompleteTurnSchema = z.object({
   intent: z.literal('complete_turn'),
   loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
   slot_id: z.string().min(1),
+  /**
+   * AttemptAuthority fence. These fields are optional at the transport layer
+   * so pre-v2/legacy turns remain completable, but the verb requires the whole
+   * tuple whenever the slot is backed by AttemptAuthority v2.
+   */
+  assignment_id: z.string().min(1).optional(),
+  turn_id: z.string().min(1).optional(),
+  run_id: z.string().min(1).optional(),
+  nonce: z.string().min(1).optional(),
+  attempt_epoch: z.number().int().nonnegative().optional(),
+  execution_contract_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  workspace_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   outcome: z.enum(['done', 'failed', 'cancelled']).optional(),
   failure_reason: z.string().optional(),
   artifact: z
@@ -193,23 +209,24 @@ export const BclawLoopVerifySchema = z.object({
 
 /**
  * pln#632 — `bclaw_loop(intent='bind')`: the ENGINE action for an implementation loop's
- * `bind` phase. Dispatches the loop's linked sequence (by id, no active-sequence hijack)
- * and advances `bind → execute`. Idempotent (a loop past `bind` → noop). `dry_run`
- * previews what would dispatch without spawning or advancing. Implementation loops only —
- * review/ideation loops dispatch via bclaw_coordinate.
+ * `bind` phase. Validates the loop's linked sequence and advances
+ * `bind → execute`; it never dispatches a worker. Idempotent (a loop past
+ * `bind` → noop). `dry_run` validates without advancing. Historical launch
+ * options remain accepted but are ignored during migration; worker launch is
+ * exclusively `turn(dispatch=true)` through AttemptAuthority.
  */
 export const BclawLoopBindSchema = z.object({
   intent: z.literal('bind'),
   loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
-  /** Analyze + report what would dispatch; no spawn, no advance. */
+  /** Validate the linked sequence; no advance. Bind never spawns. */
   dry_run: z.boolean().optional(),
-  /** Restrict the bind dispatch to specific lanes. */
+  /** @deprecated Retained for compatibility and ignored. */
   lanes: z.array(z.string().min(1)).optional(),
-  /** Deliver briefs without spawning (→ manual launch commands). */
+  /** @deprecated Retained for compatibility and ignored. */
   auto_execute: z.boolean().optional(),
-  /** Model override for the dispatched agents. */
+  /** @deprecated Retained for compatibility and ignored. */
   model: z.string().min(1).optional(),
-  /** Cap assignments made in this bind. */
+  /** @deprecated Retained for compatibility and ignored. */
   max_assignments: z.number().int().positive().optional(),
   // No expected_version: bind is idempotent by loop phase (past `bind` → noop), not CAS.
   ...CallerEnvelopeFields,

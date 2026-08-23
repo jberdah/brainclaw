@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { buildInvokeCommand } from '../../src/core/agent-capability.js';
 import {
@@ -10,6 +13,7 @@ import {
   selectHarnessAdapter,
   normalizeHarnessClaimToLaneResult,
 } from '../../src/core/harness-adapters/index.js';
+import { resolveBinaryOnPath } from '../../src/core/execution-adapters.js';
 import { resolveCapabilitySnapshot } from '../../src/core/execution-contract.js';
 import { createAgentRun, recordRuntimeCapabilityObservation } from '../../src/core/agentruns.js';
 import { createTestWorkspace } from '../helpers/workspace.js';
@@ -267,10 +271,25 @@ describe('native HarnessAdapter real CLI smoke (explicit opt-in)', () => {
     assert.ok(prepared);
     if (agent === 'codex') prepared.invoke.args.push('--ephemeral');
     else prepared.invoke.args.push('--no-session-persistence');
-    const child = spawnSync(prepared.invoke.executable, prepared.invoke.args, {
-      cwd: process.cwd(), input: prepared.invoke.promptText,
-      encoding: 'utf8', timeout: 180_000, shell: process.platform === 'win32',
-    });
+    const executable = process.platform === 'win32'
+      ? resolveBinaryOnPath(prepared.invoke.executable) ?? prepared.invoke.executable
+      : prepared.invoke.executable;
+    const promptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-native-harness-'));
+    const promptPath = path.join(promptDir, 'prompt.txt');
+    fs.writeFileSync(promptPath, prepared.invoke.promptText ?? '', { encoding: 'utf8', mode: 0o600 });
+    const promptFd = fs.openSync(promptPath, 'r');
+    const child = (() => {
+      try {
+        return spawnSync(executable, prepared.invoke.args, {
+          cwd: process.cwd(), encoding: 'utf8', timeout: 180_000,
+          shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable),
+          stdio: [promptFd, 'pipe', 'pipe'],
+        });
+      } finally {
+        fs.closeSync(promptFd);
+        fs.rmSync(promptDir, { recursive: true, force: true });
+      }
+    })();
     assert.equal(child.error, undefined, child.error?.message ?? 'native harness spawn failed');
     const outcome = selectHarnessAdapter(agent, true).parseOutcome({
       exit_code: child.status ?? undefined,

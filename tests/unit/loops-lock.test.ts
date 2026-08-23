@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 import {
   acquireLock,
@@ -92,6 +94,88 @@ describe('acquireLock', () => {
     const live = acquireLock({ lockPath, agentId: 'agt_reaper', intent: 'advance' });
     assert.equal(readLock(cwd, loopId)?.agent_id, 'agt_reaper');
     live.release();
+  });
+
+  it('never reclaims an expired lock while its local owner process is alive', () => {
+    const loopId = generateLoopId();
+    const lockPath = path.join(loopsRoot(cwd), 'locks', `${loopId}.lock`);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const suspendedButAlive: LockBlob = {
+      pid: process.pid,
+      host_id: os.hostname(),
+      agent_id: 'agt_suspended',
+      acquired_at: new Date(Date.now() - 300_000).toISOString(),
+      lease_until: new Date(Date.now() - 240_000).toISOString(),
+      hard_deadline: new Date(Date.now() - 120_000).toISOString(),
+      mutation_id: 'live_expired_mut',
+    };
+    fs.writeFileSync(lockPath, JSON.stringify(suspendedButAlive));
+
+    assert.throws(
+      () => acquireLock({ lockPath, agentId: 'agt_takeover', intent: 'advance', timeoutMs: 50 }),
+      (err) => err instanceof LockTimeoutError,
+    );
+    assert.equal(readLock(cwd, loopId)?.mutation_id, 'live_expired_mut');
+    fs.unlinkSync(lockPath);
+  });
+
+  it('serializes two real processes racing to reap the same dead generation', async () => {
+    const loopId = generateLoopId();
+    const lockPath = path.join(loopsRoot(cwd), 'locks', `${loopId}.lock`);
+    const tracePath = path.join(cwd, 'reaper-trace.jsonl');
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const stale: LockBlob = {
+      pid: 999_999,
+      host_id: os.hostname(),
+      agent_id: 'agt_dead',
+      acquired_at: new Date(Date.now() - 300_000).toISOString(),
+      lease_until: new Date(Date.now() - 240_000).toISOString(),
+      hard_deadline: new Date(Date.now() - 120_000).toISOString(),
+      mutation_id: 'shared_stale_generation',
+    };
+    fs.writeFileSync(lockPath, JSON.stringify(stale));
+
+    const moduleUrl = pathToFileURL(
+      path.join(process.cwd(), 'dist-test', 'src', 'core', 'loops', 'index.js'),
+    ).href;
+    const childScript = [
+      "import fs from 'node:fs';",
+      `const { acquireLock } = await import(${JSON.stringify(moduleUrl)});`,
+      'const [lockPath, tracePath, label] = process.argv.slice(1);',
+      "const lock = acquireLock({ lockPath, agentId: label, intent: 'advance', timeoutMs: 3000 });",
+      "fs.appendFileSync(tracePath, JSON.stringify({ kind: 'enter', label }) + '\\n');",
+      'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);',
+      "fs.appendFileSync(tracePath, JSON.stringify({ kind: 'exit', label }) + '\\n');",
+      'lock.release();',
+    ].join('\n');
+
+    const run = (label: string) => new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', childScript, lockPath, tracePath, label], {
+        cwd: process.cwd(),
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`${label} exited ${code}: ${stderr}`));
+      });
+    });
+
+    await Promise.all([run('agt_reaper_a'), run('agt_reaper_b')]);
+    const trace = fs.readFileSync(tracePath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { kind: 'enter' | 'exit'; label: string });
+    assert.equal(trace.length, 4);
+    assert.equal(trace[0].kind, 'enter');
+    assert.equal(trace[1].kind, 'exit', 'a second owner entered before the first released');
+    assert.equal(trace[2].kind, 'enter');
+    assert.equal(trace[3].kind, 'exit');
+    assert.notEqual(trace[0].label, trace[2].label);
   });
 
   it('fenceCheck throws LockLostError when the lock blob has been replaced', () => {

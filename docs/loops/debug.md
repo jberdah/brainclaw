@@ -41,8 +41,10 @@ current iteration. `advance_when: 'all'` is the default.
 
 - **Direct open (typical).**
   `bclaw_loop(intent='open', kind='debug', linked={handoff_ids:[…]}, allow_orphan=true)`
-  followed by manual dispatch of the `reproduce` phase. There is no
-  coordinator shortcut for `debug` today.
+  followed by a `turn` for the `reproduce` phase. There is no coordinator
+  shortcut for `debug` today. Plain `turn` is state-only; trusted
+  `turn(dispatch=true)` launches a worker phase through the common
+  AttemptAuthority path.
 - **Referred from `implementation`.** An `implementation` loop that
   closes `blocked` at the cycle cap with a red `verify_report` is a
   natural feeder — open a `debug` loop that links the red report as its

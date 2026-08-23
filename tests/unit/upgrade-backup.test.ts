@@ -177,6 +177,35 @@ describe('core/upgrades/backup', () => {
     );
   });
 
+  it('retries a transient Windows denial while parking the live store', () => {
+    const storePath = storePathOf(workspace);
+    const fixedNow = () => new Date('2026-04-18T19:30:00.000Z');
+    seedFile(storePath, 'memory/decisions/dec_001.json', '{"id":"dec_001","state":"live"}');
+    const handle = createBackup({ storePath });
+    const parkedPath = path.join(
+      path.dirname(storePath),
+      `${ROLLBACK_PARKED_PREFIX}2026-04-18T19-30-00-000Z`,
+    );
+    const originalRenameSync = fs.renameSync;
+    let parkAttempts = 0;
+    (fs as { renameSync: typeof fs.renameSync }).renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(from) === storePath && String(to) === parkedPath && parkAttempts++ === 0) {
+        const error = new Error('simulated Defender race') as NodeJS.ErrnoException;
+        error.code = 'EPERM';
+        throw error;
+      }
+      return originalRenameSync(from, to);
+    }) as typeof fs.renameSync;
+
+    try {
+      const restored = restoreBackup({ storePath, backupPath: handle.backupPath, now: fixedNow });
+      assert.equal(restored.parkedPath, parkedPath);
+      assert.equal(parkAttempts, 2);
+    } finally {
+      (fs as { renameSync: typeof fs.renameSync }).renameSync = originalRenameSync;
+    }
+  });
+
   it('preserves parked and staged trees when swap and un-park both fail', () => {
     const storePath = storePathOf(workspace);
     const fixedNow = () => new Date('2026-04-18T20:00:00.000Z');

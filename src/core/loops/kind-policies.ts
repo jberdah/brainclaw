@@ -41,11 +41,11 @@ export const LOOP_KIND_POLICIES: Record<LoopKind, LoopKindPolicy> = {
     phases: {
       proposal: { execution: 'manual' },
       critique: { execution: 'worker', completion_mode: 'either', expected_artifacts: [expected('critique')], finalization: 'report' },
-      // The coordinator currently auto-dispatches critics only. Champion
-      // revision/synthesis remain explicit loop turns until a dedicated driver
-      // can allocate phase-safe attempt identities without changing turn_id.
-      revision: { execution: 'manual' },
-      synthesis: { execution: 'manual' },
+      // Critic and champion work use the same generic production driver. The
+      // coordinator still chooses when to cross each phase; the worker only
+      // produces the declared artifact and never advances the loop.
+      revision: { execution: 'worker', completion_mode: 'either', expected_artifacts: [expected('revision')], finalization: 'report' },
+      synthesis: { execution: 'worker', completion_mode: 'either', expected_artifacts: [expected('plan_draft')], finalization: 'report' },
     },
   },
   implementation: {

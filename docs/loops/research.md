@@ -41,8 +41,10 @@ open-ended research.
 
 - **Direct open.**
   `bclaw_loop(intent='open', kind='research', title=…, goal=…, allow_orphan=true)`
-  followed by manual `turn`/`advance`. There is no coordinator shortcut for
-  `research` today; the caller drives each round.
+  followed by `turn`/`advance`. There is no coordinator shortcut for
+  `research` today; the caller drives each round. Plain `turn` is state-only;
+  trusted `turn(dispatch=true)` launches an investigator or synthesiser
+  through the common AttemptAuthority path.
 - **Custom stop_condition** — override the default artifact-produced stop
   with any [`StopCondition`](../../src/core/loops/types.ts) — e.g.
   `min_artifacts_by_type { type: 'finding', n: 5, scope: 'loop' }` for a

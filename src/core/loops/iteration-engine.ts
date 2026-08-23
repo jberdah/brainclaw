@@ -71,6 +71,7 @@ export type NextPhaseDecision =
 export function decideNextPhase(
   thread: LoopThread,
   protocol: IterationProtocol,
+  cwd?: string,
 ): NextPhaseDecision {
   const phaseNames = protocol.phases.map((p) => p.name);
   const currentIndex = phaseNames.indexOf(thread.current_phase);
@@ -113,7 +114,7 @@ export function decideNextPhase(
     cycleIndex === 0 &&
     thread.iteration_count > 0 &&
     protocol.iteration?.exit_when === 'no_new_critique_artifacts' &&
-    noNewCritiqueInIteration(thread, thread.iteration_count)
+    noNewCritiqueInIteration(thread, thread.iteration_count, cwd)
   ) {
     const lastCyclePhaseIndex = phaseNames.indexOf(cycle[cycle.length - 1]);
     if (lastCyclePhaseIndex < 0 || lastCyclePhaseIndex + 1 >= phaseNames.length) {
@@ -164,7 +165,7 @@ export function decideNextPhase(
   // yet incremented).
   if (
     iterationBlock.exit_when === 'critic_signal' &&
-    hasCriticSignalInIteration(thread, thread.iteration_count)
+    hasCriticSignalInIteration(thread, thread.iteration_count, cwd)
   ) {
     return {
       kind: 'exit_cycle',
@@ -176,7 +177,7 @@ export function decideNextPhase(
 
   if (
     iterationBlock.exit_when === 'no_new_critique_artifacts' &&
-    noNewCritiqueInIteration(thread, thread.iteration_count)
+    noNewCritiqueInIteration(thread, thread.iteration_count, cwd)
   ) {
     return {
       kind: 'exit_cycle',
@@ -188,7 +189,7 @@ export function decideNextPhase(
 
   if (
     iterationBlock.exit_when === 'command_green' &&
-    hasPassingVerifyReportInIteration(thread, thread.iteration_count)
+    hasPassingVerifyReportInIteration(thread, thread.iteration_count, cwd)
   ) {
     return {
       kind: 'exit_cycle',
@@ -240,8 +241,9 @@ export function artifactsInIteration(
 export function noNewCritiqueInIteration(
   thread: LoopThread,
   iteration: number,
+  cwd?: string,
 ): boolean {
-  return evaluateNoNewCritique(thread, iteration).passed;
+  return evaluateNoNewCritique(thread, iteration, cwd).passed;
 }
 
 /**
@@ -252,8 +254,9 @@ export function noNewCritiqueInIteration(
 export function hasCriticSignalInIteration(
   thread: LoopThread,
   iteration: number,
+  cwd?: string,
 ): boolean {
-  return evaluateCriticSignal(thread, iteration).passed;
+  return evaluateCriticSignal(thread, iteration, cwd).passed;
 }
 
 /**
@@ -267,6 +270,7 @@ export function hasCriticSignalInIteration(
 export function hasPassingVerifyReportInIteration(
   thread: LoopThread,
   iteration: number,
+  cwd?: string,
 ): boolean {
-  return evaluateCommandGreen(thread, iteration).passed;
+  return evaluateCommandGreen(thread, iteration, cwd).passed;
 }

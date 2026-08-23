@@ -11,9 +11,11 @@ import { recoverPendingIntents } from './commit-intent.js';
  * Per-loop exclusive lock + idempotency + fencing helpers.
  *
  * Implements the commit protocol from docs/concepts/loop-engine.md §Persistence.
- * For synchronous MVP mutations, the lock window is short (< 100ms typically) so
- * lease renewal via an internal heartbeat is not yet wired up; the hard_deadline
- * is still recorded in the lock blob and used by the stale-lock recovery rules.
+ * For synchronous mutations, the lock window is short (< 100ms typically), so
+ * lease renewal via an internal heartbeat is not wired up. `lease_until` and
+ * `hard_deadline` remain durable diagnostics, but elapsed time alone never
+ * authorizes automatic takeover: without per-write fencing, a suspended live
+ * process could otherwise resume after takeover and commit as a second owner.
  */
 
 export const LOCK_BACKOFF_BASE_MS = 10;
@@ -227,11 +229,75 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-function lockIsStale(blob: LockBlob, now: number): boolean {
-  if (now > Date.parse(blob.hard_deadline)) return true;
-  if (blob.host_id === os.hostname() && !processIsAlive(blob.pid)) return true;
-  if (now > Date.parse(blob.lease_until) + LEASE_GRACE_MS) return true;
-  return false;
+function lockIsStale(blob: LockBlob, _now: number): boolean {
+  // Automatic reaping is deliberately proof-based. On the local host we can
+  // prove the owning process is gone. A deadline or lease expiry only proves
+  // that a process was delayed; on Windows a suspended live process can resume.
+  // Cross-host liveness is likewise unknowable from this file alone, so those
+  // locks fail closed and require explicit operator recovery.
+  return blob.host_id === os.hostname() && !processIsAlive(blob.pid);
+}
+
+function takeoverClaimPath(lockPath: string, observedMutationId: string): string {
+  // Lock blobs are read from disk and may predate schema validation. Hash the
+  // token before using it as a filename so a corrupt value cannot escape the
+  // takeover directory or create a Windows-invalid path.
+  const generationKey = crypto.createHash('sha256').update(observedMutationId).digest('hex');
+  return path.join(`${lockPath}.takeovers`, `${generationKey}.lock`);
+}
+
+/**
+ * Remove exactly the stale generation that was observed.
+ *
+ * A plain `read stale -> unlink(path)` has an ABA race on Windows: another
+ * reaper can replace generation X with Y between the read and unlink, after
+ * which the late reaper deletes Y. The immutable, generation-keyed takeover
+ * claim elects one reaper for X. Losers never unlink the shared path.
+ *
+ * If the elected reaper crashes before unlinking, the generation fails closed
+ * (the tiny takeover claim is retained for operator recovery). If it crashes
+ * after unlinking, contenders can safely acquire the now-empty main path.
+ */
+function reapObservedLock(
+  lockPath: string,
+  observed: LockBlob,
+  agentId: string,
+): boolean {
+  const nowMs = Date.now();
+  const claimPath = takeoverClaimPath(lockPath, observed.mutation_id);
+  const claim: LockBlob = {
+    pid: process.pid,
+    host_id: os.hostname(),
+    agent_id: agentId,
+    acquired_at: new Date(nowMs).toISOString(),
+    lease_until: new Date(nowMs + LEASE_WINDOW_MS).toISOString(),
+    hard_deadline: new Date(nowMs + 5_000).toISOString(),
+    mutation_id: crypto.randomUUID().replace(/-/g, ''),
+  };
+  if (!acquireRaw(claimPath, claim)) return false;
+
+  let removed = false;
+  try {
+    const current = readLockBlob(lockPath);
+    if (
+      current
+      && current.mutation_id === observed.mutation_id
+      && lockIsStale(current, Date.now())
+    ) {
+      fs.unlinkSync(lockPath);
+      removed = true;
+    }
+    return removed;
+  } finally {
+    // Delete only our own claim. A crash before this point intentionally leaves
+    // a fail-closed marker instead of guessing that a different process is dead.
+    try {
+      const currentClaim = readLockBlob(claimPath);
+      if (currentClaim?.mutation_id === claim.mutation_id) fs.unlinkSync(claimPath);
+    } catch {
+      /* best-effort; a retained claim fails closed for this stale generation */
+    }
+  }
 }
 
 function acquireRaw(lockPath: string, blob: LockBlob): boolean {
@@ -286,9 +352,9 @@ export function acquireLock(options: AcquireLockOptions): AcquiredLock {
     if (existing) {
       if (lockIsStale(existing, Date.now())) {
         try {
-          fs.unlinkSync(options.lockPath);
+          reapObservedLock(options.lockPath, existing, options.agentId);
         } catch {
-          /* race with another reaper; retry */
+          /* another reaper won or I/O failed; exclusive acquire below retries */
         }
       }
     }

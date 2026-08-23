@@ -72,6 +72,15 @@ const perFileTimeoutMs = {
 // the 5min e2e cap under CI load (recurring false TIMEOUT that blocked merges).
 // It runs ALONE in the serial lane, so a longer budget costs nothing in parallel.
 const perFileTimeoutOverrideMs = {
+  // These CLI-heavy suites each spawn dozens of cold Node processes. On
+  // Windows they legitimately exceed the generic 5-minute cap even in
+  // isolation (agent-first is ~10 minutes), and the three-worker E2E pool adds
+  // further process/Defender contention. Keep the pool parallel but give each
+  // file a realistic fail-fast boundary.
+  'agent-first.test.js': 900000,
+  'cli.test.js': 900000,
+  'mcp.test.js': 900000,
+  'reflective.test.js': 900000,
   'journal-crash-storm.test.js': 600000,
 };
 
@@ -351,7 +360,11 @@ export async function runGroup(groupName, options = {}) {
     results.push(...await runSequentialTests(sequentialTests, options));
   }
   if (parallelTests.length > 0) {
-    console.log(`  Parallel e2e: ${parallelTests.length} file(s) with worker pool of ${options.concurrency ?? 3} (${perFileTimeoutMs.e2e / 1000}s per file)`);
+    const maxParallelTimeoutMs = Math.max(...parallelTests.map((test) => test.timeoutMs));
+    const timeoutLabel = maxParallelTimeoutMs > perFileTimeoutMs.e2e
+      ? `${perFileTimeoutMs.e2e / 1000}s default; overrides up to ${maxParallelTimeoutMs / 1000}s`
+      : `${perFileTimeoutMs.e2e / 1000}s per file`;
+    console.log(`  Parallel e2e: ${parallelTests.length} file(s) with worker pool of ${options.concurrency ?? 3} (${timeoutLabel})`);
     results.push(...await runParallelTests(parallelTests, options));
   }
   if (serialE2eTests.length > 0) {

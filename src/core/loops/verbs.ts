@@ -18,6 +18,16 @@ import {
   type EvidenceCommitContext,
 } from './evidence.js';
 import {
+  evidenceMatchesAttempt,
+  findReservationByAssignmentId,
+  getReservation,
+  type TurnReservation,
+} from './attempt-reservation.js';
+import {
+  resolveTurnGenerationChain,
+  type AttemptGeneration,
+} from './attempt-generations.js';
+import {
   evaluateCommandGreen,
   evaluateCriticSignal,
   evaluateGateCondition,
@@ -111,8 +121,8 @@ function hasUsableContent(artifact: LoopArtifact): boolean {
   return artifact.ref !== undefined;
 }
 
-export function evaluateStopCondition(thread: LoopThread, condition?: StopCondition): boolean {
-  return evaluateGateCondition(thread, condition).passed;
+export function evaluateStopCondition(thread: LoopThread, condition?: StopCondition, cwd?: string): boolean {
+  return evaluateGateCondition(thread, condition, cwd).passed;
 }
 
 /**
@@ -144,18 +154,19 @@ export interface PhaseAdvanceOutcome {
 export function evaluatePhaseAdvanceGate(
   thread: LoopThread,
   gate: StopCondition | undefined,
+  cwd?: string,
 ): PhaseAdvanceOutcome {
   if (!gate) return { advance: true };
-  const gate_decision = evaluateGateCondition(thread, gate);
+  const gate_decision = evaluateGateCondition(thread, gate, cwd);
   if (gate_decision.passed) return { advance: true, gate_decision };
   return {
     advance: false,
-    gate_reason: describeUnmetGate(thread, gate, gate_decision),
+    gate_reason: describeUnmetGate(thread, gate, gate_decision, cwd),
     gate_decision,
   };
 }
 
-function describeUnmetGate(thread: LoopThread, gate: StopCondition, decision?: GateDecision): string {
+function describeUnmetGate(thread: LoopThread, gate: StopCondition, decision?: GateDecision, cwd?: string): string {
   switch (gate.kind) {
     case 'min_artifacts_by_type': {
       // Mirror the iteration-aware filter used in evaluateStopCondition so
@@ -218,8 +229,8 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition, decision?: G
       // one of N failed" tells the operator nothing actionable. Find the
       // first sub-condition that evaluates false and report its reason so
       // the journal records what is actually blocking the advance.
-      const failing = gate.conditions.find((c) => !evaluateStopCondition(thread, c));
-      if (failing) return describeUnmetGate(thread, failing, evaluateGateCondition(thread, failing));
+      const failing = gate.conditions.find((c) => !evaluateStopCondition(thread, c, cwd));
+      if (failing) return describeUnmetGate(thread, failing, evaluateGateCondition(thread, failing, cwd), cwd);
       return `all-of unmet: at least one of ${gate.conditions.length} sub-conditions failed`;
     }
     default: {
@@ -279,7 +290,7 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
     current.protocol.iteration.cycle[0] === current.current_phase &&
     current.iteration_count > 0
   ) {
-    const candidate = decideNextPhase(current, { phases: current.phases, iteration: current.protocol.iteration });
+    const candidate = decideNextPhase(current, { phases: current.phases, iteration: current.protocol.iteration }, cwd);
     if (candidate.kind === 'exit_cycle' && candidate.reason === 'no_new_critique_artifacts') {
       earlyIterationDecision = candidate;
     }
@@ -287,7 +298,7 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
   if (input.to_phase === undefined && input.force !== true && !earlyIterationDecision) {
     const currentPhaseDef = current.phases[currentIndex];
     const gate = currentPhaseDef?.advance_gate;
-    const gateOutcome = evaluatePhaseAdvanceGate(current, gate);
+    const gateOutcome = evaluatePhaseAdvanceGate(current, gate, cwd);
     phaseGateDecision = gateOutcome.gate_decision;
     if (!gateOutcome.advance) {
       const blockSeq = nextSeq(current.id, cwd);
@@ -321,7 +332,7 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
   // satisfied AT the last phase (the bootstrap preset's converge case after
   // project_md_final lands), the right behavior is auto-close, not throw.
   // Field-observed during pln#514 v1.1 validation (run_79f8443a).
-  const preAdvanceStopDecision = evaluateGateCondition(current, current.stop_condition);
+  const preAdvanceStopDecision = evaluateGateCondition(current, current.stop_condition, cwd);
   if (input.to_phase === undefined && preAdvanceStopDecision.passed) {
     const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
       current,
@@ -358,19 +369,19 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
       phases: current.phases,
       iteration: current.protocol?.iteration,
     };
-    iterationDecision = earlyIterationDecision ?? decideNextPhase(current, protocol);
+    iterationDecision = earlyIterationDecision ?? decideNextPhase(current, protocol, cwd);
     to_phase = iterationDecision.target;
     iteration_count = iterationDecision.iteration;
     if (!phaseGateDecision && iterationDecision.kind === 'exit_cycle') {
       phaseGateDecision = iterationDecision.reason === 'command_green'
-        ? evaluateCommandGreen(current, current.iteration_count)
+        ? evaluateCommandGreen(current, current.iteration_count, cwd)
         : iterationDecision.reason === 'critic_signal'
-          ? evaluateCriticSignal(current, current.iteration_count)
-          : evaluateNoNewCritique(current, current.iteration_count);
+          ? evaluateCriticSignal(current, current.iteration_count, cwd)
+          : evaluateNoNewCritique(current, current.iteration_count, cwd);
     }
   }
 
-  const stopDecision = evaluateGateCondition(current, current.stop_condition);
+  const stopDecision = evaluateGateCondition(current, current.stop_condition, cwd);
   if (stopDecision.passed) {
     const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
       current,
@@ -439,7 +450,7 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
   );
   writeThreadFile(next, cwd);
 
-  const postAdvanceDecision = evaluateGateCondition(next, next.stop_condition);
+  const postAdvanceDecision = evaluateGateCondition(next, next.stop_condition, cwd);
   if (postAdvanceDecision.passed) {
     const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
       next,
@@ -691,6 +702,14 @@ export function bindTurnProjection(input: BindTurnProjectionInput, cwd?: string)
 export interface CompleteTurnInput {
   id: string;
   slot_id: string;
+  /** Full AttemptAuthority generation fence (all fields are required together). */
+  assignment_id?: string;
+  turn_id?: string;
+  run_id?: string;
+  nonce?: string;
+  attempt_epoch?: number;
+  execution_contract_hash?: string;
+  workspace_digest?: string;
   outcome?: 'done' | 'failed' | 'cancelled';
   artifact?: Omit<LoopArtifact, 'artifact_id' | 'produced_at' | 'produced_by' | 'evidence'>;
   failure_reason?: string;
@@ -710,6 +729,126 @@ export interface CompleteTurnInput {
 
 interface CompleteTurnCommitInput extends CompleteTurnInput {
   evidence_context?: EvidenceCommitContext;
+}
+
+interface CompleteTurnAttemptFence {
+  assignment_id: string;
+  turn_id: string;
+  run_id: string;
+  nonce: string;
+  attempt_epoch: number;
+  execution_contract_hash: string;
+  workspace_digest: string;
+}
+
+const COMPLETE_TURN_FENCE_FIELDS = [
+  'assignment_id',
+  'turn_id',
+  'run_id',
+  'nonce',
+  'attempt_epoch',
+  'execution_contract_hash',
+  'workspace_digest',
+] as const;
+
+function readCompleteTurnFence(
+  source: CompleteTurnInput | EvidenceCommitContext,
+): { supplied: number; fence?: CompleteTurnAttemptFence } {
+  const values = COMPLETE_TURN_FENCE_FIELDS.map((field) => source[field]);
+  const supplied = values.filter((value) => value !== undefined).length;
+  if (supplied !== COMPLETE_TURN_FENCE_FIELDS.length) return { supplied };
+  return {
+    supplied,
+    fence: {
+      assignment_id: source.assignment_id!,
+      turn_id: source.turn_id!,
+      run_id: source.run_id!,
+      nonce: source.nonce!,
+      attempt_epoch: source.attempt_epoch!,
+      execution_contract_hash: source.execution_contract_hash!,
+      workspace_digest: source.workspace_digest!,
+    },
+  };
+}
+
+function reservationForSlot(
+  slot: LoopSlot,
+  cwd?: string,
+): TurnReservation | undefined {
+  if (slot.assignment_id) {
+    const byAssignment = findReservationByAssignmentId(slot.assignment_id, cwd);
+    if (byAssignment) return byAssignment;
+  }
+  return slot.current_turn_id ? getReservation(slot.current_turn_id, cwd) : undefined;
+}
+
+/**
+ * Resolve and validate completion authority before any mutation is materialized.
+ * Legacy turns deliberately retain the old claim/agent authorization path. A
+ * v2 generation, however, is fail-closed and accepts only its latest full fence.
+ */
+function authorizeCompleteTurnAttempt(
+  input: CompleteTurnCommitInput,
+  slot: LoopSlot,
+  cwd?: string,
+): EvidenceCommitContext | undefined {
+  const direct = readCompleteTurnFence(input);
+  if (direct.supplied > 0 && !direct.fence) {
+    throw new Error('attempt_fence_incomplete: complete_turn requires the full generation fence');
+  }
+
+  const reservation = reservationForSlot(slot, cwd);
+  const turnId = reservation?.turn_id ?? slot.current_turn_id ?? direct.fence?.turn_id;
+  const authorityRoot = reservation?.store_root ?? cwd ?? process.cwd();
+  const chain = turnId ? resolveTurnGenerationChain(authorityRoot, turnId) : undefined;
+
+  // Explicit compatibility seam: no immutable v2 generation means the legacy
+  // claim/agent slot authorization remains authoritative.
+  if (!chain) return undefined;
+
+  if (!reservation) {
+    throw new Error('attempt_fence_authority_missing: v2 generation has no committed reservation');
+  }
+
+  const internal = input.evidence_context
+    ? readCompleteTurnFence(input.evidence_context)
+    : { supplied: 0 };
+  if (internal.supplied > 0 && !internal.fence) {
+    throw new Error('attempt_fence_incomplete: trusted completion context lacks the full generation fence');
+  }
+  const submitted = direct.fence ?? internal.fence;
+  if (!submitted) {
+    throw new Error('attempt_fence_required: AttemptAuthority v2 complete_turn requires a full generation fence');
+  }
+  if (!evidenceMatchesAttempt(reservation, {
+    assignment_id: submitted.assignment_id,
+    turn_id: submitted.turn_id,
+    run_id: submitted.run_id,
+    nonce: submitted.nonce,
+    attempt_epoch: submitted.attempt_epoch,
+    contract_hash: submitted.execution_contract_hash,
+    workspace_digest: submitted.workspace_digest,
+  })) {
+    throw new Error('attempt_fence_stale: complete_turn fence does not match the current generation');
+  }
+
+  const generation: AttemptGeneration = chain.latest_generation;
+  return {
+    channel: input.evidence_context?.channel ?? 'complete_turn',
+    producer_kind: 'slot',
+    producer_id: input.evidence_context?.producer_id ?? slot.slot_id,
+    agent_id: input.evidence_context?.agent_id ?? slot.agent_id,
+    slot_id: slot.slot_id,
+    slot_role: slot.role,
+    turn_id: generation.turn_id,
+    assignment_id: generation.assignment_id,
+    claim_id: reservation.claim_id ?? slot.claim_id,
+    run_id: generation.run_id,
+    nonce: generation.launch_nonce,
+    attempt_epoch: generation.attempt_epoch,
+    execution_contract_hash: generation.contract_hash,
+    workspace_digest: generation.workspace_digest,
+  };
 }
 
 function completeTurnCommit(input: CompleteTurnCommitInput, cwd?: string): LoopThread {
@@ -736,6 +875,10 @@ function completeTurnCommit(input: CompleteTurnCommitInput, cwd?: string): LoopT
     slotOwnerAuthorized = ownerMatches;
   }
 
+  // Must precede timestamps, mutation ids, artifact sealing, or any durable
+  // commit: a stale worker is observationally equivalent to a rejected read.
+  const authorizedAttemptEvidence = authorizeCompleteTurnAttempt(input, slot, cwd);
+
   const now = nowISO();
   const mutation_id = generateMutationId();
   const version = current.version + 1;
@@ -745,7 +888,7 @@ function completeTurnCommit(input: CompleteTurnCommitInput, cwd?: string): LoopT
   let artifactId: string | undefined;
   let committedArtifact: LoopArtifact | undefined;
   if (input.artifact) {
-    const evidenceContext: EvidenceCommitContext = input.evidence_context ?? (slotOwnerAuthorized
+    const evidenceContext: EvidenceCommitContext = authorizedAttemptEvidence ?? input.evidence_context ?? (slotOwnerAuthorized
       ? {
           channel: 'complete_turn',
           producer_kind: 'slot',

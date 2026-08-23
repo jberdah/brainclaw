@@ -50,9 +50,11 @@ explicit early exit.
   in multi-agent mode, and dispatches the first critic with a brief
   assembled by [`buildIdeationBrief`](../../src/core/loops/brief-assembly.ts).
 - **Single-agent mode** — omit `targetAgents`. The champion drives each
-  turn manually via `bclaw_loop(intent='turn'|'advance')`. Useful when you
-  want the loop's structure (memory filter, gate, iteration accounting)
-  but not multi-slot orchestration.
+  turn via `bclaw_loop(intent='turn'|'advance')`. A plain `turn` only records
+  the assignment; on a worker phase, a trusted caller can set
+  `dispatch=true` to launch through AttemptAuthority. Useful when you want the
+  loop's structure (memory filter, gate, iteration accounting) without the
+  coordinator shortcut.
 - **Direct open.** `bclaw_loop(intent='open', kind='ideation', allow_orphan=true)`.
 
 ## Advance gates

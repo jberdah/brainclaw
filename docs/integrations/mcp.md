@@ -399,7 +399,8 @@ bclaw_context({ kind: 'board_summary' })
 // Review dispatch with structured loop
 bclaw_dispatch({ intent: 'review', openLoop: true, reviewMode: 'symmetric' })
 
-// Open a memory-confrontation ideation loop (single-agent: champion drives manually)
+// Open a single-agent ideation loop. Proposal is manual; critique, revision and
+// synthesis are worker phases available through trusted turn(dispatch:true).
 bclaw_coordinate({ intent: 'ideate', task: 'Should we extract the dispatcher into a separate package?' })
 
 // Multi-agent ideation: critic gets a context-filtered, BM25-ranked brief auto-dispatched
@@ -410,7 +411,8 @@ bclaw_coordinate({
 })
 
 // Open a direct implementation loop. The caller owns subsequent bind/turn
-// actions, which is why allow_orphan is explicit.
+// actions, which is why allow_orphan is explicit. Bind is engine-only; after
+// it advances to execute, turn(dispatch:true) is the worker launch path.
 bclaw_loop({
   intent: 'open',
   kind: 'implementation',
@@ -419,6 +421,37 @@ bclaw_loop({
   linked: { plan_ids: ['pln_abc'], sequence_ids: ['seq_abc'] },
   verify: { command: ['npm', 'test'] },
 })
+
+bclaw_loop({ intent: 'bind', loop_id: 'lop_abc' })
+bclaw_loop({
+  intent: 'turn', loop_id: 'lop_abc', slot_id: 'lsl_worker',
+  dispatch: true, target_agents: ['codex', 'claude-code'],
+})
+
+// Direct research/debug loops use the same facade. A plain turn records state;
+// trusted dispatch:true actually prepares, fences and launches a worker.
+bclaw_loop({
+  intent: 'open',
+  kind: 'research',
+  title: 'Determine the safe migration boundary',
+  goal: 'Produce a sourced synthesis',
+  allow_orphan: true,
+})
+bclaw_loop({
+  intent: 'turn',
+  loop_id: 'lop_research',
+  slot_id: 'lsl_investigator',
+  dispatch: true,
+  target_agents: ['codex', 'claude-code'], // only used when the slot is unbound
+})
+
+bclaw_loop({
+  intent: 'open',
+  kind: 'debug',
+  title: 'Reproduce and fix the Windows dispatch failure',
+  allow_orphan: true,
+})
+bclaw_loop({ intent: 'turn', loop_id: 'lop_debug', slot_id: 'lsl_reproducer', dispatch: true })
 
 // Fence a stale physical generation without changing the logical turn or Assignment.
 // This arms the successor; dispatch the same turn afterwards to contend on launch.

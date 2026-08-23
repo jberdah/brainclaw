@@ -333,6 +333,84 @@ export interface AcceptedExecutionContractRef {
   capability_snapshot_hash: string;
 }
 
+/**
+ * Pre-crossing acceptance emitted by the frozen harness adapter. The child
+ * process still confirms the effective environment in its bootstrap ACK after
+ * spawn; this attestation proves, before authority crosses, that the selected
+ * adapter accepted the exact immutable contract it is about to deliver.
+ */
+export function attestHarnessContractAcceptance(
+  expectedRef: ExecutionContractRef,
+  snapshot: CapabilitySnapshot,
+  binding: HarnessCapabilityBinding,
+): AcceptedExecutionContractRef {
+  const parsedSnapshot = CapabilitySnapshotSchema.parse(snapshot);
+  const parsedBinding = HarnessCapabilityBindingSchema.parse(binding);
+  if (!parsedSnapshot.accepted) {
+    throw new Error('harness cannot accept a rejected capability snapshot');
+  }
+  const frozen = parsedSnapshot.resolved.harness;
+  if (!frozen) throw new Error('capability snapshot has no frozen harness binding');
+  if (
+    frozen.adapter_id !== parsedBinding.adapter_id
+    || frozen.adapter_version !== parsedBinding.adapter_version
+    || frozen.requested_model !== parsedBinding.requested_model
+    || frozen.resolved_model !== parsedBinding.resolved_model
+  ) {
+    throw new Error(
+      `harness acceptance mismatch: frozen ${frozen.adapter_id}@${frozen.adapter_version}, `
+      + `selected ${parsedBinding.adapter_id}@${parsedBinding.adapter_version}`,
+    );
+  }
+  return {
+    contract_hash: expectedRef.hash,
+    capability_snapshot_hash: expectedRef.snapshot_hash,
+  };
+}
+
+export interface ExecutionCandidate {
+  agent: string;
+  agent_id?: string;
+  /** Higher values win; ties are resolved by normalized identity. */
+  preference?: number;
+}
+
+export interface ExecutionCandidateEvaluation extends ExecutionCandidate {
+  snapshot: CapabilitySnapshot;
+}
+
+export type ExecutionCandidateResolution =
+  | { kind: 'selected'; selected: ExecutionCandidateEvaluation; evaluated: ExecutionCandidateEvaluation[] }
+  | { kind: 'rejected'; evaluated: ExecutionCandidateEvaluation[] };
+
+/**
+ * Deterministic capability selection/reselection. Input order is deliberately
+ * irrelevant so replaying the same candidate set produces the same worker.
+ * Callers can exclude a failed pre-cross candidate and run the resolver again.
+ */
+export function resolveExecutionCandidate(
+  candidates: ExecutionCandidate[],
+  requirementInput: CapabilityRequirement,
+  options: { exclude?: Array<{ agent: string; agent_id?: string }> } = {},
+): ExecutionCandidateResolution {
+  const requirement = CapabilityRequirementSchema.parse(requirementInput);
+  const excluded = new Set((options.exclude ?? []).map(({ agent, agent_id }) =>
+    `${agent.normalize('NFC')}\0${(agent_id ?? '').normalize('NFC')}`));
+  const ordered = candidates
+    .filter(({ agent, agent_id }) => !excluded.has(`${agent.normalize('NFC')}\0${(agent_id ?? '').normalize('NFC')}`))
+    .map((candidate) => ({ ...candidate, agent: candidate.agent.normalize('NFC'), agent_id: candidate.agent_id?.normalize('NFC') }))
+    .sort((left, right) =>
+      (right.preference ?? 0) - (left.preference ?? 0)
+      || left.agent.localeCompare(right.agent, 'en')
+      || (left.agent_id ?? '').localeCompare(right.agent_id ?? '', 'en'));
+  const evaluated = ordered.map((candidate) => ({
+    ...candidate,
+    snapshot: resolveCapabilitySnapshot(candidate.agent, requirement, candidate.agent_id),
+  }));
+  const selected = evaluated.find((candidate) => candidate.snapshot.accepted);
+  return selected ? { kind: 'selected', selected, evaluated } : { kind: 'rejected', evaluated };
+}
+
 export type ContractAcceptanceVerdict =
   | { kind: 'accepted' }
   | { kind: 'abort_and_reselect'; expected: AcceptedExecutionContractRef; accepted: AcceptedExecutionContractRef }

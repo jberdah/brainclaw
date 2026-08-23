@@ -4,6 +4,7 @@ export * from './attempt-rollout.js';
 export * from './attempt-takeover.js';
 export {
   GATE_POLICY_VERSION,
+  artifactEvidenceProvenance,
   artifactEvidenceDigest,
   evidenceDigest,
   evidencePolicyForNewLoop,

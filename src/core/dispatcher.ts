@@ -185,9 +185,8 @@ function buildEnvPrefix(claimId: string): string {
 /**
  * Analyze a sequence and categorize each item as ready, active, blocked, or done.
  *
- * `sequenceId` (pln#632 impl-loop bind) targets a SPECIFIC sequence by id instead of
- * the project's active one — so an implementation loop can dispatch its own linked
- * sequence without hijacking the global active-sequence pointer. Omitted → the active
+ * `sequenceId` targets a SPECIFIC sequence by id instead of the project's
+ * active one, without hijacking the global active-sequence pointer. Omitted → the active
  * sequence (byte-identical to the historical behaviour; the resolver is non-throwing,
  * so an unknown id yields `null` exactly like "no active sequence").
  */
@@ -1137,10 +1136,10 @@ export interface DispatchOptions {
   /** Only dispatch items in specific lanes */
   lanes?: string[];
   /**
-   * pln#632 impl-loop bind — dispatch a SPECIFIC sequence by id instead of the
-   * project's active one. Lets an implementation loop drive its own linked
-   * sequence without mutating the global active-sequence pointer. Omitted →
-   * the active sequence (unchanged behaviour).
+   * Dispatch a SPECIFIC sequence by id instead of the project's active one,
+   * without mutating the global active-sequence pointer. This remains a
+   * sequence-dispatch primitive; Loop Engine workers use turn(dispatch=true).
+   * Omitted → the active sequence (unchanged behaviour).
    */
   sequenceId?: string;
   /** Max assignments to make in one dispatch (default: all ready) */

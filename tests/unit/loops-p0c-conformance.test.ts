@@ -40,6 +40,8 @@ const workerPhase: Record<LoopKind, string> = {
 
 function setupAttempt(cwd: string, kind: LoopKind, selectedPhase = workerPhase[kind], harnessBinding?: HarnessBinding) {
   const phase = selectedPhase;
+  const ideationPhases = ['critique', 'revision', 'synthesis'];
+  const ideationStart = ideationPhases.indexOf(phase);
   const suffix = `${kind}${phase}`.replace(/_/g, '');
   const slotId = `lsl_${suffix}`;
   const claimId = `clm_${suffix}`;
@@ -47,8 +49,11 @@ function setupAttempt(cwd: string, kind: LoopKind, selectedPhase = workerPhase[k
     kind,
     title: `${kind} conformance`,
     created_by: 'coord',
-    phases: kind === 'ideation'
-      ? [{ name: 'critique' }, { name: 'revision' }, { name: 'synthesis' }]
+    // The requested phase must be current. Keep its remaining graph so tests
+    // that reconcile a critique can still advance to revision, while direct
+    // revision/synthesis reducer fixtures do not start stale in critique.
+    phases: kind === 'ideation' && ideationStart >= 0
+      ? ideationPhases.slice(ideationStart).map((name) => ({ name }))
       : [{ name: phase }],
     stop_condition: { kind: 'max_iterations', n: 9 },
     slots: [{ slot_id: slotId, role: 'worker', agent: 'codex' }],
@@ -485,6 +490,8 @@ describe('P0C — exhaustive phase-aware reducers', () => {
     { kind: 'review', phase: 'author_response', expected: 'author_response', lane: { artifact_type: 'author_response', body: 'fixed and tested' } },
     { kind: 'review', phase: 'followup_review', expected: 'verdict', lane: { review_verdict: 'approve', review_summary: 'green' } },
     { kind: 'ideation', phase: 'critique', expected: 'critique', lane: { artifact_type: 'critique', body: 'counterexample' }, critiques: [{ body: 'counterexample' }] },
+    { kind: 'ideation', phase: 'revision', expected: 'revision', lane: { artifact_type: 'revision', body: 'revised proposal' } },
+    { kind: 'ideation', phase: 'synthesis', expected: 'plan_draft', lane: { artifact_type: 'plan_draft', body: 'implementation plan', artifacts: ['art_critique1'] } },
     { kind: 'implementation', phase: 'execute', expected: 'execute_report', lane: { artifact_type: 'execute_report', body: 'implementation complete' } },
     { kind: 'research', phase: 'investigate', expected: 'finding', lane: { artifact_type: 'finding', body: 'source-backed finding' } },
     { kind: 'research', phase: 'synthesize', expected: 'synthesis', lane: { artifact_type: 'synthesis', body: 'answer synthesis' } },

@@ -8,6 +8,7 @@ import {
   GATE_POLICIES,
   add_artifact,
   advance,
+  artifactEvidenceProvenance,
   complete_turn,
   evidenceDigest,
   evaluateCommandGreen,
@@ -15,6 +16,7 @@ import {
   evaluateStopCondition,
   openLoop,
   listLoopEvents,
+  LoopArtifactSchema,
   validateArtifactEvidence,
   type LoopArtifact,
   type AddArtifactInput,
@@ -43,6 +45,34 @@ function open(kind: LoopKind, cwd: string, slots: Array<{ role: string; agent_id
 }
 
 describe('EvidenceEnvelope v1 and declarative GatePolicy', () => {
+  it('exposes provenance explicitly while preserving old sealed and unsealed artifacts', () => {
+    const cwd = ws();
+    const loop = open('research', cwd);
+    const historical = LoopArtifactSchema.parse({
+      artifact_id: 'art_historical', phase: 'investigate', type: 'finding', body: 'old fact',
+      produced_at: loop.created_at,
+    });
+    assert.equal(historical.provenance, undefined);
+    assert.equal(artifactEvidenceProvenance(historical), 'legacy');
+
+    const sealed = sealArtifactEvidence(loop, {
+      ...historical, artifact_id: 'art_new', produced_by: 'agt_researcher',
+    }, {
+      channel: 'complete_turn', producer_kind: 'slot', producer_id: 'agt_researcher',
+      slot_id: 'lsl_researcher', slot_role: 'researcher',
+    });
+    assert.equal(sealed.provenance, 'attested');
+    assert.equal(artifactEvidenceProvenance(sealed), 'attested');
+
+    const { provenance: _newMarker, ...oldEnvelopeShape } = sealed;
+    void _newMarker;
+    const historicalSealed = LoopArtifactSchema.parse(oldEnvelopeShape);
+    assert.equal(historicalSealed.provenance, undefined);
+    assert.equal(artifactEvidenceProvenance(historicalSealed), 'attested');
+    assert.equal(validateArtifactEvidence(loop, historicalSealed).valid, true,
+      'adding provenance must not alter the historical envelope digest');
+  });
+
   it('declares one policy for every shipped LoopKind', () => {
     assert.deepEqual(Object.keys(GATE_POLICIES).sort(), ['debug', 'ideation', 'implementation', 'research', 'review']);
     for (const policy of Object.values(GATE_POLICIES)) assert.equal(policy.version, 'gate-policy-v1');
@@ -387,10 +417,12 @@ describe('EvidenceEnvelope v1 and declarative GatePolicy', () => {
     });
     assert.equal(JSON.stringify(complete.evidence).includes('nonce_1'), false, 'the bearer launch token is never persisted');
     assert.equal(complete.evidence?.subject.nonce_digest, evidenceDigest({ launch_nonce: 'nonce_1' }));
-    assert.equal(evaluateGateCondition(
+    const noAuthorityDecision = evaluateGateCondition(
       { ...loop, artifacts: [complete] },
       { kind: 'artifact_produced', phase: loop.current_phase, type: 'handoff' },
-    ).passed, true);
+    );
+    assert.equal(noAuthorityDecision.passed, false);
+    assert.match(noAuthorityDecision.rejected[0]?.reason ?? '', /reconciled_authority_missing/);
 
     const forgedUnsigned = {
       ...complete.evidence!,

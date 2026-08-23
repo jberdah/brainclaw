@@ -8,6 +8,8 @@ import {
   executionContractRef,
   assertExecutionContractIntegrity,
   capabilitySnapshotHash,
+  attestHarnessContractAcceptance,
+  resolveExecutionCandidate,
   resolveCapabilitySnapshot,
   validateWorkerContractAcceptance,
   type ExecutionContract,
@@ -58,6 +60,18 @@ describe('ExecutionContract v1', () => {
       snapshot_hash: capabilitySnapshotHash(snapshot),
       turn_id: 'ltr_1',
     });
+  });
+
+  it('is stable across insertion order and absent optional fields', () => {
+    const value = contract();
+    // Build a genuinely reordered deep object without depending on object literal order.
+    const reverseDeep = (input: unknown): unknown => Array.isArray(input)
+      ? input.map(reverseDeep)
+      : input && typeof input === 'object'
+        ? Object.fromEntries(Object.entries(input as Record<string, unknown>).reverse().map(([key, item]) => [key, reverseDeep(item)]))
+        : input;
+    const withUndefined = { ...reverseDeep(value) as ExecutionContract, unused_optional: undefined } as ExecutionContract;
+    assert.equal(executionContractHash(value), executionContractHash(withUndefined));
   });
 
   it('fails closed when the reader or protocol cannot interpret the contract', () => {
@@ -132,4 +146,47 @@ describe('ExecutionContract v1', () => {
       respawn: false,
     });
   });
+
+  it('attests the exact frozen harness contract before crossing', () => {
+    const value = contract();
+    const binding = {
+      adapter_id: 'prompt-only', adapter_version: '1', model_resolution: 'defaulted' as const,
+    };
+    const snapshot = resolveCapabilitySnapshot('codex', value.capability_requirement, undefined, binding);
+    const ref = executionContractRef(value, snapshot);
+    assert.deepEqual(attestHarnessContractAcceptance(ref, snapshot, binding), {
+      contract_hash: ref.hash,
+      capability_snapshot_hash: ref.snapshot_hash,
+    });
+    assert.throws(() => attestHarnessContractAcceptance(ref, snapshot, {
+      ...binding, adapter_version: '2',
+    }), /harness acceptance mismatch/);
+  });
+
+  it('selects and reselects deterministically across multiple agents', () => {
+    const requirement = valueWithReviewRequirement();
+    const candidates = [
+      { agent: 'not-a-profile', preference: 100 },
+      { agent: 'codex', agent_id: 'agt_z', preference: 10 },
+      { agent: 'claude-code', agent_id: 'agt_a', preference: 10 },
+    ];
+    const first = resolveExecutionCandidate(candidates, requirement);
+    const replay = resolveExecutionCandidate([...candidates].reverse(), requirement);
+    assert.equal(first.kind, 'selected');
+    assert.equal(replay.kind, 'selected');
+    if (first.kind !== 'selected' || replay.kind !== 'selected') return;
+    assert.equal(first.selected.agent, 'claude-code');
+    assert.equal(replay.selected.agent, first.selected.agent);
+    const second = resolveExecutionCandidate(candidates, requirement, {
+      exclude: [{ agent: first.selected.agent, agent_id: first.selected.agent_id }],
+    });
+    assert.equal(second.kind, 'selected');
+    if (second.kind === 'selected') assert.equal(second.selected.agent, 'codex');
+  });
 });
+
+function valueWithReviewRequirement(): ExecutionContract['capability_requirement'] {
+  return {
+    roles: ['review'], required_surfaces: ['cli_spawn'], execution_surfaces: [], required_tools: [],
+  };
+}

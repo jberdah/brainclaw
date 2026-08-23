@@ -18,9 +18,10 @@ import {
  * and (c) emits a `completed` / `failed` sentinel MECHANICALLY from the agent's
  * exit code so a dead wrapper pid is never misread as a silent failure.
  *
- * The agent command runs inside a group so it inherits the parent's stdin
- * (prompt delivery via the pipe is preserved); only stdout/stderr are
- * redirected.
+ * The agent command runs inside a group. POSIX workers can inherit the parent
+ * stdin pipe. Windows ack-wrapped workers instead redirect stdin from a
+ * per-run file: cmd.exe does not reliably propagate EOF from its own stdin to
+ * a native grandchild (notably `codex.exe`), which can otherwise deadlock.
  */
 export interface AckWrapPaths {
   ackPath: string;
@@ -28,6 +29,8 @@ export interface AckWrapPaths {
   failedPath: string;
   stdoutLog: string;
   stderrLog: string;
+  /** Optional prompt file redirected to worker stdin and removed by the wrapper. */
+  stdinFilePath?: string;
   /** Child-process bootstrap that attests the effective environment before exec. */
   contractBootstrapPath?: string;
   /** Workspace in which the worker must actually execute. */
@@ -161,10 +164,17 @@ export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, is
     const expectedWorkspaceB64 = Buffer.from(paths.expectedWorkspacePath, 'utf8').toString('base64url');
     return `"${process.execPath}" "${paths.contractBootstrapPath}" "${paths.ackPath}" "${turnEcho.turn_id}" "${turnEcho.run_id}" "${turnEcho.nonce}" "${turnEcho.contract_hash}" "${turnEcho.capability_snapshot_hash}" "${turnEcho.attempt_epoch ?? ''}" "${turnEcho.workspace_digest ?? ''}" "${expectedWorkspaceB64}"`;
   })();
-  const redirected = `${bashCommand} > "${paths.stdoutLog}" 2> "${paths.stderrLog}"`;
+  const stdinRedirect = paths.stdinFilePath ? ` < "${paths.stdinFilePath}"` : '';
+  const redirected = `${bashCommand}${stdinRedirect} > "${paths.stdoutLog}" 2> "${paths.stderrLog}"`;
+  const cleanup = paths.stdinFilePath
+    ? isWin32
+      ? ` & del /q "${paths.stdinFilePath}" > nul 2>&1`
+      : `; rm -f -- "${paths.stdinFilePath}"`
+    : '';
   return (
     `${ack} && ` +
-    `( ${redirected} && ${marker(paths.completedPath, 'completed')} || ${marker(paths.failedPath, 'failed')} )`
+    `( ${redirected} && ${marker(paths.completedPath, 'completed')} || ${marker(paths.failedPath, 'failed')} )` +
+    cleanup
   );
 }
 
@@ -333,12 +343,19 @@ export class CliExecutionAdapter implements ExecutionAdapter {
       const ackPath = getRuntimeSignalPath(signalRoot, options.assignmentId, 'ack', runtimeRunId);
       const contractBootstrapPath = `${ackPath}.bootstrap.cjs`;
       writeContractBootstrapScript(contractBootstrapPath);
+      const stdinFilePath = isWin32 && invoke.promptDelivery === 'stdin_pipe' && invoke.promptText
+        ? `${ackPath}.stdin`
+        : undefined;
+      if (stdinFilePath && invoke.promptText) {
+        fs.writeFileSync(stdinFilePath, invoke.promptText, { encoding: 'utf8', mode: 0o600 });
+      }
       const wrapped = buildAckWrapCommand(invoke.bashCommand, {
         ackPath,
         completedPath: getRuntimeSignalPath(signalRoot, options.assignmentId, 'completed', runtimeRunId),
         failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId, 'failed', runtimeRunId),
         stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId, 'stdout', runtimeRunId),
         stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId, 'stderr', runtimeRunId),
+        stdinFilePath,
         contractBootstrapPath,
         expectedWorkspacePath: options.worktreePath,
       }, isWin32, options.turnEcho);
@@ -414,8 +431,9 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     // process just ignores stdout/stderr here. stdin stays a pipe when the
     // prompt is delivered that way (the grouped agent command inherits it).
     const useAckWrap = !!(options.assignmentId && (options.ackRoot ?? options.worktreePath));
+    const useWindowsStdinFile = isWin32 && useAckWrap && Boolean(needsStdin);
 
-    const stdinTarget: 'pipe' | 'ignore' = needsStdin ? 'pipe' : 'ignore';
+    const stdinTarget: 'pipe' | 'ignore' = needsStdin && !useWindowsStdinFile ? 'pipe' : 'ignore';
     const stdio: ('pipe' | 'ignore')[] = [stdinTarget, 'ignore', 'ignore'];
 
     // pln#476 + pln#520 step 4: wrap the spawn so the worker shell touches the
@@ -434,12 +452,17 @@ export class CliExecutionAdapter implements ExecutionAdapter {
       if (options.turnEcho?.contract_hash && options.turnEcho.capability_snapshot_hash) {
         writeContractBootstrapScript(contractBootstrapPath);
       }
+      const stdinFilePath = useWindowsStdinFile ? `${ackPath}.stdin` : undefined;
+      if (stdinFilePath) {
+        fs.writeFileSync(stdinFilePath, invoke.promptText!, { encoding: 'utf8', mode: 0o600 });
+      }
       const wrappedCmd = buildAckWrapCommand(invoke.bashCommand, {
         ackPath,
         completedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'completed', runtimeRunId),
         failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'failed', runtimeRunId),
         stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stdout', runtimeRunId),
         stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stderr', runtimeRunId),
+        stdinFilePath,
         contractBootstrapPath,
         expectedWorkspacePath: options.worktreePath,
       }, isWin32, options.turnEcho);
@@ -470,7 +493,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     // the isBinaryOnPath pre-check above catches that case instead.
     child.on('error', () => { /* intentionally swallowed */ });
 
-    if (needsStdin && child.stdin) {
+    if (needsStdin && !useWindowsStdinFile && child.stdin) {
       child.stdin.write(invoke.promptText!);
       child.stdin.end();
     }

@@ -20,7 +20,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { getAgentCapabilityProfile } from '../../src/core/agent-capability.js';
+import { renderBrainclawSection } from '../../src/core/instruction-templates.js';
+import { BCLAW_LOOP_INTENTS } from '../../src/core/loops/facade-schema.js';
 import { LOOP_KINDS } from '../../src/core/loops/types.js';
+import type { State } from '../../src/core/schema.js';
 
 function readProjectFile(relativePath: string): string {
   return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
@@ -94,6 +98,77 @@ describe('Loop Engine documentation surface', () => {
     assert.match(authority, /\| `launch_nonce`/, 'attempt-authority must ship an identity matrix row for launch nonce');
     assert.match(authority, /\| `contract_hash`/, 'attempt-authority must ship an identity matrix row for contract hash');
     assert.match(authority, /\| `workspace_digest`/, 'attempt-authority must ship an identity matrix row for workspace digest');
+    assert.match(
+      guide,
+      /\| `ideation` \| `critique`, `revision`, `synthesis` \| — \| `proposal` \| — \|/,
+      'ideation execution policy must keep only proposal manual',
+    );
+  });
+
+  it('documents implementation bind as engine-only and the common turn driver as the launch path', () => {
+    const engine = readProjectFile('docs/concepts/loop-engine.md');
+    const implementation = readProjectFile('docs/loops/implementation.md');
+    const mcp = readProjectFile('docs/integrations/mcp.md');
+    for (const document of [engine, implementation, mcp]) {
+      assert.match(document, /bind[^\n]*(?:engine-only|never (?:launches|spawns|dispatches))/i);
+      assert.match(document, /turn\(dispatch[:=]true\)/i);
+    }
+    assert.doesNotMatch(engine, /bind[^\n]*dispatches the linked sequence/i);
+    assert.doesNotMatch(implementation, /bind[^\n]*dispatches the first turn/i);
+  });
+
+  it('preserves the full P0A contract while documenting the shipped P4 rollout', () => {
+    const authority = readProjectFile('docs/concepts/attempt-authority.md');
+
+    for (const heading of [
+      '## Surfaces and their roles',
+      '## Ordered dispatch',
+      '## Functional API',
+      '## Recovery',
+      '## Invariants (I1–I18)',
+    ]) {
+      assert.ok(authority.includes(heading), `attempt-authority must preserve P0A section ${heading}`);
+    }
+    for (const surface of ['TurnReservation', 'LoopEvent', 'RuntimeEvent', 'events.jsonl']) {
+      assert.match(authority, new RegExp(surface.replace('.', '\\.')), `attempt-authority must assign a role to ${surface}`);
+    }
+    for (let i = 1; i <= 18; i += 1) {
+      assert.match(authority, new RegExp(`\\*\\*I${i}\\b`), `attempt-authority must state invariant I${i}`);
+    }
+
+    assert.match(authority, /## Migration and rollout runbook/);
+    assert.match(authority, /store-snapshot\.mjs create/);
+    assert.match(authority, /store-snapshot\.mjs verify/);
+    assert.match(authority, /Canary Release B/i);
+    assert.match(authority, /Abort before cutover/i);
+    assert.match(authority, /Recovery after cutover/i);
+    assert.match(authority, /forbidden downgrade/i);
+    assert.match(authority, /Windows and POSIX/i);
+  });
+
+  it('keeps every attempt-authority fragment link resolvable', () => {
+    const authority = readProjectFile('docs/concepts/attempt-authority.md');
+    const anchors = new Set(
+      Array.from(authority.matchAll(/^## (.+)$/gm)).map((m) =>
+        m[1]!
+          .toLowerCase()
+          .replace(/[`*_~()[\]]/g, '')
+          .replace(/[^a-z0-9\s-]/g, '')
+          .trim()
+          .replace(/\s+/g, '-'),
+      ),
+    );
+    for (const file of [
+      'docs/concepts/loop-engine.md',
+      'docs/loops/review.md',
+      'docs/loops/implementation.md',
+      'docs/loops/research.md',
+    ]) {
+      const doc = readProjectFile(file);
+      for (const match of doc.matchAll(/attempt-authority\.md#([a-z0-9-]+)/g)) {
+        assert.ok(anchors.has(match[1]!), `${file} links to missing attempt-authority anchor #${match[1]}`);
+      }
+    }
   });
 
   it('ships one guide per shipped LoopKind with a comparable template', () => {
@@ -167,6 +242,68 @@ describe('Loop Engine documentation surface', () => {
         `docs/loops/${kind}.md must name at least one current API symbol (${currentApiSymbols.join(', ')})`,
       );
     }
+  });
+
+  it('keeps the documented MCP union aligned with every published loop intent', () => {
+    const guide = readProjectFile('docs/concepts/loop-engine.md');
+    const facadeSection = guide.split('## MCP facade: `bclaw_loop(intent)`', 2)[1]?.split('## Supported workflows', 2)[0];
+    assert.ok(facadeSection, 'Loop Engine guide must carry the MCP facade section');
+    for (const intent of BCLAW_LOOP_INTENTS) {
+      assert.match(facadeSection, new RegExp(`intent: '${intent}'`), `MCP facade docs must include current intent ${intent}`);
+    }
+    assert.match(facadeSection, /allow_orphan\?: boolean/);
+    for (const field of [
+      'assignment_id',
+      'turn_id',
+      'run_id',
+      'nonce',
+      'attempt_epoch',
+      'execution_contract_hash',
+      'workspace_digest',
+    ]) {
+      assert.match(facadeSection, new RegExp(`${field}\\?:`), `MCP facade docs must include v2 fence field ${field}`);
+    }
+    assert.match(facadeSection, /dispatch\?: boolean/);
+    assert.match(facadeSection, /auto_execute\?: boolean/);
+    assert.match(facadeSection, /model\?: string/);
+    assert.doesNotMatch(facadeSection, /linked_plan_id/);
+  });
+
+  it('keeps every generated agent template aligned with the five shipped protocols', () => {
+    const emptyState: State = {
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    };
+    for (const agent of ['codex', 'claude-code', 'gemini', 'github-copilot']) {
+      const profile = getAgentCapabilityProfile(agent);
+      assert.ok(profile, `missing capability profile for ${agent}`);
+      const surface = renderBrainclawSection({
+        profile,
+        state: emptyState,
+        projectName: 'docs-conformance',
+        brainclawVersion: 'test',
+        resolvedInstructions: [],
+      }).content;
+      for (const kind of LOOP_KINDS) {
+        assert.match(surface, new RegExp(`\\b${kind}\\b`, 'i'), `${agent} template must name shipped ${kind} loop`);
+      }
+      assert.doesNotMatch(surface, /Ideation\s*\/\s*Debug\s*\/\s*Research loops\s*—\s*\*planned\*/i, `${agent} template must not describe shipped loops as planned`);
+    }
+  });
+
+  it('documents the cross-platform harness matrix and explicit native E2E opt-ins', () => {
+    const guide = readProjectFile('docs/concepts/harness-adapters.md');
+    assert.match(guide, /## Platform and opt-in E2E matrix/);
+    assert.match(guide, /Linux/);
+    assert.match(guide, /Windows/);
+    assert.match(guide, /BRAINCLAW_CODEX_HARNESS_E2E/);
+    assert.match(guide, /BRAINCLAW_CLAUDE_HARNESS_E2E/);
+    assert.match(guide, /skipped by default/i);
   });
 
   it('keeps the README, product model, and MCP reference aligned with the public engine', () => {

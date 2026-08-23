@@ -1,5 +1,5 @@
 /**
- * pln#626 phase 4 — le drapeau `dispatch` du tour est SUPPRIMÉ, pas neutralisé.
+ * pln#626 phase 4 + P0C — `dispatch` ne peut exister que s'il spawne réellement.
  *
  * CE QUI ÉTAIT FAUX. `TurnInput.dispatch` était déclaré dans le type, transporté depuis
  * le handler MCP jusqu'à `turn()`, et protégé par une porte de confiance au barreau
@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const read = (rel: string): string => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf-8');
 
-describe('pln#626 phase 4 — le drapeau mort ne revient pas', () => {
+describe('pln#626 phase 4 — aucun faux dispatch ne revient', () => {
   it('TurnInput ne déclare plus `dispatch`', () => {
     const verbs = read('src/core/loops/verbs.ts');
     const start = verbs.indexOf('export interface TurnInput');
@@ -38,32 +38,34 @@ describe('pln#626 phase 4 — le drapeau mort ne revient pas', () => {
     );
   });
 
-  it('le handler ne transporte plus `req.dispatch` vers turn()', () => {
+  it('le handler branche dispatch sur le vrai driver, jamais sur le verbe pur', () => {
     const handlers = read('src/commands/loops-handlers.ts');
+    assert.ok(handlers.includes('if (req.dispatch)'), 'le handler doit lire le drapeau');
+    assert.ok(handlers.includes('dispatchLoopTurn({'), 'dispatch=true doit appeler le vrai driver');
     assert.ok(
       !handlers.includes('dispatch: req.dispatch'),
       'le drapeau est de nouveau transporté jusqu’à turn()',
     );
   });
 
-  it('la porte de confiance NO-OP sur turn a disparu', () => {
+  it('la porte trusted protège le vrai spawn turn', () => {
     const coord = read('src/commands/mcp-write-coordination.ts');
     assert.ok(
-      !coord.includes("args?.intent === 'turn' && args?.dispatch === true"),
-      'la porte de confiance sur un no-op est revenue',
+      coord.includes("args?.intent === 'turn' && args?.dispatch === true"),
+      'le vrai spawn turn doit être trust-gated',
     );
+    const gateIndex = coord.indexOf("args?.intent === 'turn' && args?.dispatch === true");
+    assert.ok(coord.slice(gateIndex, gateIndex + 500).includes("'trusted'"));
   });
 
-  it('MAIS la porte de `bind` SURVIT — elle garde un vrai spawn', () => {
-    // Le vrai accident aurait été de retirer les deux : `bind` dispatche la séquence
-    // liée de la boucle, donc il spawne réellement des workers.
+  it('bind est engine-only et ne partage plus la porte de spawn', () => {
     const coord = read('src/commands/mcp-write-coordination.ts');
     assert.ok(
-      coord.includes("args?.intent === 'bind'"),
-      'la porte de confiance de bind a été retirée avec celle du no-op — bind SPAWNE',
+      !coord.includes("args?.intent === 'bind' || args?.intent === 'takeover'"),
+      'bind a été réintroduit dans la porte trusted comme s’il spawnait',
     );
-    const gateIndex = coord.indexOf("args?.intent === 'bind'");
-    const following = coord.slice(gateIndex, gateIndex + 400);
-    assert.ok(following.includes("'trusted'"), 'bind n’est plus protégé au barreau trusted');
+    const bind = read('src/core/loops/impl-bind.ts');
+    assert.ok(!bind.includes('await dispatch('), 'bind contourne de nouveau le driver commun');
+    assert.ok(bind.includes('dispatchLoopTurn') || bind.includes('turn(dispatch=true)'));
   });
 });
