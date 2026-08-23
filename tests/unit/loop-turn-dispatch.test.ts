@@ -8,11 +8,16 @@ import path from 'node:path';
 
 import { loadAgentRun } from '../../src/core/agentruns.js';
 import { fingerprintPublicKeyPem, saveAgentIdentity } from '../../src/core/agent-registry.js';
-import { loadAssignment } from '../../src/core/assignments.js';
+import { convergeAssignmentToTerminal, loadAssignment } from '../../src/core/assignments.js';
 import { loadClaim } from '../../src/core/claims.js';
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { dispatchLoopTurn, type DispatchLoopTurnResult } from '../../src/core/loop-turn-dispatch.js';
-import { getReservation, listReservations } from '../../src/core/loops/attempt-reservation.js';
+import {
+  derivePhaseQualifiedTurnId,
+  deriveTurnId,
+  getReservation,
+  listReservations,
+} from '../../src/core/loops/attempt-reservation.js';
 import { takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
 import {
   activateAttemptAuthorityV2,
@@ -22,6 +27,7 @@ import {
 } from '../../src/core/loops/attempt-rollout.js';
 import { getLoop, openLoop } from '../../src/core/loops/store.js';
 import type { LoopKind } from '../../src/core/loops/types.js';
+import { advance, complete_turn } from '../../src/core/loops/verbs.js';
 
 function project(): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-loop-driver-'));
@@ -162,6 +168,83 @@ describe('generic Loop Engine worker dispatch', () => {
       assert.equal(replay.assignment_id, undefined, 'a replay never receives fresh spawn authority');
     });
   }
+
+  it('dispatches a fresh phase-qualified turn when one slot enters a later worker phase without an iteration bump', async () => {
+    const cwd = project();
+    roots.push(cwd);
+    const slotId = 'lsl_reviewfollowup';
+    const loop = openLoop({
+      kind: 'review', title: 'same reviewer across phases', created_by: 'agt_coord',
+      phases: [{ name: 'findings' }, { name: 'followup_review' }],
+      slots: [{ slot_id: slotId, role: 'reviewer', agent: 'codex' }],
+      stop_condition: { kind: 'max_iterations', n: 3 },
+    }, cwd);
+    const dispatch = (task: string) => handleBclawLoop({
+      cwd,
+      defaultActor: 'coord',
+      args: {
+        intent: 'turn', loop_id: loop.id, slot_id: slotId,
+        input: task, dispatch: true, auto_execute: false,
+        agent: 'coord', agentId: 'agt_coord',
+      },
+    });
+
+    const firstHandled = await dispatch('review initial findings');
+    assert.equal(firstHandled.response.status, 'ok');
+    const first = (firstHandled.response.result as { dispatch: DispatchLoopTurnResult }).dispatch;
+    assert.equal(first.error, undefined);
+    assert.equal(first.turn_id, deriveTurnId(loop.id, slotId, 0), 'an unoccupied cell keeps the legacy three-tuple identity');
+    assert.ok(first.assignment_id && first.run_id && first.claim_id && first.worktree_path);
+
+    assert.equal(
+      convergeAssignmentToTerminal(first.assignment_id!, 'completed', 'initial reviewer turn settled', cwd),
+      true,
+    );
+    complete_turn({
+      id: loop.id,
+      slot_id: slotId,
+      outcome: 'done',
+      artifact: { phase: 'findings', type: 'verdict', body: 'request_changes' },
+      actor: 'coord',
+    }, cwd);
+    const advanced = advance({
+      id: loop.id,
+      to_phase: 'followup_review',
+      force: true,
+      actor: 'coord',
+    }, cwd);
+    assert.equal(advanced.loop.iteration_count, 0, 'forward phase progress does not manufacture a new protocol iteration');
+    assert.equal(advanced.loop.slots.find((slot) => slot.slot_id === slotId)?.status, 'done');
+
+    const secondHandled = await dispatch('re-review the applied fixes');
+    assert.equal(secondHandled.response.status, 'ok', JSON.stringify(secondHandled.response));
+    const second = (secondHandled.response.result as { dispatch: DispatchLoopTurnResult }).dispatch;
+    assert.equal(second.error, undefined);
+    assert.equal(
+      second.turn_id,
+      derivePhaseQualifiedTurnId(loop.id, slotId, 'followup_review', 0),
+      'the occupied legacy cell forces the deterministic phase-qualified identity',
+    );
+    assert.notEqual(second.turn_id, first.turn_id);
+    assert.notEqual(second.assignment_id, first.assignment_id);
+    assert.notEqual(second.run_id, first.run_id);
+    assert.equal(second.claim_id, first.claim_id, 'the coordinator claim remains stable across review phases');
+    assert.equal(second.worktree_path, first.worktree_path, 'the stable claim retains its worktree across logical turns');
+    assert.equal(loadClaim(first.claim_id!, cwd).assignment_id, second.assignment_id, 'the claim pointer advances to the new terminal-successor assignment');
+    assert.equal(getReservation(first.turn_id!, cwd)?.phase, 'findings');
+    assert.equal(getReservation(second.turn_id!, cwd)?.phase, 'followup_review');
+    const reboundSlot = getLoop(loop.id, cwd)!.slots.find((slot) => slot.slot_id === slotId)!;
+    assert.equal(reboundSlot.current_turn_id, second.turn_id);
+    assert.equal(reboundSlot.assignment_id, second.assignment_id);
+    assert.ok(secondHandled.response.side_effects.some((effect) => effect.entity === 'assignment' && effect.id === second.assignment_id));
+    assert.ok(secondHandled.response.side_effects.some((effect) => effect.entity === 'agent_run' && effect.id === second.run_id));
+
+    const reservationsBeforeReplay = listReservations({}, cwd).length;
+    const replay = await dispatch('retry the same follow-up phase');
+    assert.equal(replay.response.status, 'error', 'same-phase replay is fenced instead of spawning again');
+    assert.equal(replay.response.side_effects.length, 0);
+    assert.equal(listReservations({}, cwd).length, reservationsBeforeReplay);
+  });
 
   it('selects a compatible worker deterministically for an unbound slot', async () => {
     const cwd = project();

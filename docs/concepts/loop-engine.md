@@ -72,6 +72,14 @@ all five kinds and adds no event journal.
 
 `prepareTurnExecution` applies the same projections-before-crossing path to
 every worker phase and refuses `engine` or `manual` phases before reservation.
+The first worker phase for a `(loop_id, slot_id, iteration)` keeps the legacy
+deterministic `turn_id`. If that same reusable slot enters another worker phase
+without an iteration bump, the resolver derives a versioned identity from
+`(loop_id, slot_id, phase, iteration)` instead. Replays of the same phase still
+adopt one cell, while compatible legacy reservations remain adoptable during
+crash recovery and upgrades. This rule is kind-neutral: it prevents one phase
+from inheriting another phase's already-consumed launch authority in review,
+ideation, research, debug, or any future multi-phase protocol.
 The first physical generation follows `reserve → commit → durable projections
 → launch(0)`. A fenced takeover keeps the same `turn_id` and `assignment_id`,
 but creates a new epoch, run, nonce, contract, and isolated workspace. Re-entry

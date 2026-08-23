@@ -99,7 +99,11 @@ the worktree bound to that claim. `bind` creates neither claim nor assignment.
 [Attempt authority](../concepts/attempt-authority.md#ordered-dispatch)
 mints a deterministic `turn_id` from `(loop_id, slot_id, iteration)` on
 every dispatch, so a concurrent re-dispatch hits `reservation_exists` and
-adopts the existing attempt.
+adopts the existing attempt. If a reusable slot has already spent that legacy
+identity in another worker phase of the same iteration, the common resolver
+uses `(loop_id, slot_id, phase, iteration)` for a versioned successor logical
+turn. This is a Loop Engine rule shared by every kind, not implementation-loop
+special handling.
 
 ## Recovery
 

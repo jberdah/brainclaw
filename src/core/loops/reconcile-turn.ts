@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getReservation, evidenceMatchesAttempt, currentNonce, deriveTurnId, launchGrant, type TurnReservation } from './attempt-reservation.js';
+import { getReservation, evidenceMatchesAttempt, currentNonce, launchGrant, resolveTurnId, type TurnReservation } from './attempt-reservation.js';
 import { getLoop } from './store.js';
 import { completeTurnWithEvidence, addArtifactWithEvidence, complete_turn, advance } from './verbs.js';
 import { reducerForKind, type ReducerInput } from './result-reducers.js';
@@ -561,7 +561,7 @@ function convergeLockedTurn(
       loop.protocol?.review_mode === 'symmetric';
     if (symmetricRC) {
       // EXACTLY-ONCE bump (the one non-negotiable safety guard): each bump changes
-      // deriveTurnId(loop, slot, iteration), so a DOUBLE bump would mint two turn_ids and
+      // resolveTurnId(loop, slot, phase, iteration), so a DOUBLE bump would mint two turn_ids and
       // the launch fence would spawn BOTH rounds. Bump only when this turn's round is still
       // current; a re-reconcile after the bump takes the else-branch (no re-bump, no re-emit).
       if (loop.iteration_count === reservation.iteration) {
@@ -591,7 +591,14 @@ function convergeLockedTurn(
           // (reserved_never_launched — crash between arm and consume + the expiry sweep) or an
           // absent reservation is a STRAND (dec#149 R1): re-emit to self-heal. The re-dispatch's
           // prepare re-arms a revoked grant at a higher epoch, so this round can actually relaunch.
-          const bumpedTurnId = deriveTurnId(loop.id, slot.slot_id, cur.iteration_count);
+          const currentSlot = cur.slots.find((candidate) => candidate.slot_id === slot.slot_id);
+          const bumpedTurnId = resolveTurnId({
+            loop_id: loop.id,
+            slot_id: slot.slot_id,
+            phase: cur.current_phase,
+            iteration: cur.iteration_count,
+            current_turn_id: currentSlot?.current_turn_id,
+          }, cwd);
           const bumpedGrant = launchGrant(bumpedTurnId, cwd);
           const bumpedLive =
             getReservation(bumpedTurnId, cwd) !== undefined &&

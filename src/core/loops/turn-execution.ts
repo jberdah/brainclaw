@@ -18,7 +18,7 @@ import {
 } from '../execution-contract.js';
 import { resolveHarnessBinding } from '../harness-adapters/index.js';
 import { bindTurnProjection } from './verbs.js';
-import { deriveChildIds, deriveTurnId, getReservation, launchGrant, type TurnReservation } from './attempt-reservation.js';
+import { deriveChildIds, getReservation, launchGrant, resolveTurnId, type TurnReservation } from './attempt-reservation.js';
 import {
   bootstrapAttemptAuthorityV2,
   crossActiveAttemptGenerationV2,
@@ -216,9 +216,10 @@ function defaultRequiredRole(kind: LoopKind, phase: string): 'execute' | 'review
 /**
  * Common worker-attempt path. It refuses engine/manual phases and never advances
  * a phase or evaluates a gate; those decisions stay in the Loop Engine.
- * Because the persisted turn id intentionally remains `(loop, slot, iteration)`
- * for compatibility, a driver must use distinct role slots (or a new iteration)
- * when two worker phases would otherwise reuse the same slot.
+ * The first phase in a `(loop, slot, iteration)` retains the historical identity.
+ * If the same slot executes another worker phase without an iteration bump, the
+ * resolver uses a phase-qualified identity while preserving compatible legacy
+ * reservations for crash and upgrade replay.
  */
 export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareTurnExecutionResult {
   const loop = getLoop(input.loop_id, input.cwd);
@@ -235,11 +236,17 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   }
 
   const iteration = loop.iteration_count;
-  const turnId = deriveTurnId(loop.id, input.slot_id, iteration);
-  const childIds = deriveChildIds(turnId);
-  const existingReservation = getReservation(turnId, input.cwd);
   const slot = loop.slots.find((candidate) => candidate.slot_id === input.slot_id);
   if (!slot) return preconditionDenied(`slot ${input.slot_id} not found in loop ${loop.id}`);
+  const turnId = resolveTurnId({
+    loop_id: loop.id,
+    slot_id: input.slot_id,
+    phase: input.phase,
+    iteration,
+    current_turn_id: slot.current_turn_id,
+  }, input.cwd);
+  const childIds = deriveChildIds(turnId);
+  const existingReservation = getReservation(turnId, input.cwd);
   if (slot.agent !== undefined && slot.agent !== input.agent) {
     return preconditionDenied(`slot ${input.slot_id} belongs to agent '${slot.agent}', not '${input.agent}'`);
   }

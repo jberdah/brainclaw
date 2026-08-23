@@ -27,6 +27,16 @@ One logical turn may now have several physical runs.
 | `contract_hash` | execution contract | recomputed for the generation's run and workspace |
 | `workspace_digest` | isolated workspace | binds the real workspace path to the turn and epoch |
 
+For backward compatibility, the first worker phase to occupy a slot in a
+protocol iteration uses the historical deterministic identity derived from
+`(loop_id, slot_id, iteration)`. When the same slot is reused by a different
+worker phase in that iteration, Brainclaw derives a versioned phase-qualified
+identity from `(loop_id, slot_id, phase, iteration)`. The resolver adopts an
+existing compatible legacy or phase-qualified reservation before minting
+anything, so same-phase retries remain exactly-once and in-flight upgrades keep
+their durable identity. A different logical phase is a different turn; a
+takeover remains a new physical generation of the same turn.
+
 Evidence for an AttemptAuthority v2 generation is accepted only when the full
 tuple matches:
 

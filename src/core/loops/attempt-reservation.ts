@@ -279,6 +279,80 @@ export function deriveTurnId(loopId: string, slotId: string, iteration: number):
   return `tat_${h}`;
 }
 
+/**
+ * Versioned identity used only when the legacy `(loop, slot, iteration)` cell
+ * is already owned by another phase. Keeping this a separate derivation makes
+ * existing turn ids and crash-replay fixtures stable while allowing one slot
+ * to execute several worker phases in the same protocol iteration.
+ */
+export function derivePhaseQualifiedTurnId(
+  loopId: string,
+  slotId: string,
+  phase: string,
+  iteration: number,
+): string {
+  const identity = JSON.stringify(['brainclaw-turn-identity-v2', loopId, slotId, phase, iteration]);
+  const h = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 16);
+  return `tat_${h}`;
+}
+
+export interface ResolveTurnIdInput {
+  loop_id: string;
+  slot_id: string;
+  phase: string;
+  iteration: number;
+  /** Persisted slot pointer, when projection already crossed or needs repair. */
+  current_turn_id?: string;
+}
+
+function reservationMatchesTurnIdentity(
+  reservation: TurnReservation | undefined,
+  input: ResolveTurnIdInput,
+): reservation is TurnReservation {
+  return reservation !== undefined
+    && reservation.loop_id === input.loop_id
+    && reservation.slot_id === input.slot_id
+    && reservation.phase === input.phase
+    && reservation.iteration === input.iteration;
+}
+
+/**
+ * Resolve the durable turn cell without breaking pre-phase-qualified stores.
+ *
+ * Resolution order is deliberately conservative:
+ *  1. adopt the slot's current compatible reservation (projection/crash replay),
+ *  2. preserve the compatible legacy three-tuple reservation,
+ *  3. adopt an existing compatible phase-qualified reservation,
+ *  4. use the legacy id while that cell is absent,
+ *  5. only then fall back to the phase-qualified id for a real phase collision.
+ *
+ * Compatibility intentionally covers identity fields only. Agent/claim/contract
+ * mismatches remain the responsibility of prepareAttempt's fail-closed checks;
+ * they must never cause this resolver to mint a parallel authority cell.
+ */
+export function resolveTurnId(input: ResolveTurnIdInput, cwd?: string): string {
+  const legacyTurnId = deriveTurnId(input.loop_id, input.slot_id, input.iteration);
+  const phaseTurnId = derivePhaseQualifiedTurnId(
+    input.loop_id,
+    input.slot_id,
+    input.phase,
+    input.iteration,
+  );
+
+  if (input.current_turn_id) {
+    const current = getReservation(input.current_turn_id, cwd);
+    if (reservationMatchesTurnIdentity(current, input)) return input.current_turn_id;
+  }
+
+  const legacy = getReservation(legacyTurnId, cwd);
+  if (reservationMatchesTurnIdentity(legacy, input)) return legacyTurnId;
+
+  const phaseQualified = getReservation(phaseTurnId, cwd);
+  if (reservationMatchesTurnIdentity(phaseQualified, input)) return phaseTurnId;
+
+  return legacy === undefined ? legacyTurnId : phaseTurnId;
+}
+
 /* ============================ persistence ================================= */
 
 function readReservation(turnId: string, cwd?: string): TurnReservation | undefined {
