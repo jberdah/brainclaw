@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { openLoop, advance, turn, complete_turn, getLoop, type LoopThread } from '../../src/core/loops/index.js';
+import { openLoop, advance, turn, getLoop, type LoopThread } from '../../src/core/loops/index.js';
+import { completeTurnWithEvidence } from '../../src/core/loops/verbs.js';
 import { closeReviewLoopFromLaneResult } from '../../src/core/review-loop-close.js';
 import type { Assignment, LaneResult } from '../../src/core/schema.js';
 
@@ -265,8 +266,23 @@ describe('closeReviewLoopFromLaneResult (pln#628 Focus 4B)', () => {
     const reviewer = getLoop(loop.id, cwd)!.slots.find((s) => s.role === 'reviewer')!;
     // Simulate the crash window: complete the reviewer turn with an accepted
     // verdict, but do NOT advance.
-    complete_turn(
-      { id: loop.id, slot_id: reviewer.slot_id, actor: 'coordinator', artifact: { phase: 'findings', type: 'verdict', body: 'accepted: prior pass' } },
+    completeTurnWithEvidence(
+      {
+        id: loop.id,
+        slot_id: reviewer.slot_id,
+        actor: 'coordinator',
+        evidence_context: {
+          channel: 'complete_turn',
+          producer_kind: 'slot',
+          producer_id: reviewer.slot_id,
+          slot_id: reviewer.slot_id,
+          slot_role: reviewer.role,
+          agent_id: reviewer.agent_id,
+          assignment_id: reviewer.assignment_id,
+          turn_id: reviewer.current_turn_id,
+        },
+        artifact: { phase: 'findings', type: 'verdict', body: 'accepted: prior pass' },
+      },
       cwd,
     );
     assert.equal(getLoop(loop.id, cwd)!.status, 'open', 'precondition: verdict recorded but loop not advanced/closed');

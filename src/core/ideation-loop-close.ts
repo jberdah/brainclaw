@@ -23,7 +23,7 @@
  */
 import type { Assignment, LaneResult } from './schema.js';
 import { getLoop } from './loops/store.js';
-import { complete_turn, advance, evaluatePhaseAdvanceGate } from './loops/verbs.js';
+import { complete_turn, completeTurnWithEvidence, advance, evaluatePhaseAdvanceGate } from './loops/verbs.js';
 import { withLoopLock } from './loops/lock.js';
 import { LOOP_ARTIFACT_BODY_MAX_BYTES, type LoopSlot, type LoopThread } from './loops/types.js';
 
@@ -175,8 +175,31 @@ export function closeIdeationLoopFromLaneResult(
         // artifact stops satisfying the current gate by construction — no
         // separate refusal path, and the content is preserved rather than lost.
         const dispatchPhase = slot.phase ?? loop.current_phase;
-        complete_turn(
-          { id: loopId, slot_id: slot.slot_id, actor, outcome: 'done', artifact: { phase: dispatchPhase, type: 'critique', body: capCritique(critique) } },
+        completeTurnWithEvidence(
+          {
+            id: loopId,
+            slot_id: slot.slot_id,
+            actor,
+            outcome: 'done',
+            artifact: { phase: dispatchPhase, type: 'critique', body: capCritique(critique) },
+            // This adapter is the trusted bridge from a harvested, assignment-bound
+            // LANE-RESULT to the slot that produced it. Without an explicit slot
+            // context, a coordinator-driven harvest is sealed as coordinator
+            // narration and the evidence gate correctly rejects it. Preserve the
+            // actual producer identity while keeping legacy lanes (which have no
+            // TurnReservation nonce) on the narrow complete_turn authority.
+            evidence_context: {
+              channel: 'complete_turn',
+              producer_kind: 'slot',
+              producer_id: slot.slot_id,
+              agent_id: slot.agent_id,
+              slot_id: slot.slot_id,
+              slot_role: slot.role,
+              assignment_id: slot.assignment_id ?? assignment.id,
+              claim_id: slot.claim_id,
+              turn_id: slot.current_turn_id,
+            },
+          },
           cwd,
         );
         const advanced = tryAdvance(true);

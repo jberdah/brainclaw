@@ -214,7 +214,7 @@ export function closeReviewLoopFromLaneResult(
                 evidence_context: {
                   channel: 'complete_turn',
                   producer_kind: 'slot',
-                  producer_id: assignment.agent ?? slot.agent ?? slot.slot_id,
+                  producer_id: slot.slot_id,
                   agent_id: slot.agent_id,
                   slot_id: slot.slot_id,
                   slot_role: slot.role,
@@ -281,7 +281,7 @@ export function closeReviewLoopFromLaneResult(
             evidence_context: {
               channel: 'complete_turn',
               producer_kind: 'slot',
-              producer_id: assignment.agent ?? slot.agent ?? slot.slot_id,
+              producer_id: slot.slot_id,
               agent_id: slot.agent_id,
               slot_id: slot.slot_id,
               slot_role: slot.role,

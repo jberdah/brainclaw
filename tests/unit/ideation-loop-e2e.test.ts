@@ -38,6 +38,7 @@ import {
   openLoop,
   type LoopThread,
 } from '../../src/core/loops/index.js';
+import { addArtifactWithEvidence } from '../../src/core/loops/verbs.js';
 import { loadState, saveState } from '../../src/core/state.js';
 import { readInbox } from '../../src/core/messaging.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -232,11 +233,16 @@ describe('ideate e2e — min_artifacts_by_type at loop scope as stop_condition (
 
     // Add 3 critique artifacts — meets the loop-scoped threshold.
     for (let i = 0; i < 3; i++) {
-      add_artifact(
+      addArtifactWithEvidence(
         {
           id: loop.id,
           actor: workspace.currentAgent.agent_id,
           artifact: { phase: 'critique', type: 'critique', body: `crit ${i}` },
+          evidence_context: {
+            channel: 'system_hook',
+            producer_kind: 'engine',
+            producer_id: 'brainclaw:test-critique-collector',
+          },
         },
         workspace.dir,
       );
@@ -283,11 +289,16 @@ describe('ideate e2e — min_artifacts_by_type at loop scope as stop_condition (
     advance({ id: loop.id, actor: workspace.currentAgent.agent_id }, workspace.dir);
 
     for (let i = 0; i < 2; i++) {
-      add_artifact(
+      addArtifactWithEvidence(
         {
           id: loop.id,
           actor: workspace.currentAgent.agent_id,
           artifact: { phase: 'critique', type: 'critique', body: `crit ${i}` },
+          evidence_context: {
+            channel: 'system_hook',
+            producer_kind: 'engine',
+            producer_id: 'brainclaw:test-critique-collector',
+          },
         },
         workspace.dir,
       );

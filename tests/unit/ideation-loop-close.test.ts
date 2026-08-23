@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
-import { advance, complete_turn } from '../../src/core/loops/verbs.js';
+import { advance, completeTurnWithEvidence } from '../../src/core/loops/verbs.js';
 import { closeIdeationLoopFromLaneResult } from '../../src/core/ideation-loop-close.js';
 import type { LaneResult } from '../../src/core/schema.js';
 
@@ -111,7 +111,21 @@ describe('pln#521 P2-bis closeIdeationLoopFromLaneResult', () => {
     // the 3 critic slots WITHOUT advancing (complete_turn doesn't advance) → the loop is
     // stuck in `critique` with the n:3 gate satisfied and all critic slots done.
     for (let i = 0; i < 3; i++) {
-      complete_turn({ id: loopId, slot_id: `lsl_c${i}`, actor: 'coord', outcome: 'done', artifact: { phase: 'critique', type: 'critique', body: `crit ${i}` } }, cwd);
+      completeTurnWithEvidence({
+        id: loopId,
+        slot_id: `lsl_c${i}`,
+        actor: 'coord',
+        outcome: 'done',
+        artifact: { phase: 'critique', type: 'critique', body: `crit ${i}` },
+        evidence_context: {
+          channel: 'complete_turn',
+          producer_kind: 'slot',
+          producer_id: `lsl_c${i}`,
+          slot_id: `lsl_c${i}`,
+          slot_role: 'critic',
+          assignment_id: `asg_c${i}`,
+        },
+      }, cwd);
     }
     assert.equal(getLoop(loopId, cwd)!.current_phase, 'critique', 'precondition: stuck in critique with gate met');
     // A re-harvest finds no active critic slot but the gate is met → resume the advance.
