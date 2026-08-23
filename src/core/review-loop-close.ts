@@ -39,7 +39,7 @@
  */
 import type { Assignment, LaneResult } from './schema.js';
 import { getLoop } from './loops/store.js';
-import { complete_turn, advance } from './loops/verbs.js';
+import { completeTurnWithEvidence, advance } from './loops/verbs.js';
 import { withLoopLock } from './loops/lock.js';
 import { LOOP_ARTIFACT_BODY_MAX_BYTES } from './loops/types.js';
 import type { LoopArtifact, LoopSlot, LoopThread } from './loops/types.js';
@@ -208,9 +208,20 @@ export function closeReviewLoopFromLaneResult(
         if (verdict === 'approve') {
           if (slot) {
             // isVerdictAccepted fires reviewer_green ONLY on an "accepted…" body.
-            complete_turn(
+            completeTurnWithEvidence(
               {
                 id: loopId, slot_id: slot.slot_id, actor,
+                evidence_context: {
+                  channel: 'complete_turn',
+                  producer_kind: 'slot',
+                  producer_id: assignment.agent ?? slot.agent ?? slot.slot_id,
+                  agent_id: slot.agent_id,
+                  slot_id: slot.slot_id,
+                  slot_role: slot.role,
+                  turn_id: slot.current_turn_id,
+                  assignment_id: slot.assignment_id ?? assignment.id,
+                  claim_id: slot.claim_id,
+                },
                 // pln#639 BUG-2 — the phase the slot was DISPATCHED in, not the
                 // loop's phase at close time. Same defect as the ideation closer;
                 // fixed here too because this is the far more travelled path.
@@ -264,9 +275,20 @@ export function closeReviewLoopFromLaneResult(
         // is a planned follow-up, so a human drives it. (No re-dispatch means no
         // worktree reuse, so the claim is released by harvest as usual.)
         const symmetric = loop.protocol?.review_mode === 'symmetric';
-        complete_turn(
+        completeTurnWithEvidence(
           {
             id: loopId, slot_id: slot.slot_id, actor,
+            evidence_context: {
+              channel: 'complete_turn',
+              producer_kind: 'slot',
+              producer_id: assignment.agent ?? slot.agent ?? slot.slot_id,
+              agent_id: slot.agent_id,
+              slot_id: slot.slot_id,
+              slot_role: slot.role,
+              turn_id: slot.current_turn_id,
+              assignment_id: slot.assignment_id ?? assignment.id,
+              claim_id: slot.claim_id,
+            },
             // pln#639 BUG-2 — dispatch phase, not close-time phase (see above).
             artifact: { phase: slot.phase ?? loop.current_phase, type: 'verdict', body: capVerdictBody('changes-requested', detail) },
           },

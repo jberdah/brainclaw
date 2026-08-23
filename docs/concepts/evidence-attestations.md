@@ -16,7 +16,8 @@ An envelope binds:
 - the artifact digest, including id, phase, type, body/ref, producer,
   production time, critique links, and iteration;
 - the exact subject: loop, artifact, phase, iteration and, when available,
-  slot, turn, assignment, and claim;
+  slot, turn, assignment, claim, run, launch nonce/epoch, execution-contract
+  hash, command digest, and workspace digest;
 - a server-derived producer and ingress channel;
 - an observation time and explicit validity window;
 - independent attestations;
@@ -26,7 +27,11 @@ Ingress callers never submit an envelope. `complete_turn`, turn reconciliation,
 the engine verify runner, operator-input handlers, bootstrap hooks, and
 `add_artifact` all seal at their server-controlled commit boundary. Likewise,
 `produced_by` is derived by the server; the public `add_artifact` input no
-longer accepts it as authority.
+longer accepts it as authority. A direct `add_artifact` commit is intentionally
+audit-only: its observation carries `artifact:write`, not `gate:artifact`.
+The internal evidence context and sealing helper are omitted from the public
+Loop Engine barrel; public completion and artifact functions explicitly strip
+any runtime object that attempts to smuggle such a context.
 
 The SHA-256 seal detects accidental or local-store tampering. It is not a
 remote cryptographic identity signature: Brainclaw's local store remains in
@@ -46,15 +51,22 @@ and attestation it needs:
 | `approval` | an authorized reviewer slot returned an accepted verdict | `gate:reviewer_green` |
 
 A worker or adapter can report a passing `verify_report`, but it cannot grant
-itself `verification`. A generic artifact insertion can store an accepted
-verdict for audit, but cannot grant itself `approval`.
+itself `verification`. A generic artifact insertion can store a deliverable or
+an accepted verdict for audit, but cannot open either a generic artifact gate
+or a reviewer gate.
+
+Gate authority is an explicit tuple, not a producer-kind shortcut: policy
+matches the ingress channel, producer kind, attestation kind, issuer, right,
+and required subject fields. For example, `reviewer_green` accepts an approval
+issued by `brainclaw:review-slot` through `complete_turn` or a fully bound
+`reconcile_turn`; `command_green` accepts only `brainclaw:verify-command`.
 
 ## Gate evaluation
 
 One evaluator is used by terminal stop conditions, phase-advance gates, and
 iteration exits. A decision records:
 
-- `passed`;
+- `passed`, plus distinct `strict_passed` and `legacy_passed` dimensions;
 - policy version and rollout mode;
 - a digest of the evaluated condition;
 - accepted evidence ids;
@@ -66,25 +78,43 @@ remain best-effort telemetry and never authorize a transition.
 
 The evaluator rejects missing evidence on strict threads, invalid seals,
 artifact/subject mismatches, cross-loop or cross-iteration replay, evidence
-predating the loop, future timestamps, unauthorized producer kinds, missing
-rights, and duplicate payloads in threshold gates. If an envelope is present
-but invalid, legacy behavior is never used as a fallback.
+predating the loop, future timestamps, unauthorized channel/producer/issuer
+combinations, missing execution bindings or rights, and duplicate payloads in
+threshold gates. If an envelope is present but invalid, legacy behavior is
+never used as a fallback.
+
+The engine snapshots the workspace bytes immediately before and after
+`verify_command`. A concurrent mutation changes the digest and forces the
+report red. The command and stable workspace digests are copied into both the
+report and its sealed subject; gate policy requires the two bindings to match.
+Reconciled worker evidence likewise binds the run, launch generation, and
+execution contract. Pre-P1 reservations retain a deterministic hash of their
+immutable legacy reservation fields so an in-flight historical attempt can
+converge without pretending it carried a v1 execution contract.
+
+Reviewer approval is scoped to the current loop iteration and to the slot's
+current turn, assignment, and claim projections. A creator/admin recovery may
+settle a slot, but it is recorded as coordinator evidence and cannot mint the
+reviewer's approval.
 
 Negative convergence is fail-closed too: an invalid critique cannot be used
 to manufacture “no new critique”. After at least one full ideation cycle, a
 settled critique round with no eligible new critiques is evaluated before the
-quantitative critique gate, so saturation is observable without a forced
-transition.
+quantitative critique gate. “Settled” is causal: the last trusted critic
+completion emits an engine-owned `critique_window_closed` artifact for that
+iteration. An open, assigned, or running critic turn therefore cannot create
+saturation merely by staying silent.
 
 ## Rollout and legacy threads
 
 `LoopThread.evidence_policy` makes compatibility explicit:
 
 - absent: pre-policy thread; unsealed legacy artifacts retain legacy gate
-  semantics, while any present envelope is still validated;
+  semantics (including duplicate threshold counting), while any present
+  envelope is still validated;
 - `{version: "gate-policy-v1", mode: "shadow"}`: writers seal evidence and
-  decisions report strict rejections, while the legacy outcome controls the
-  transition;
+  decisions report both the independently composed strict and legacy results,
+  while the legacy outcome controls the transition;
 - `{version: "gate-policy-v1", mode: "strict"}`: only policy-eligible evidence
   influences gates.
 

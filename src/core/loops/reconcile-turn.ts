@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { getReservation, evidenceMatchesAttempt, currentNonce, deriveTurnId, launchGrant, type TurnReservation } from './attempt-reservation.js';
 import { getLoop } from './store.js';
-import { complete_turn, add_artifact, advance } from './verbs.js';
+import { completeTurnWithEvidence, addArtifactWithEvidence, complete_turn, advance } from './verbs.js';
 import { reducerForKind, type ReducerInput } from './result-reducers.js';
 import { loadAgentRun, recordExecutionContractAnomaly, transitionAgentRun } from '../agentruns.js';
 import { loadAssignment, transitionAssignment } from '../assignments.js';
@@ -12,6 +12,7 @@ import { readCompletionSignals, readContractAck } from '../runtime-signals.js';
 import { buildFixCycleTask, type ReviewLoopNextTurn } from '../review-loop-close.js';
 import { withLoopLock, LockTimeoutError, LockLostError } from './lock.js';
 import { validateWorkerContractAcceptance } from '../execution-contract.js';
+import { evidenceDigest } from './evidence.js';
 import type { AgentRun, LaneResult } from '../schema.js';
 
 /**
@@ -336,7 +337,7 @@ function convergeLockedTurn(
       const [primary, ...extras] = reduced.artifacts;
       for (const a of extras) {
         try {
-          add_artifact({
+          addArtifactWithEvidence({
             id: loop.id,
             actor,
             evidence_context: {
@@ -349,6 +350,23 @@ function convergeLockedTurn(
               turn_id,
               assignment_id: reservation.child_ids.assignment_id,
               claim_id: reservation.claim_id,
+              run_id: reservation.child_ids.run_id,
+              nonce: reservation.launch?.token,
+              attempt_epoch: reservation.epoch,
+              execution_contract_hash: reservation.execution_contract_ref?.hash ?? evidenceDigest({
+                version: 'legacy-uncontracted-reservation-v1',
+                turn_id: reservation.turn_id,
+                run_id: reservation.child_ids.run_id,
+                epoch: reservation.epoch,
+                phase: reservation.phase,
+                iteration: reservation.iteration,
+                cwd: reservation.cwd,
+              }),
+              workspace_digest: evidenceDigest({
+                workspace_policy: reservation.execution_contract?.workspace_policy,
+                cwd: reservation.cwd,
+                store_root: reservation.store_root,
+              }),
             },
             artifact: {
               phase: a.phase,
@@ -361,7 +379,7 @@ function convergeLockedTurn(
         }
         catch { /* an extra artifact failing must not abort convergence */ }
       }
-      complete_turn({
+      completeTurnWithEvidence({
         id: loop.id,
         slot_id: slot.slot_id,
         actor,
@@ -375,6 +393,23 @@ function convergeLockedTurn(
           turn_id,
           assignment_id: reservation.child_ids.assignment_id,
           claim_id: reservation.claim_id,
+          run_id: reservation.child_ids.run_id,
+          nonce: reservation.launch?.token,
+          attempt_epoch: reservation.epoch,
+          execution_contract_hash: reservation.execution_contract_ref?.hash ?? evidenceDigest({
+            version: 'legacy-uncontracted-reservation-v1',
+            turn_id: reservation.turn_id,
+            run_id: reservation.child_ids.run_id,
+            epoch: reservation.epoch,
+            phase: reservation.phase,
+            iteration: reservation.iteration,
+            cwd: reservation.cwd,
+          }),
+          workspace_digest: evidenceDigest({
+            workspace_policy: reservation.execution_contract?.workspace_policy,
+            cwd: reservation.cwd,
+            store_root: reservation.store_root,
+          }),
         },
         outcome: reduced.slot_outcome,
         failure_reason: reduced.failure_reason,

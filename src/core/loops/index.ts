@@ -5,10 +5,8 @@ export {
   evidenceDigest,
   evidencePolicyForNewLoop,
   evidenceWriterEnabled,
-  sealArtifactEvidence,
   validateArtifactEvidence,
   validateThreadEvidence,
-  type EvidenceCommitContext,
   type EvidenceValidationResult,
   type ThreadEvidenceDiagnostic,
 } from './evidence.js';

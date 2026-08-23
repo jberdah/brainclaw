@@ -388,6 +388,12 @@ export const EvidenceSubjectSchema = z.object({
   turn_id: z.string().optional(),
   assignment_id: z.string().optional(),
   claim_id: z.string().optional(),
+  run_id: z.string().optional(),
+  nonce: z.string().optional(),
+  attempt_epoch: z.number().int().nonnegative().optional(),
+  execution_contract_hash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  command_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  workspace_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
 });
 export type EvidenceSubject = z.infer<typeof EvidenceSubjectSchema>;
 
@@ -475,6 +481,9 @@ export const VerifyReportBodySchema = z.object({
   timed_out: z.boolean().optional(),
   stdout_tail: z.string().max(1024).optional(),
   stderr_tail: z.string().max(1024).optional(),
+  command_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  workspace_digest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  workspace_stable: z.boolean().optional(),
 });
 export type VerifyReportBody = z.infer<typeof VerifyReportBodySchema>;
 
@@ -746,6 +755,9 @@ const LoopEventBaseShape = {
 
 export const GateDecisionSchema = z.object({
   passed: z.boolean(),
+  /** Strict and legacy dimensions remain observable during a shadow rollout. */
+  strict_passed: z.boolean().optional(),
+  legacy_passed: z.boolean().optional(),
   policy_version: z.enum(['legacy', 'gate-policy-v1']),
   mode: z.enum(['legacy', 'shadow', 'strict']),
   condition_digest: z.string().regex(/^[0-9a-f]{64}$/),

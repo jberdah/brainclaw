@@ -12,13 +12,13 @@ import {
   getLoop,
   listLoopEvents,
   openLoop,
-  sealArtifactEvidence,
   provideInput,
   sweepPauseTimeouts,
   writeThreadFile,
   type LoopEvent,
   type LoopThread,
 } from '../../src/core/loops/index.js';
+import { sealArtifactEvidence } from '../../src/core/loops/evidence.js';
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { writeFileAtomic } from '../../src/core/io.js';
 

@@ -22,6 +22,12 @@ export interface EvidenceCommitContext {
   turn_id?: string;
   assignment_id?: string;
   claim_id?: string;
+  run_id?: string;
+  nonce?: string;
+  attempt_epoch?: number;
+  execution_contract_hash?: string;
+  command_digest?: string;
+  workspace_digest?: string;
 }
 
 export interface EvidenceValidationResult {
@@ -104,6 +110,12 @@ export function sealArtifactEvidence(
     turn_id: context.turn_id,
     assignment_id: context.assignment_id,
     claim_id: context.claim_id,
+    run_id: context.run_id,
+    nonce: context.nonce,
+    attempt_epoch: context.attempt_epoch,
+    execution_contract_hash: context.execution_contract_hash,
+    command_digest: context.command_digest,
+    workspace_digest: context.workspace_digest,
   };
   const subjectDigest = evidenceDigest(subject);
   const attestations: EvidenceAttestation[] = [];
@@ -114,7 +126,10 @@ export function sealArtifactEvidence(
   if (context.channel === 'verify_command' && context.producer_kind === 'engine') {
     attestations.push(attestation('verification', 'brainclaw:verify-command', committedArtifact.produced_at, subjectDigest, ['artifact:write', 'gate:artifact', 'gate:command_green']));
   } else {
-    attestations.push(attestation('observation', 'brainclaw:artifact-commit', committedArtifact.produced_at, subjectDigest, ['artifact:write', 'gate:artifact']));
+    const rights = context.channel === 'add_artifact'
+      ? ['artifact:write']
+      : ['artifact:write', 'gate:artifact'];
+    attestations.push(attestation('observation', 'brainclaw:artifact-commit', committedArtifact.produced_at, subjectDigest, rights));
   }
   if (
     isAcceptedVerdict(committedArtifact) &&

@@ -706,11 +706,13 @@ export interface CompleteTurnInput {
    * are different principals.
    */
   caller_claim_id?: string;
-  /** Internal-only provenance supplied by the reconciler/engine. */
+}
+
+interface CompleteTurnCommitInput extends CompleteTurnInput {
   evidence_context?: EvidenceCommitContext;
 }
 
-export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThread {
+function completeTurnCommit(input: CompleteTurnCommitInput, cwd?: string): LoopThread {
   const current = loadLoopOrThrow(input.id, cwd);
   assertMutable(current, 'complete_turn');
 
@@ -718,6 +720,7 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
   if (!slot) throw new Error(`complete_turn: slot_id "${input.slot_id}" not in loop`);
 
   // Slot-bound auth. Only enforced when caller_agent_id is supplied (MCP entry path).
+  let slotOwnerAuthorized = false;
   if (input.caller_agent_id !== undefined && !input.admin_override) {
     // Instance binding (pln#562 step 4): a claim-bound slot is owned by the
     // INSTANCE holding that claim. When both sides carry claim info, claim
@@ -730,6 +733,7 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
     if (!ownerMatches && !creatorMatches) {
       throw new Error('unauthorized_slot_write');
     }
+    slotOwnerAuthorized = ownerMatches;
   }
 
   const now = nowISO();
@@ -741,17 +745,23 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
   let artifactId: string | undefined;
   let committedArtifact: LoopArtifact | undefined;
   if (input.artifact) {
-    const evidenceContext: EvidenceCommitContext = input.evidence_context ?? {
-      channel: 'complete_turn',
-      producer_kind: 'slot',
-      producer_id: slot.slot_id,
-      agent_id: slot.agent_id,
-      slot_id: slot.slot_id,
-      slot_role: slot.role,
-      turn_id: slot.current_turn_id,
-      assignment_id: slot.assignment_id,
-      claim_id: slot.claim_id,
-    };
+    const evidenceContext: EvidenceCommitContext = input.evidence_context ?? (slotOwnerAuthorized
+      ? {
+          channel: 'complete_turn',
+          producer_kind: 'slot',
+          producer_id: slot.slot_id,
+          agent_id: slot.agent_id,
+          slot_id: slot.slot_id,
+          slot_role: slot.role,
+          turn_id: slot.current_turn_id,
+          assignment_id: slot.assignment_id,
+          claim_id: slot.claim_id,
+        }
+      : {
+          channel: 'complete_turn',
+          producer_kind: 'coordinator',
+          producer_id: input.actor,
+        });
     const parsedArtifact = LoopArtifactSchema.parse({
       ...input.artifact,
       artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
@@ -774,6 +784,40 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
   const updatedSlots = current.slots.map((s) =>
     s.slot_id === slot.slot_id ? { ...s, status: terminalStatus } : s,
   );
+
+  // A negative convergence signal is only valid after the critic window has
+  // causally closed. The last trusted critic completion records that boundary;
+  // mere absence of critique artifacts while a turn is open is never enough.
+  let critiqueWindowClosedArtifact: LoopArtifact | undefined;
+  const critiqueSlots = updatedSlots.filter((candidate) => candidate.phase === 'critique');
+  const trustedCompletion = slotOwnerAuthorized || input.evidence_context !== undefined;
+  const critiqueWindowClosed = slot.phase === 'critique'
+    && trustedCompletion
+    && critiqueSlots.length > 0
+    && critiqueSlots.every((candidate) => ['done', 'failed', 'cancelled'].includes(candidate.status));
+  const alreadyClosed = nextArtifacts.some((artifact) =>
+    artifact.type === 'critique_window_closed'
+      && (artifact.iteration ?? 0) === current.iteration_count,
+  );
+  if (critiqueWindowClosed && !alreadyClosed) {
+    const marker = LoopArtifactSchema.parse({
+      artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
+      phase: 'critique',
+      type: 'critique_window_closed',
+      body: JSON.stringify({ iteration: current.iteration_count }),
+      produced_by: 'brainclaw:critique-window',
+      produced_at: now,
+      iteration: current.iteration_count,
+    });
+    critiqueWindowClosedArtifact = (current.evidence_policy !== undefined || evidenceWriterEnabled())
+      ? LoopArtifactSchema.parse(sealArtifactEvidence(current, marker, {
+          channel: 'system_hook',
+          producer_kind: 'engine',
+          producer_id: 'brainclaw:critique-window',
+        }))
+      : marker;
+    nextArtifacts = [...nextArtifacts, critiqueWindowClosedArtifact];
+  }
 
   const next: LoopThread = {
     ...current,
@@ -799,6 +843,22 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
       type: input.artifact.type,
       produced_by: committedArtifact?.produced_by,
       evidence_id: committedArtifact?.evidence?.evidence_id,
+    });
+  }
+  if (critiqueWindowClosedArtifact) {
+    events.push({
+      event_id: crypto.randomUUID(),
+      loop_id: current.id,
+      seq: nextSeq(current.id, cwd) + events.length,
+      at: now,
+      by: 'brainclaw:critique-window',
+      mutation_id,
+      kind: 'artifact_added',
+      artifact_id: critiqueWindowClosedArtifact.artifact_id,
+      phase: critiqueWindowClosedArtifact.phase,
+      type: critiqueWindowClosedArtifact.type,
+      produced_by: critiqueWindowClosedArtifact.produced_by,
+      evidence_id: critiqueWindowClosedArtifact.evidence?.evidence_id,
     });
   }
   events.push({
@@ -829,17 +889,32 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
   return next;
 }
 
+/** Public completion path: caller-controlled objects cannot inject engine provenance. */
+export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThread {
+  return completeTurnCommit({ ...input, evidence_context: undefined }, cwd);
+}
+
+/** Internal convergence seam. Deliberately omitted from the public loops barrel. */
+export function completeTurnWithEvidence(
+  input: CompleteTurnInput & { evidence_context: EvidenceCommitContext },
+  cwd?: string,
+): LoopThread {
+  return completeTurnCommit(input, cwd);
+}
+
 /* =========================== add_artifact ================================= */
 
 export interface AddArtifactInput {
   id: string;
   artifact: Omit<LoopArtifact, 'artifact_id' | 'produced_at' | 'evidence'>;
   actor: string;
-  /** Internal-only provenance. Caller-provided produced_by is never authoritative. */
+}
+
+interface AddArtifactCommitInput extends AddArtifactInput {
   evidence_context?: EvidenceCommitContext;
 }
 
-export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread {
+function addArtifactCommit(input: AddArtifactCommitInput, cwd?: string): LoopThread {
   const current = loadLoopOrThrow(input.id, cwd);
   assertMutable(current, 'add_artifact');
 
@@ -898,6 +973,19 @@ export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread 
   );
   writeThreadFile(next, cwd);
   return next;
+}
+
+/** Public audit-only artifact path; engine provenance is always discarded. */
+export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread {
+  return addArtifactCommit({ ...input, evidence_context: undefined }, cwd);
+}
+
+/** Internal engine/reconciler seam. Deliberately omitted from the public loops barrel. */
+export function addArtifactWithEvidence(
+  input: AddArtifactInput & { evidence_context: EvidenceCommitContext },
+  cwd?: string,
+): LoopThread {
+  return addArtifactCommit(input, cwd);
 }
 
 /* =============================== pause / resume =========================== */

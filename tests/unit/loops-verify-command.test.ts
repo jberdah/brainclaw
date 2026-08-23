@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { openLoop } from '../../src/core/loops/index.js';
+import { advance, openLoop } from '../../src/core/loops/index.js';
+import { addArtifactWithEvidence } from '../../src/core/loops/verbs.js';
 import { getLoop, writeThreadFile } from '../../src/core/loops/store.js';
 import { hasPassingVerifyReportInIteration } from '../../src/core/loops/iteration-engine.js';
 import {
@@ -69,6 +70,53 @@ describe('pln#632 verify-command runner', () => {
     assert.equal(res.report?.passed, false);
     const thread = getLoop(loop.id, cwd)!;
     assert.equal(hasPassingVerifyReportInIteration(thread, thread.iteration_count), false);
+  });
+
+  it('engine verification opens the shipped implementation and debug phase gates', () => {
+    const implementationCwd = ws();
+    const implementation = openImpl(implementationCwd, ['echo', 'ok']);
+    advance({ id: implementation.id, actor: 'agt_test' }, implementationCwd); // bind → execute
+    advance({ id: implementation.id, actor: 'agt_test' }, implementationCwd); // execute → verify
+    runVerify({ loop_id: implementation.id, actor: 'agt_i', runner: runnerReturning(GREEN) }, implementationCwd);
+    const implementationExit = advance({ id: implementation.id, actor: 'agt_test' }, implementationCwd);
+    assert.equal(implementationExit.loop.current_phase, 'handoff_ready');
+
+    const debugCwd = ws();
+    const debug = openLoop({
+      kind: 'debug', title: 'debug verify gate', created_by: 'agt_test', verify: { command: ['echo', 'ok'] },
+      slots: [{ role: 'debugger', agent_id: 'agt_d' }],
+    }, debugCwd);
+    addArtifactWithEvidence({
+      id: debug.id,
+      actor: 'agt_d',
+      evidence_context: {
+        channel: 'complete_turn', producer_kind: 'slot', producer_id: 'agt_d',
+        agent_id: 'agt_d', slot_id: debug.slots[0]!.slot_id, slot_role: 'debugger',
+      },
+      artifact: { phase: 'reproduce', type: 'repro', body: 'reproduced' },
+    }, debugCwd);
+    advance({ id: debug.id, actor: 'agt_test' }, debugCwd); // reproduce → hypothesize
+    advance({ id: debug.id, actor: 'agt_test' }, debugCwd); // hypothesize → isolate
+    advance({ id: debug.id, actor: 'agt_test' }, debugCwd); // isolate → fix
+    runVerify({ loop_id: debug.id, actor: 'agt_d', runner: runnerReturning(GREEN) }, debugCwd);
+    const debugExit = advance({ id: debug.id, actor: 'agt_test' }, debugCwd);
+    assert.equal(debugExit.loop.current_phase, 'handoff');
+  });
+
+  it('fails closed when the workspace changes during verification', () => {
+    const cwd = ws();
+    fs.writeFileSync(path.join(cwd, 'subject.txt'), 'before');
+    const loop = openImpl(cwd, ['echo', 'ok']);
+    const mutatingRunner: VerifyRunner = () => {
+      fs.writeFileSync(path.join(cwd, 'subject.txt'), 'after');
+      return GREEN;
+    };
+    const result = runVerify({ loop_id: loop.id, actor: 'agt_i', runner: mutatingRunner }, cwd);
+    assert.equal(result.report?.workspace_stable, false);
+    assert.equal(result.report?.passed, false);
+    const artifact = getLoop(loop.id, cwd)!.artifacts.at(-1)!;
+    assert.equal(artifact.evidence?.subject.workspace_digest, result.report?.workspace_digest);
+    assert.equal(hasPassingVerifyReportInIteration(getLoop(loop.id, cwd)!, 0), false);
   });
 
   it('a TIMEOUT records timed_out:true + passed:false', () => {

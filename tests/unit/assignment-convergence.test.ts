@@ -5,7 +5,7 @@ import {
   convergeAssignmentToTerminal,
 } from '../../src/core/assignments.js';
 import { openLoop, closeLoop } from '../../src/core/loops/store.js';
-import { add_artifact, advance } from '../../src/core/loops/verbs.js';
+import { complete_turn, advance } from '../../src/core/loops/verbs.js';
 import { reconcileOrphanedLoopAssignments } from '../../src/core/assignment-reconciler.js';
 import type { AssignmentStatus } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -105,11 +105,13 @@ describe('assignment convergence — closeLoop cascade (pln#563 layer A)', () =>
       created_by: 'bclaw_coordinate',
       phases: [{ name: 'findings' }],
       stop_condition: { kind: 'artifact_produced', phase: 'findings', type: 'verdict' },
-      slots: [{ role: 'reviewer', agent: 'claude-code', assignment_id: asgnId, status: 'assigned' }],
+      slots: [{ role: 'reviewer', agent: 'claude-code', agent_id: 'agt_reviewer', assignment_id: asgnId, status: 'assigned' }],
     }, ws.dir);
-    add_artifact({
+    complete_turn({
       id: loop.id,
-      actor: 'tester',
+      slot_id: loop.slots[0]!.slot_id,
+      actor: 'agt_reviewer',
+      caller_agent_id: 'agt_reviewer',
       artifact: { phase: 'findings', type: 'verdict', body: 'accepted' },
     }, ws.dir);
 

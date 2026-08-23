@@ -35,7 +35,7 @@ function setup(cwd: string, verdict?: 'approve' | 'request_changes') {
     kind: 'review', title: 't', created_by: 'coord', mode: 'symmetric',
     phases: [{ name: 'findings' }],
     stop_condition: { kind: 'reviewer_green' },
-    slots: [{ slot_id: 'lsl_r', role: 'reviewer', agent: 'codex', status: 'assigned' }],
+    slots: [{ slot_id: 'lsl_r', role: 'reviewer', agent: 'codex', agent_id: 'agt_reviewer', status: 'assigned' }],
   }, cwd);
   const turnId = 'tat_recon';
   reserve({
@@ -135,7 +135,14 @@ describe('reconcileTurn §8', () => {
     // Simulate reconcile #1 crashing AFTER complete_turn (verdict recorded, slot
     // done) but BEFORE advance: record the accepted verdict directly, leaving the
     // loop OPEN.
-    complete_turn({ id: loopId, slot_id: 'lsl_r', actor: 'x', outcome: 'done', artifact: { phase: 'findings', type: 'verdict', body: 'accepted: recorded pre-crash' } }, cwd);
+    complete_turn({
+      id: loopId,
+      slot_id: 'lsl_r',
+      actor: 'agt_reviewer',
+      caller_agent_id: 'agt_reviewer',
+      outcome: 'done',
+      artifact: { phase: 'findings', type: 'verdict', body: 'accepted: recorded pre-crash' },
+    }, cwd);
     assert.equal(getLoop(loopId, cwd)!.status, 'open', 'loop still open (advance never ran)');
     // reconcile #2 must NOT double-record and MUST close the loop.
     const r = reconcileTurn({ turn_id: turnId, lane, cwd });

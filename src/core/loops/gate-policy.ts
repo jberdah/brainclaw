@@ -1,5 +1,8 @@
 import type {
   GateDecision,
+  EvidenceAttestationKind,
+  EvidenceChannel,
+  EvidenceProducerKind,
   LoopArtifact,
   LoopKind,
   LoopThread,
@@ -11,9 +14,26 @@ export type EvidencePurpose = 'artifact' | 'reviewer_green' | 'command_green' | 
 
 export interface GateRequirement {
   right: 'gate:artifact' | 'gate:reviewer_green' | 'gate:command_green';
-  attestation: 'observation' | 'approval' | 'verification';
-  producer_kinds: readonly ('engine' | 'slot' | 'coordinator' | 'operator')[];
+  authorities: readonly GateAuthority[];
 }
+
+interface GateAuthority {
+  channel: EvidenceChannel;
+  producer_kind: EvidenceProducerKind;
+  attestation: EvidenceAttestationKind;
+  issuer: 'brainclaw:artifact-commit' | 'brainclaw:review-slot' | 'brainclaw:verify-command';
+  required_subject_fields?: readonly SubjectBinding[];
+}
+
+type SubjectBinding =
+  | 'slot_id'
+  | 'turn_id'
+  | 'run_id'
+  | 'nonce'
+  | 'attempt_epoch'
+  | 'execution_contract_hash'
+  | 'command_digest'
+  | 'workspace_digest';
 
 export interface GatePolicy {
   version: 'gate-policy-v1';
@@ -23,18 +43,34 @@ export interface GatePolicy {
 
 const OBSERVATION: GateRequirement = {
   right: 'gate:artifact',
-  attestation: 'observation',
-  producer_kinds: ['slot', 'coordinator', 'operator', 'engine'],
+  authorities: [
+    { channel: 'complete_turn', producer_kind: 'slot', attestation: 'observation', issuer: 'brainclaw:artifact-commit', required_subject_fields: ['slot_id'] },
+    { channel: 'reconcile_turn', producer_kind: 'slot', attestation: 'observation', issuer: 'brainclaw:artifact-commit', required_subject_fields: ['slot_id', 'turn_id', 'run_id', 'nonce', 'attempt_epoch', 'execution_contract_hash', 'workspace_digest'] },
+    { channel: 'operator_input', producer_kind: 'slot', attestation: 'observation', issuer: 'brainclaw:artifact-commit', required_subject_fields: ['slot_id'] },
+    { channel: 'operator_input', producer_kind: 'operator', attestation: 'observation', issuer: 'brainclaw:artifact-commit' },
+    { channel: 'operator_input', producer_kind: 'engine', attestation: 'observation', issuer: 'brainclaw:artifact-commit' },
+    { channel: 'system_hook', producer_kind: 'engine', attestation: 'observation', issuer: 'brainclaw:artifact-commit' },
+    { channel: 'verify_command', producer_kind: 'engine', attestation: 'verification', issuer: 'brainclaw:verify-command', required_subject_fields: ['command_digest', 'workspace_digest'] },
+  ],
 };
 const APPROVAL: GateRequirement = {
   right: 'gate:reviewer_green',
-  attestation: 'approval',
-  producer_kinds: ['slot'],
+  authorities: [
+    { channel: 'complete_turn', producer_kind: 'slot', attestation: 'approval', issuer: 'brainclaw:review-slot', required_subject_fields: ['slot_id'] },
+    { channel: 'reconcile_turn', producer_kind: 'slot', attestation: 'approval', issuer: 'brainclaw:review-slot', required_subject_fields: ['slot_id', 'turn_id', 'run_id', 'nonce', 'attempt_epoch', 'execution_contract_hash', 'workspace_digest'] },
+  ],
 };
 const VERIFICATION: GateRequirement = {
   right: 'gate:command_green',
-  attestation: 'verification',
-  producer_kinds: ['engine'],
+  authorities: [
+    { channel: 'verify_command', producer_kind: 'engine', attestation: 'verification', issuer: 'brainclaw:verify-command', required_subject_fields: ['command_digest', 'workspace_digest'] },
+  ],
+};
+
+const CRITIC_OBSERVATION: GateRequirement = {
+  right: 'gate:artifact',
+  authorities: OBSERVATION.authorities.filter((authority) =>
+    authority.channel === 'complete_turn' || authority.channel === 'reconcile_turn'),
 };
 
 /** Policies refine the five protocol graphs; they do not duplicate phase order. */
@@ -48,7 +84,7 @@ export const GATE_POLICIES: Record<LoopKind, GatePolicy> = Object.fromEntries(
         artifact: OBSERVATION,
         reviewer_green: APPROVAL,
         command_green: VERIFICATION,
-        critic_signal: OBSERVATION,
+        critic_signal: CRITIC_OBSERVATION,
       },
     },
   ]),
@@ -62,6 +98,17 @@ interface EligibilitySet {
 
 function hasUsableContent(artifact: LoopArtifact): boolean {
   return (artifact.body ?? '').trim().length > 0 || artifact.ref !== undefined;
+}
+
+function legacyEligibleCount(
+  thread: LoopThread,
+  artifacts: LoopArtifact[],
+  purpose: EvidencePurpose,
+): number {
+  return artifacts.filter((artifact) => {
+    if (purpose !== 'critic_signal' && !hasUsableContent(artifact)) return false;
+    return !artifact.evidence || validateArtifactEvidence(thread, artifact).valid;
+  }).length;
 }
 
 function payloadFingerprint(artifact: LoopArtifact): string {
@@ -109,25 +156,85 @@ function selectEligible(
 
     if (mode !== 'legacy') {
       const envelope = artifact.evidence!;
-      if (!requirement.producer_kinds.includes(envelope.producer.kind)) {
-        rejected.push({ artifact_id: artifact.artifact_id, reason: `producer_not_allowed:${envelope.producer.kind}` });
+      if (purpose === 'reviewer_green' && (artifact.iteration ?? 0) !== thread.iteration_count) {
+        rejected.push({ artifact_id: artifact.artifact_id, reason: 'stale_subject_iteration' });
         continue;
       }
-      const attestation = envelope.attestations.find(
-        (item) => item.kind === requirement.attestation && item.rights.includes(requirement.right),
+      const channelAuthorities = requirement.authorities.filter((authority) => authority.channel === envelope.producer.channel);
+      if (channelAuthorities.length === 0) {
+        rejected.push({ artifact_id: artifact.artifact_id, reason: `channel_not_allowed:${envelope.producer.channel}` });
+        continue;
+      }
+      const producerAuthorities = channelAuthorities.filter((authority) => authority.producer_kind === envelope.producer.kind);
+      if (producerAuthorities.length === 0) {
+        rejected.push({ artifact_id: artifact.artifact_id, reason: `producer_channel_mismatch:${envelope.producer.kind}:${envelope.producer.channel}` });
+        continue;
+      }
+      const authority = producerAuthorities.find((candidate) => envelope.attestations.some(
+        (item) => item.kind === candidate.attestation
+          && item.issuer === candidate.issuer
+          && item.rights.includes(requirement.right),
+      ));
+      if (!authority) {
+        rejected.push({ artifact_id: artifact.artifact_id, reason: `missing_authorized_attestation:${requirement.right}` });
+        continue;
+      }
+      const missingSubject = authority.required_subject_fields?.find(
+        (field) => envelope.subject[field] === undefined || envelope.subject[field] === '',
       );
-      if (!attestation) {
-        rejected.push({ artifact_id: artifact.artifact_id, reason: `missing_${requirement.attestation}_attestation` });
+      if (missingSubject) {
+        rejected.push({ artifact_id: artifact.artifact_id, reason: `missing_subject_binding:${missingSubject}` });
+        continue;
+      }
+      if (envelope.subject.slot_id) {
+        const slot = thread.slots.find((candidate) => candidate.slot_id === envelope.subject.slot_id);
+        if (!slot) {
+          rejected.push({ artifact_id: artifact.artifact_id, reason: 'unknown_subject_slot' });
+          continue;
+        }
+        if (slot.current_turn_id && envelope.subject.turn_id !== slot.current_turn_id) {
+          rejected.push({ artifact_id: artifact.artifact_id, reason: 'wrong_subject_turn' });
+          continue;
+        }
+        if (slot.assignment_id && envelope.subject.assignment_id !== slot.assignment_id) {
+          rejected.push({ artifact_id: artifact.artifact_id, reason: 'wrong_subject_assignment' });
+          continue;
+        }
+        if (slot.claim_id && envelope.subject.claim_id !== slot.claim_id) {
+          rejected.push({ artifact_id: artifact.artifact_id, reason: 'wrong_subject_claim' });
+          continue;
+        }
+      }
+      if (envelope.producer.channel === 'verify_command') {
+        let report: { command_digest?: string; workspace_digest?: string; workspace_stable?: boolean };
+        try {
+          report = JSON.parse(artifact.body ?? '{}') as typeof report;
+        } catch {
+          report = {};
+        }
+        if (
+          report.workspace_stable !== true
+          || report.command_digest !== envelope.subject.command_digest
+          || report.workspace_digest !== envelope.subject.workspace_digest
+        ) {
+          rejected.push({ artifact_id: artifact.artifact_id, reason: 'verification_subject_mismatch' });
+          continue;
+        }
+      }
+      if (envelope.producer.channel === 'reconcile_turn' && envelope.subject.execution_contract_hash === undefined) {
+        rejected.push({ artifact_id: artifact.artifact_id, reason: 'missing_subject_binding:execution_contract_hash' });
         continue;
       }
     }
 
-    const fingerprint = payloadFingerprint(artifact);
-    if (fingerprints.has(fingerprint)) {
-      rejected.push({ artifact_id: artifact.artifact_id, reason: 'duplicate_payload' });
-      continue;
+    if (mode !== 'legacy') {
+      const fingerprint = payloadFingerprint(artifact);
+      if (fingerprints.has(fingerprint)) {
+        rejected.push({ artifact_id: artifact.artifact_id, reason: 'duplicate_payload' });
+        continue;
+      }
+      fingerprints.add(fingerprint);
     }
-    fingerprints.add(fingerprint);
     eligible.push(artifact);
     if (artifact.evidence) accepted_evidence_ids.push(artifact.evidence.evidence_id);
   }
@@ -147,7 +254,9 @@ function decision(
 ): GateDecision {
   const mode = modeFor(thread);
   return {
-    passed: mode === 'shadow' ? legacyPassed : strictPassed,
+    passed: mode === 'legacy' || mode === 'shadow' ? legacyPassed : strictPassed,
+    strict_passed: strictPassed,
+    legacy_passed: legacyPassed,
     policy_version: mode === 'legacy' ? 'legacy' : 'gate-policy-v1',
     mode,
     condition_digest: evidenceDigest(condition),
@@ -191,25 +300,25 @@ export function evaluateGateCondition(thread: LoopThread, condition?: StopCondit
         artifact.type === 'verdict' && /^accepted(?:\b|[:\s])/.test((artifact.body ?? '').trim().toLowerCase()),
       );
       const set = selectEligible(thread, candidates, 'reviewer_green');
-      return decision(thread, condition, set.eligible.length > 0, candidates.some(hasUsableContent), set);
+      return decision(thread, condition, set.eligible.length > 0, legacyEligibleCount(thread, candidates, 'reviewer_green') > 0, set);
     }
     case 'artifact_produced': {
       const candidates = artifactCandidates(thread, condition);
       const set = selectEligible(thread, candidates, 'artifact');
-      return decision(thread, condition, set.eligible.length > 0, candidates.some(hasUsableContent), set);
+      return decision(thread, condition, set.eligible.length > 0, legacyEligibleCount(thread, candidates, 'artifact') > 0, set);
     }
     case 'min_artifacts_by_type': {
       const candidates = artifactCandidates(thread, condition);
       const set = selectEligible(thread, candidates, 'artifact');
-      return decision(thread, condition, set.eligible.length >= condition.n, candidates.filter(hasUsableContent).length >= condition.n, set);
+      return decision(thread, condition, set.eligible.length >= condition.n, legacyEligibleCount(thread, candidates, 'artifact') >= condition.n, set);
     }
     case 'any': {
       const children = condition.conditions.map((child) => evaluateGateCondition(thread, child));
       return decision(
         thread,
         condition,
-        children.some((child) => child.passed),
-        children.some((child) => child.passed),
+        children.some((child) => child.strict_passed ?? child.passed),
+        children.some((child) => child.legacy_passed ?? child.passed),
         {
           eligible: [],
           accepted_evidence_ids: children.flatMap((child) => child.accepted_evidence_ids),
@@ -222,8 +331,8 @@ export function evaluateGateCondition(thread: LoopThread, condition?: StopCondit
       return decision(
         thread,
         condition,
-        children.every((child) => child.passed),
-        children.every((child) => child.passed),
+        children.every((child) => child.strict_passed ?? child.passed),
+        children.every((child) => child.legacy_passed ?? child.passed),
         {
           eligible: [],
           accepted_evidence_ids: children.flatMap((child) => child.accepted_evidence_ids),
@@ -252,7 +361,7 @@ export function evaluateCommandGreen(thread: LoopThread, iteration: number): Gat
     }
   });
   const set = selectEligible(thread, candidates, 'command_green');
-  return decision(thread, { kind: 'command_green', iteration }, set.eligible.length > 0, candidates.length > 0, set);
+  return decision(thread, { kind: 'command_green', iteration }, set.eligible.length > 0, legacyEligibleCount(thread, candidates, 'command_green') > 0, set);
 }
 
 export function evaluateCriticSignal(thread: LoopThread, iteration: number): GateDecision {
@@ -260,7 +369,7 @@ export function evaluateCriticSignal(thread: LoopThread, iteration: number): Gat
     (artifact) => artifact.type === 'critic_signal' && (artifact.iteration ?? 0) === iteration,
   );
   const set = selectEligible(thread, candidates, 'critic_signal');
-  return decision(thread, { kind: 'critic_signal', iteration }, set.eligible.length > 0, candidates.length > 0, set);
+  return decision(thread, { kind: 'critic_signal', iteration }, set.eligible.length > 0, legacyEligibleCount(thread, candidates, 'critic_signal') > 0, set);
 }
 
 export function evaluateNoNewCritique(thread: LoopThread, iteration: number): GateDecision {
@@ -268,7 +377,17 @@ export function evaluateNoNewCritique(thread: LoopThread, iteration: number): Ga
     (artifact) => artifact.type === 'critique' && (artifact.iteration ?? 0) === iteration,
   );
   const set = selectEligible(thread, candidates, 'artifact');
+  const closureCandidates = thread.artifacts.filter(
+    (artifact) => artifact.type === 'critique_window_closed' && (artifact.iteration ?? 0) === iteration,
+  );
+  const closure = selectEligible(thread, closureCandidates, 'artifact');
   // Invalid/replayed critiques cannot be used to manufacture a negative convergence signal.
-  const strictPassed = set.eligible.length === 0 && set.rejected.length === 0;
-  return decision(thread, { kind: 'no_new_critique_artifacts', iteration }, strictPassed, candidates.length === 0, set);
+  const strictPassed = set.eligible.length === 0
+    && set.rejected.length === 0
+    && closure.eligible.length > 0;
+  return decision(thread, { kind: 'no_new_critique_artifacts', iteration }, strictPassed, candidates.length === 0, {
+    eligible: closure.eligible,
+    accepted_evidence_ids: [...set.accepted_evidence_ids, ...closure.accepted_evidence_ids],
+    rejected: [...set.rejected, ...closure.rejected],
+  });
 }
