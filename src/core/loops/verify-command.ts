@@ -32,6 +32,8 @@ import { artifactsInIteration } from './iteration-engine.js';
 import { evidenceDigest } from './evidence.js';
 import { eligibleArtifactsForPurpose } from './gate-policy.js';
 import { captureWorkspaceDigest } from './workspace-digest.js';
+import { findReservationByAssignmentId } from './attempt-reservation.js';
+import { resolveTurnGenerationChain } from './attempt-generations.js';
 import {
   VERIFY_DEFAULT_TIMEOUT_MS,
   LOOP_ARTIFACT_BODY_MAX_BYTES,
@@ -120,6 +122,15 @@ export type ResolvedVerify = { kind: 'ok'; config: VerifyCommandConfig } | { kin
  * in their assignment worktree; legacy/unbound loops retain the project cwd.
  * Returns `unconfigured` when the loop opted out (no `protocol.verify`).
  */
+function assignmentWorktree(assignmentId: string, cwd: string | undefined): string | undefined {
+  const assignment = loadAssignment(assignmentId, cwd);
+  const reservation = findReservationByAssignmentId(assignmentId, cwd);
+  const generation = reservation
+    ? resolveTurnGenerationChain(cwd ?? reservation.store_root, reservation.turn_id)?.latest_generation
+    : undefined;
+  return generation?.workspace_path ?? assignment?.worktree_path;
+}
+
 export function resolveVerifyCommand(thread: LoopThread, cwd: string | undefined, slotId?: string): ResolvedVerify {
   const cfg = thread.protocol?.verify;
   if (!cfg) return { kind: 'unconfigured' };
@@ -129,8 +140,8 @@ export function resolveVerifyCommand(thread: LoopThread, cwd: string | undefined
     if (slotId && !selected) throw new Error(`verify: slot ${slotId} not found on loop ${thread.id}`);
     const candidates = (selected ? [selected] : thread.slots)
       .filter((slot) => slot.assignment_id)
-      .map((slot) => ({ slot, assignment: loadAssignment(slot.assignment_id!, cwd) }))
-      .filter((entry) => entry.assignment?.worktree_path);
+      .map((slot) => ({ slot, worktree_path: assignmentWorktree(slot.assignment_id!, cwd) }))
+      .filter((entry) => entry.worktree_path);
     if (!selected && candidates.length > 1) {
       throw new Error(`verify: implementation loop ${thread.id} has multiple bound worktrees; pass slot_id to verify one lane deterministically`);
     }
@@ -141,10 +152,10 @@ export function resolveVerifyCommand(thread: LoopThread, cwd: string | undefined
       throw new Error(`verify: slot ${selected.slot_id} is bound to lane ${selected.lane} but has no assignment worktree; dispatch and settle the execute turn first`);
     }
     const candidate = candidates[0];
-    if (selected?.assignment_id && !candidate?.assignment?.worktree_path) {
+    if (selected?.assignment_id && !candidate?.worktree_path) {
       throw new Error(`verify: slot ${selected.slot_id} assignment ${selected.assignment_id} has no worktree_path`);
     }
-    if (candidate?.assignment?.worktree_path) verifyCwd = path.resolve(candidate.assignment.worktree_path);
+    if (candidate?.worktree_path) verifyCwd = path.resolve(candidate.worktree_path);
   }
   return {
     kind: 'ok',
@@ -258,7 +269,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
       const thread = getLoop(input.loop_id, cwd);
       if (!thread) throw new Error(`loop ${input.loop_id} not found`);
       const inferredSlots = thread.kind === 'implementation' && !input.slot_id
-        ? thread.slots.filter((slot) => slot.assignment_id && loadAssignment(slot.assignment_id, cwd)?.worktree_path)
+        ? thread.slots.filter((slot) => slot.assignment_id && assignmentWorktree(slot.assignment_id, cwd))
         : [];
       const selectedSlot = input.slot_id
         ? thread.slots.find((slot) => slot.slot_id === input.slot_id)

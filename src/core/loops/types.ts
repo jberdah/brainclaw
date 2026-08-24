@@ -26,7 +26,7 @@ export type SlotStatus = (typeof SLOT_STATUSES)[number];
 
 export const TERMINAL_SLOT_STATUSES: readonly SlotStatus[] = ['done', 'failed', 'cancelled'] as const;
 
-export const LOOP_REF_KINDS = ['plan', 'sequence', 'claim', 'handoff', 'candidate', 'message'] as const;
+export const LOOP_REF_KINDS = ['plan', 'sequence', 'claim', 'handoff', 'candidate', 'message', 'commit', 'branch'] as const;
 
 export const LoopRefSchema = z.object({
   kind: z.enum(LOOP_REF_KINDS),

@@ -304,6 +304,31 @@ export function executionContractForGeneration(
   if (!reservation.execution_contract || !reservation.capability_snapshot) {
     throw new AttemptGenerationError('invalid_transition', `turn ${reservation.turn_id} has no immutable execution contract`);
   }
+  // Generation zero anchors the already-crossed immutable reservation. Keep
+  // its original serialized contract: on Windows the generation cell stores a
+  // canonicalized (case-folded) workspace path, and rebuilding the contract
+  // from that path changes its hash even though it names the same checkout.
+  // Successor generations still derive a new contract below because their
+  // epoch, run id, and workspace are intentionally different.
+  if (generation.attempt_epoch === 0) {
+    const contract = reservation.execution_contract;
+    if (
+      contract.identity.assignment_id !== generation.assignment_id
+      || contract.identity.run_id !== generation.run_id
+      || canonicalWorkspacePath(contract.workspace_policy.worktree_path ?? contract.workspace_policy.cwd)
+        !== canonicalWorkspacePath(generation.workspace_path)
+    ) {
+      throw new AttemptGenerationError('fenced', 'generation zero diverges from its immutable reservation contract');
+    }
+    const ref = executionContractRef(contract, reservation.capability_snapshot);
+    if (ref.hash !== generation.contract_hash) {
+      throw new AttemptGenerationError(
+        'fenced',
+        `generation zero contract hash ${generation.contract_hash} does not match reservation ${ref.hash}`,
+      );
+    }
+    return { contract, ref };
+  }
   const contract = ExecutionContractSchema.parse({
     ...reservation.execution_contract,
     identity: {

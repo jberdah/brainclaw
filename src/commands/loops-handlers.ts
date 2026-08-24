@@ -132,6 +132,7 @@ function pipelineNextActions(loop: LoopThread): NextAction[] {
   }
   if (loop.kind === 'implementation' && (loop.current_phase === 'handoff_ready' || loop.status === 'completed')) {
     const handoff = [...loop.artifacts].reverse().find((artifact) => artifact.type === 'handoff');
+    const reviewScope = [...new Set(loop.slots.map((slot) => slot.scope_hint?.trim()).filter((scope): scope is string => Boolean(scope)))].join(',');
     return [{
       tool: 'bclaw_coordinate',
       args: {
@@ -140,6 +141,10 @@ function pipelineNextActions(loop: LoopThread): NextAction[] {
           ? `Review implementation loop ${loop.id}; handoff ${handoff.ref.kind}:${handoff.ref.id}`
           : `Review implementation loop ${loop.id} (${loop.title})`,
         targetAgents: ['<reviewer>'],
+        ...(reviewScope ? { scope: reviewScope } : {}),
+        ...(handoff?.ref && (handoff.ref.kind === 'commit' || handoff.ref.kind === 'branch')
+          ? { ref: handoff.ref.id }
+          : {}),
         linked: { source_loop_id: loop.id, plan_ids: loop.linked?.plan_ids, sequence_ids: loop.linked?.sequence_ids },
       },
       when: 'implementation evidence is handoff-ready',
