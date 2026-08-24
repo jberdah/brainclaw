@@ -314,6 +314,25 @@ export function resolveWorktreePath(mainWorktreePath: string, branchName: string
 }
 
 /**
+ * Codex's Windows workspace-write sandbox runs as a member of the local
+ * CodexSandboxUsers group. Brainclaw worktrees live outside the project root,
+ * so the sandbox bootstrap does not grant them write access automatically.
+ * Grant Modify only inside the isolated worktree; the linked git metadata stays
+ * outside this tree and therefore remains protected from sandboxed commits.
+ */
+export function grantCodexSandboxWorktreeAccess(worktreePath: string, agent?: string): string | undefined {
+  if (process.platform !== 'win32' || agent !== 'codex') return undefined;
+  const result = spawnSync(
+    'icacls',
+    [worktreePath, '/grant', 'CodexSandboxUsers:(OI)(CI)M'],
+    { encoding: 'utf-8', windowsHide: true },
+  );
+  if (result.status === 0) return undefined;
+  const reason = (result.stderr || result.stdout || result.error?.message || `exit ${result.status}`).trim();
+  return `Codex sandbox ACL grant failed for ${worktreePath}: ${reason}; the worker may be unable to edit its worktree`;
+}
+
+/**
  * Default timeout for quick git metadata queries (rev-parse, status, branch…).
  * `git worktree add` is the exception — it materialises the entire working tree
  * and on a large repo / Windows (Defender) easily exceeds this, so it passes an
@@ -984,6 +1003,8 @@ export function createWorktree(
       }
       logger.warn(`[worktree] adopted existing worktree ${targetPath} (branch ${branchName}) and re-pointed it to ${adoptBase}`);
       refreshSidecarBaseSha(targetPath, mainWorktreePath, adoptBase);
+      const aclWarning = grantCodexSandboxWorktreeAccess(targetPath, options.agent);
+      if (aclWarning) logger.warn(`[worktree] ${aclWarning}`);
       return targetPath;
     }
     throw new Error(
@@ -1052,6 +1073,9 @@ export function createWorktree(
   if (!result.ok) {
     throw new Error(`git worktree add failed: ${result.stderr.trim()}`);
   }
+
+  const aclWarning = grantCodexSandboxWorktreeAccess(targetPath, options.agent);
+  if (aclWarning) logger.warn(`[worktree] ${aclWarning}`);
 
   // After successful worktree creation, add to git safe.directory for cross-user agents (e.g. Codex)
   try {
