@@ -276,13 +276,11 @@ describe('P0C bclaw_loop(intent="bind") facade — engine-only handler wiring', 
     const handled = await handleBclawLoop({
       args: { intent: 'advance', loop_id: loopId, to_phase: 'handoff_ready', force: true, agent: 'coord' }, cwd,
     });
-    assert.equal(handled.response.next_actions?.[0]?.tool, 'bclaw_coordinate');
-    assert.equal(handled.response.next_actions?.[0]?.args?.intent, 'review');
-    assert.equal(handled.response.next_actions?.[0]?.args?.open_loop, true);
-    assert.equal(
-      (handled.response.next_actions?.[0]?.args?.linked as { source_loop_id?: string })?.source_loop_id,
-      loopId,
-    );
+    assert.equal(handled.response.next_actions?.[0]?.tool, 'bclaw_loop');
+    assert.equal(handled.response.next_actions?.[0]?.args?.intent, 'continue');
+    assert.equal(handled.response.next_actions?.[0]?.args?.loop_id, loopId);
+    assert.equal(handled.response.next_actions?.[0]?.args?.autonomy_mode, 'autonomous');
+    assert.equal(handled.response.next_actions?.[0]?.args?.risk, 'normal');
   });
 
   it('routes synthesis-owned verification through the governed continuation action', async () => {
