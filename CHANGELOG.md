@@ -7,6 +7,30 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.1] — 2026-08-24
+
+The continuation-authority patch: transitions between Loop Engine protocols
+are now persisted, policy-gated operations instead of ambient follow-up calls.
+
+### Added
+
+- **Persisted `bclaw_loop(intent="continue")` authority.** Ideation can advance
+  into implementation and a completed implementation can advance into review
+  through a deterministic continuation record bound to the source artifact,
+  action digest, iteration, and policy version.
+- **Explicit autonomy outcomes.** Continuations persist `AUTO`,
+  `REQUIRE_APPROVAL`, or `DENY`; approval creates a targeted ActionRequired and
+  resumes the same continuation, while rejection and expiry fail closed.
+
+### Fixed
+
+- **Continuation retries are exactly once.** A retry after the downstream loop
+  was created but before its response was delivered reuses that loop through a
+  deterministic continuation key instead of creating a duplicate.
+- **Implementation review stays independent.** Reviewer selection uses a
+  registered, spawnable review-capable identity that did not occupy an
+  implementation slot, and fails closed when no such reviewer exists.
+
 ## [1.28.0] — 2026-08-24
 
 The implementation-loop release: Brainclaw now carries an idea all the way

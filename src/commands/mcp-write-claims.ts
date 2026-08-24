@@ -1068,14 +1068,71 @@ export async function handleBclawAssignmentAction(payload: McpToolExecutionPaylo
       return { response: createToolErrorResponse('trust_error', `Agent '${resolved.identity!.agent_name}' cannot resolve its own action. A supervisor or different agent must respond.`) };
     }
 
-    const action = resolveActionRequired(actionId, {
-      outcome: outcome as 'resolved' | 'rejected' | 'cancelled',
-      text: typeof args.text === 'string' ? args.text : undefined,
-      payload: args.payload && typeof args.payload === 'object' ? args.payload as Record<string, unknown> : undefined,
-      responded_by: resolved.identity!.agent_name,
-      responded_by_id: resolved.identity!.agent_id,
-      session_id: connectionSessionId ?? 'unknown',
-    }, cwd);
+    const typedOutcome = outcome as 'resolved' | 'rejected' | 'cancelled';
+    // Continuation approvals are safe to replay. This matters when the first
+    // response is lost after the downstream loop was created: the supervisor
+    // can submit the same decision again and observe the same continuation.
+    const continuationReplay = pendingAction?.target?.kind === 'continuation'
+      && pendingAction.status === typedOutcome;
+    const action = continuationReplay
+      ? pendingAction
+      : resolveActionRequired(actionId, {
+        outcome: typedOutcome,
+        text: typeof args.text === 'string' ? args.text : undefined,
+        payload: args.payload && typeof args.payload === 'object' ? args.payload as Record<string, unknown> : undefined,
+        responded_by: resolved.identity!.agent_name,
+        responded_by_id: resolved.identity!.agent_id,
+        session_id: connectionSessionId ?? 'unknown',
+      }, cwd);
+
+    let continuationResult: Record<string, unknown> | undefined;
+    if (action.target?.kind === 'continuation') {
+      const { denyContinuation, resumeApprovedContinuation } = await import('../core/loops/continuation.js');
+      if (outcome === 'resolved') {
+        const { executeContinuationPublicAction, handleBclawLoop } = await import('./loops-handlers.js');
+        const resumed = await resumeApprovedContinuation(
+          action.target.continuation_id,
+          action.id,
+          resolved.identity!.agent_name,
+          resolved.identity!.agent_id,
+          (record) => executeContinuationPublicAction(record, {
+            cwd,
+            actor: resolved.identity!.agent_name,
+            agentId: resolved.identity!.agent_id,
+            sessionId: connectionSessionId,
+          }),
+          cwd,
+        );
+        const downstreamId = resumed.record.downstream?.id;
+        let bind: unknown;
+        if (downstreamId) {
+          const { getLoop } = await import('../core/loops/store.js');
+          if (getLoop(downstreamId, cwd)?.kind === 'implementation') {
+            const handled = await handleBclawLoop({
+              args: {
+                intent: 'bind', loop_id: downstreamId,
+                agent: resolved.identity!.agent_name, agentId: resolved.identity!.agent_id,
+              },
+              cwd,
+              defaultActor: resolved.identity!.agent_name,
+              sessionId: connectionSessionId,
+            });
+            if (handled.response.status !== 'ok') throw new Error(handled.response.error ?? handled.summary);
+            bind = handled.response.result;
+          }
+        }
+        continuationResult = { continuation: resumed.record, bind };
+      } else {
+        const denied = denyContinuation(
+          action.target.continuation_id,
+          `approval ${action.id} ${outcome}`,
+          resolved.identity!.agent_name,
+          resolved.identity!.agent_id,
+          cwd,
+        );
+        continuationResult = { continuation: denied };
+      }
+    }
 
     return {
       response: {
@@ -1083,10 +1140,12 @@ export async function handleBclawAssignmentAction(payload: McpToolExecutionPaylo
         structuredContent: {
           action_id: action.id,
           assignment_id: action.assignment_id,
+          target: action.target,
           run_id: action.run_id,
           status: action.status,
           resolved_at: action.resolved_at,
           response: action.response,
+          ...(continuationResult ? { continuation_result: continuationResult } : {}),
         },
       },
     };

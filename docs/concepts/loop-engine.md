@@ -363,6 +363,7 @@ Additional shared and engine-owned actions complete the lifecycle:
 - **request_input** / **provide_input** — bounded, evidence-backed operator clarification usable by any protocol.
 - **bind** — implementation-loop engine action that validates the linked sequence and advances to `execute`; it never launches a worker.
 - **verify** — implementation/debug engine action that runs the opener-configured command outside the loop lock, then records a verification-attested report.
+- **continue** — orchestration action above the Loop engine. It evaluates an attested `next_action`, persists `AUTO | REQUIRE_APPROVAL | DENY`, and applies supported actions through the same public `open`/`bind` handlers.
 
 Artifact authority is sealed at these verb boundaries. `produced_by` is
 derived from the authenticated slot/engine/coordinator context. A narrative
@@ -396,6 +397,7 @@ type BclawLoopInput = BclawLoopCallerEnvelope & (
   | { intent: 'close';         loop_id: LoopId; status: 'completed' | 'cancelled' | 'blocked'; reason?: string; expected_version?: number }
   | { intent: 'verify';        loop_id: LoopId }
   | { intent: 'bind';          loop_id: LoopId; dry_run?: boolean; lanes?: string[]; auto_execute?: boolean; model?: string; max_assignments?: number }
+  | { intent: 'continue';      loop_id: LoopId; action_index?: number; autonomy_mode?: 'autonomous' | 'require_approval' | 'deny'; risk?: 'normal' | 'protected' }
   | { intent: 'request_input'; loop_id: LoopId; slot_id: SlotId; phase: string; question_text: string; evidence: string[]; suggested_default?: string; options?: OperatorQuestionOption[]; pause_scope: 'slot' | 'loop'; on_timeout: 'use_default' | 'cancel_loop' | 'continue_incomplete'; timeout_at?: string; expected_version?: number }
   | { intent: 'provide_input'; loop_id: LoopId; replies_to: string; resolved_via: 'answer' | 'choose' | 'skip' | 'timeout_default'; answer_text?: string; chosen_option_id?: string; by?: 'operator' | 'system'; expected_version?: number }
   | { intent: 'get';           loop_id: LoopId; include_events?: boolean }
@@ -469,6 +471,29 @@ The shared lifecycle verbs are `turn`, `complete_turn`, `advance`,
 `add_artifact`, `pause`, `resume`, and `close`. Implementation loops additionally
 use engine-only `bind` to validate their linked sequence and enter `execute`,
 then `turn(dispatch:true)` for worker slots; `verify` runs their declared command.
+
+### Persisted continuation authority
+
+An accepted ideation synthesis and an attested implementation handoff no
+longer expose ungoverned downstream mutations. Their `next_actions` point to
+`bclaw_loop(intent="continue")`. The
+continuation record binds the source loop, iteration, sealed artifact digest,
+canonical action hash and policy version into a deterministic key. It is
+written before the downstream mutation.
+
+For Ideation→Implementation, `AUTO` invokes the ordinary public `open` handler
+with that key in `linked.continuation_key`, then invokes engine-only `bind`.
+For Implementation→Review, it deterministically selects a project-registered,
+spawnable review-capable identity that did not occupy an implementation slot,
+then invokes the ordinary public `bclaw_coordinate(intent="review",
+open_loop=true)` path. If no independent reviewer exists, it fails closed.
+A retry first scans existing loops for the key, so a crash after either public
+mutation but before the response reuses the same loop. A live concurrent owner
+is observed rather than stolen.
+`REQUIRE_APPROVAL` creates an `ActionRequired` whose discriminated target is
+the continuation; approval resumes the same record, while rejection or expiry
+persists `DENY`. Unsupported actions, placeholders, missing evidence and
+ambiguous downstreams fail closed.
 
 ### Clarification is a cross-cutting primitive
 

@@ -6,6 +6,10 @@ import { dispatchLoopTurn } from '../core/loop-turn-dispatch.js';
 import { findReservationByRunId } from '../core/loops/attempt-reservation.js';
 import { runVerify } from '../core/loops/verify-command.js';
 import { runImplBind } from '../core/loops/impl-bind.js';
+import { loadSequence } from '../core/sequence.js';
+import { createActionRequired, loadActionRequired } from '../core/actions.js';
+import { selectImplementationReviewer } from '../core/reviewer-policy.js';
+import { handleBclawCoordinate } from './mcp-write-coordination.js';
 import {
   add_artifact,
   advance,
@@ -31,8 +35,12 @@ import {
   turn,
   VersionConflictError,
   withLoopLock,
+  artifactEvidenceDigest,
+  attachContinuationActionRequired,
+  ensureContinuation,
   type LoopEvent,
   type LoopThread,
+  type ContinuationRecord,
 } from '../core/loops/index.js';
 import {
   BclawLoopRequestSchema,
@@ -116,12 +124,10 @@ function pipelineNextActions(loop: LoopThread): NextAction[] {
       return [{
         tool: 'bclaw_loop',
         args: {
-          intent: 'open', kind: 'implementation', title: `Implement ${loop.title}`,
-          goal: loop.goal, linked: { plan_ids: planIds, sequence_ids: sequenceIds, source_loop_id: loop.id },
-          verify: draft.implementation_verify,
-          slots: [{ role: 'implementer' }], allow_orphan: true,
+          intent: 'continue', loop_id: loop.id, action_index: 0,
+          autonomy_mode: 'autonomous', risk: 'normal',
         },
-        when: 'start implementation from the accepted synthesis',
+        when: 'evaluate and apply the accepted synthesis through persisted continuation policy',
       }];
     }
     return [{
@@ -130,24 +136,80 @@ function pipelineNextActions(loop: LoopThread): NextAction[] {
       when: 'materialize the synthesis before opening its implementation loop',
     }];
   }
+  if (loop.kind === 'implementation' && loop.current_phase === 'execute' && loop.status === 'open') {
+    return loop.slots
+      .filter((slot) => slot.status === 'open')
+      .map((slot) => ({
+        tool: 'bclaw_loop',
+        args: {
+          intent: 'turn', loop_id: loop.id, slot_id: slot.slot_id,
+          input: loop.goal ?? loop.title, dispatch: true,
+        },
+        when: `dispatch implementation lane ${slot.lane ?? slot.role} through AttemptAuthority`,
+      }));
+  }
+  if (loop.kind === 'implementation' && (loop.current_phase === 'handoff_ready' || loop.status === 'completed')) {
+    return [{
+      tool: 'bclaw_loop',
+      args: {
+        intent: 'continue', loop_id: loop.id, action_index: 0,
+        autonomy_mode: 'autonomous', risk: 'normal',
+      },
+      when: 'evaluate and apply the attested handoff through persisted continuation policy',
+    }];
+  }
+  return [];
+}
+
+/** Concrete action evaluated by continuation policy; never exposed as an ungoverned hint. */
+function proposedPipelineActions(loop: LoopThread, cwd?: string): NextAction[] {
+  if (loop.kind === 'ideation') {
+    const draft = [...loop.artifacts].reverse().find((artifact) => artifact.type === 'plan_draft');
+    const planIds = loop.linked?.plan_ids ?? [];
+    const sequenceIds = loop.linked?.sequence_ids ?? [];
+    if (!draft || planIds.length === 0 || sequenceIds.length !== 1) return [];
+    const sequence = loadSequence(sequenceIds[0]!, cwd);
+    const lanes = [...new Set(sequence.items.map((item) => item.lane?.trim() || 'default'))].sort();
+    const sourceDigest = artifactEvidenceDigest(draft);
+    return [{
+      tool: 'bclaw_loop',
+      args: {
+        intent: 'open', kind: 'implementation', title: `Implement ${loop.title}`,
+        goal: loop.goal ?? loop.title,
+        linked: {
+          plan_ids: planIds, sequence_ids: sequenceIds, source_loop_id: loop.id,
+          source_artifact_id: draft.artifact_id, source_artifact_digest: sourceDigest,
+        },
+        verify: draft.implementation_verify,
+        slots: lanes.map((lane) => ({ role: 'implementer', lane })),
+        allow_orphan: true,
+      },
+      when: 'start implementation from the accepted synthesis',
+    }];
+  }
   if (loop.kind === 'implementation' && (loop.current_phase === 'handoff_ready' || loop.status === 'completed')) {
     const handoff = [...loop.artifacts].reverse().find((artifact) => artifact.type === 'handoff');
+    if (!handoff?.ref) return [];
+    const reviewer = selectImplementationReviewer(loop, cwd);
     const reviewScope = [...new Set(loop.slots.map((slot) => slot.scope_hint?.trim()).filter((scope): scope is string => Boolean(scope)))].join(',');
+    const sourceDigest = artifactEvidenceDigest(handoff);
     return [{
       tool: 'bclaw_coordinate',
       args: {
-        intent: 'review', open_loop: true,
-        task: handoff?.ref
-          ? `Review implementation loop ${loop.id}; handoff ${handoff.ref.kind}:${handoff.ref.id}`
-          : `Review implementation loop ${loop.id} (${loop.title})`,
-        targetAgents: ['<reviewer>'],
+        intent: 'review', open_loop: true, review_mode: 'asymmetric',
+        task: `Review implementation loop ${loop.id}; handoff ${handoff.ref.kind}:${handoff.ref.id}`,
+        targetAgents: [reviewer.agent],
         ...(reviewScope ? { scope: reviewScope } : {}),
-        ...(handoff?.ref && (handoff.ref.kind === 'commit' || handoff.ref.kind === 'branch')
-          ? { ref: handoff.ref.id }
-          : {}),
-        linked: { source_loop_id: loop.id, plan_ids: loop.linked?.plan_ids, sequence_ids: loop.linked?.sequence_ids },
+        ...((handoff.ref.kind === 'commit' || handoff.ref.kind === 'branch') ? { ref: handoff.ref.id } : {}),
+        linked: {
+          source_loop_id: loop.id,
+          source_artifact_id: handoff.artifact_id,
+          source_artifact_digest: sourceDigest,
+          plan_ids: loop.linked?.plan_ids,
+          sequence_ids: loop.linked?.sequence_ids,
+        },
       },
-      when: 'implementation evidence is handoff-ready',
+      when: `reviewer ${reviewer.agent} selected by ${reviewer.policy_version}`,
     }];
   }
   return [];
@@ -331,6 +393,62 @@ function trySweepLoopTimeouts(loop_id: string, cwd: string | undefined): void {
   try {
     sweepPauseTimeouts(loop_id, undefined, cwd);
   } catch { /* best-effort: never block facade on sweep errors */ }
+}
+
+/** Execute a persisted continuation through the same public handler used by MCP/CLI callers. */
+export async function executeContinuationPublicAction(
+  record: ContinuationRecord,
+  options: { cwd?: string; actor: string; agentId: string; sessionId?: string },
+): Promise<{ kind: 'loop'; id: string }> {
+  const args = record.action.args ?? {};
+  const linked = (args.linked && typeof args.linked === 'object' ? args.linked : {}) as Record<string, unknown>;
+  const publicArgs = {
+    ...args,
+    linked: { ...linked, continuation_key: record.continuation_key },
+    client_request_id: `ctn_${record.continuation_key}`,
+    agent: options.actor,
+    agentId: options.agentId,
+  };
+  let downstreamId: string | undefined;
+  if (record.action.tool === 'bclaw_loop') {
+    const opened = await handleBclawLoop({
+      args: publicArgs, cwd: options.cwd, defaultActor: options.actor, sessionId: options.sessionId,
+    });
+    if (opened.response.status !== 'ok') throw new Error(opened.response.error ?? opened.summary);
+    downstreamId = (opened.response.result as { loop?: LoopThread }).loop?.id;
+  } else if (record.action.tool === 'bclaw_coordinate') {
+    const coordinateCwd = options.cwd ?? process.cwd();
+    const coordinated = await handleBclawCoordinate(publicArgs, {
+      cwd: coordinateCwd,
+      connectionSessionId: options.sessionId,
+      // The persisted source loop is an explicit store selector. Preserve that
+      // provenance so a multi-project workspace cannot reinterpret this as a
+      // bare-cwd review and reject or misroute the downstream loop.
+      effectiveScope: {
+        cwd: coordinateCwd,
+        active_source: 'explicit',
+        resolved_project: { path: coordinateCwd },
+      },
+    });
+    if (coordinated.response.isError) {
+      const details = coordinated.response.structuredContent as { error?: string; message?: string } | undefined;
+      throw new Error(details?.error ?? details?.message ?? 'continuation_coordinate_failed');
+    }
+    const facade = coordinated.response.structuredContent as {
+      status?: string;
+      error?: string;
+      result?: { loop_id?: string };
+    } | undefined;
+    if (facade?.status === 'error') throw new Error(facade.error ?? 'continuation_coordinate_failed');
+    downstreamId = facade?.result?.loop_id;
+  } else {
+    throw new Error(`continuation_action_unsupported: ${record.action.tool}`);
+  }
+  if (!downstreamId) throw new Error('continuation_open_missing_loop');
+  if (process.env.BRAINCLAW_TEST_FAULT_CONTINUATION_AFTER_OPEN === '1') {
+    throw new Error('fault_injection: continuation_after_open');
+  }
+  return { kind: 'loop', id: downstreamId };
 }
 
 export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<HandleBclawLoopResult> {
@@ -850,6 +968,122 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
           [],
           Date.now() - startMs,
           summary,
+        );
+      }
+      case 'continue': {
+        const source = getLoop(req.loop_id, options.cwd);
+        if (!source) {
+          return errorResponse('continue', 'not_found', `unknown loop_id ${req.loop_id}`, Date.now() - startMs);
+        }
+        const actions = proposedPipelineActions(source, options.cwd);
+        const action = actions[req.action_index];
+        if (!action) {
+          return errorResponse(
+            'continue',
+            'continuation_unavailable',
+            `no executable continuation action ${req.action_index} for ${source.id}`,
+            Date.now() - startMs,
+          );
+        }
+        const sourceArtifactId = (action.args?.linked as { source_artifact_id?: string } | undefined)?.source_artifact_id;
+        const sourceArtifact = source.artifacts.find((artifact) => artifact.artifact_id === sourceArtifactId);
+        if (!sourceArtifact) {
+          return errorResponse('continue', 'continuation_source_missing', 'source continuation artifact disappeared', Date.now() - startMs);
+        }
+        const ensured = await ensureContinuation({
+          source_loop: source,
+          source_artifact: sourceArtifact,
+          action,
+          action_index: req.action_index,
+          autonomy_mode: req.autonomy_mode,
+          risk: req.risk,
+          actor,
+          actor_id: agentId,
+          execute: (record) => executeContinuationPublicAction(record, {
+            cwd: options.cwd, actor, agentId, sessionId: options.sessionId,
+          }),
+        }, options.cwd);
+
+        let continuation = ensured.record;
+        if (continuation.state === 'approval_required') {
+          let approval = continuation.action_required_id
+            ? loadActionRequired(continuation.action_required_id, options.cwd)
+            : undefined;
+          if (!approval) {
+            approval = createActionRequired({
+              target: { kind: 'continuation', continuation_id: continuation.id },
+              plan_id: source.linked?.plan_ids?.[0],
+              sequence_id: source.linked?.sequence_ids?.[0],
+              agent: actor,
+              agent_id: agentId,
+              session_id: options.sessionId,
+              kind: 'plan_approval',
+              scope: source.goal,
+              title: `Approve continuation from ${source.id}`,
+              prompt: continuation.reason.join('; '),
+              tags: ['loop-engine', 'continuation', 'approval-required'],
+            }, options.cwd);
+            continuation = attachContinuationActionRequired(continuation.id, approval.id, actor, agentId, options.cwd);
+          }
+          const handled = successResponse(
+            'continue',
+            { continuation, action_required: approval },
+            [{ type: 'continuation', id: continuation.id }, { type: 'action', id: approval.id }],
+            [{ action: 'create', entity: 'action', id: approval.id }],
+            [],
+            Date.now() - startMs,
+            `continuation ${continuation.id} requires approval ${approval.id}`,
+          );
+          handled.response.next_actions = [{
+            tool: 'bclaw_assignment_action',
+            args: { action_id: approval.id, outcome: 'resolved' },
+            when: 'a different trusted supervisor approves this continuation',
+          }];
+          return handled;
+        }
+        if (continuation.state === 'denied') {
+          return successResponse(
+            'continue', { continuation }, [{ type: 'continuation', id: continuation.id }], [], [],
+            Date.now() - startMs, `continuation ${continuation.id} denied: ${continuation.reason.join('; ')}`,
+          );
+        }
+        if (ensured.executing_elsewhere) {
+          const handled = successResponse(
+            'continue', { continuation, executing_elsewhere: true }, [{ type: 'continuation', id: continuation.id }], [], [],
+            Date.now() - startMs, `continuation ${continuation.id} is applying in another live process`,
+          );
+          handled.response.next_actions = [{
+            tool: 'bclaw_loop',
+            args: { intent: 'continue', loop_id: source.id, action_index: req.action_index },
+            when: 'retry after the current continuation owner settles',
+          }];
+          return handled;
+        }
+        const downstreamId = continuation.downstream?.id;
+        if (!downstreamId) throw new Error('continuation_applied_without_downstream');
+        let loop = getLoop(downstreamId, options.cwd);
+        if (!loop) throw new Error('continuation_downstream_disappeared');
+        let bind: unknown;
+        if (loop.kind === 'implementation') {
+          const bound = await handleBclawLoop({
+            args: { intent: 'bind', loop_id: downstreamId, agent: actor, agentId },
+            cwd: options.cwd,
+            defaultActor: actor,
+            sessionId: options.sessionId,
+          });
+          if (bound.response.status !== 'ok') throw new Error(bound.response.error ?? bound.summary);
+          bind = bound.response.result;
+          loop = getLoop(downstreamId, options.cwd);
+          if (!loop) throw new Error('continuation_downstream_disappeared');
+        }
+        return successResponse(
+          'continue',
+          { loop, continuation, ...(bind ? { bind } : {}), reused: ensured.reused, next_expected: computeNextExpected(loop) },
+          [{ type: 'continuation', id: continuation.id }, loopArtifactEntry(loop.id)],
+          [{ action: 'update', entity: 'continuation', id: continuation.id }, sideEffectUpdate('loop', loop.id)],
+          [],
+          Date.now() - startMs,
+          `continuation ${continuation.id} applied to ${loop.id} phase=${loop.current_phase}`,
         );
       }
       case 'bind': {

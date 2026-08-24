@@ -2,7 +2,7 @@ import { memoryExists } from '../core/io.js';
 import { handleBclawLoop } from './loops-handlers.js';
 import type { NextExpectedHint } from '../core/loops/index.js';
 
-export type LoopSubcommand = 'turn' | 'complete-turn' | 'takeover' | 'advance' | 'add-artifact';
+export type LoopSubcommand = 'turn' | 'complete-turn' | 'takeover' | 'advance' | 'add-artifact' | 'continue';
 
 export interface LoopCommandArgs {
   loop_id?: string;
@@ -38,6 +38,9 @@ export interface LoopCommandOptions {
   nextWorkspacePath?: string;
   mode?: 'takeover' | 'retry';
   agent?: string;
+  actionIndex?: string | number;
+  autonomyMode?: 'autonomous' | 'require_approval' | 'deny';
+  risk?: 'normal' | 'protected';
 }
 
 export interface LoopCommandResult {
@@ -208,6 +211,18 @@ function buildRequest(
           ref: parseOptionalRef(opts.ref, opts),
         },
       };
+
+    case 'continue': {
+      const actionIndex = opts.actionIndex === undefined ? 0 : Number(opts.actionIndex);
+      if (!Number.isInteger(actionIndex) || actionIndex < 0) fail('--action-index must be a non-negative integer', 1, opts);
+      return {
+        intent: 'continue',
+        loop_id: loopId,
+        action_index: actionIndex,
+        autonomy_mode: opts.autonomyMode ?? 'autonomous',
+        risk: opts.risk ?? 'normal',
+      };
+    }
   }
 }
 

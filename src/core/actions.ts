@@ -10,6 +10,7 @@ import {
   type ActionRequiredKind,
   type ActionRequiredResponse,
   type ActionRequiredStatus,
+  type ActionRequiredTarget,
 } from './schema.js';
 import { saveVersionedJsonFile } from './migration.js';
 import { appendAuditEntry } from './audit.js';
@@ -17,6 +18,7 @@ import { emitRegistryPostImage, registryFaultPoint } from './events/registry-pos
 import { createRuntimeEvent } from './events.js';
 import { loadAssignment, transitionAssignment } from './assignments.js';
 import { loadAgentRun, transitionAgentRun } from './agentruns.js';
+import { denyContinuation } from './loops/continuation.js';
 
 function actionsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('actions', cwd ?? process.cwd(), mode);
@@ -111,7 +113,7 @@ function expireStaleActions(actions: ActionRequired[], cwd?: string): ActionRequ
         }
       } catch { /* best-effort */ }
       try {
-        const assignment = loadAssignment(action.assignment_id, cwd);
+        const assignment = action.assignment_id ? loadAssignment(action.assignment_id, cwd) : undefined;
         if (assignment && assignment.status === 'blocked') {
           transitionAssignment(assignment.id, 'failed', {
             actor: action.agent,
@@ -120,6 +122,11 @@ function expireStaleActions(actions: ActionRequired[], cwd?: string): ActionRequ
             status_reason: expiryReason,
             error_message: expiryReason,
           }, cwd);
+        }
+      } catch { /* best-effort */ }
+      try {
+        if (action.target?.kind === 'continuation') {
+          denyContinuation(action.target.continuation_id, `approval ${action.id} expired`, action.agent, action.agent_id, cwd);
         }
       } catch { /* best-effort */ }
       try {
@@ -199,7 +206,8 @@ function saveActionRequired(action: ActionRequired, cwd?: string): void {
 }
 
 export interface CreateActionRequiredOptions {
-  assignment_id: string;
+  assignment_id?: string;
+  target?: ActionRequiredTarget;
   run_id?: string;
   claim_id?: string;
   message_id?: string;
@@ -221,11 +229,15 @@ export interface CreateActionRequiredOptions {
 export function createActionRequired(options: CreateActionRequiredOptions, cwd?: string): ActionRequired {
   const generated = generateIdWithLabel('actions', cwd);
   const now = nowISO();
+  const target = options.target ?? (options.assignment_id
+    ? { kind: 'assignment' as const, assignment_id: options.assignment_id }
+    : undefined);
   const action: ActionRequired = ActionRequiredSchema.parse({
     schema_version: 1,
     id: generated.id,
     short_label: generated.short_label,
     assignment_id: options.assignment_id,
+    target,
     run_id: options.run_id,
     claim_id: options.claim_id,
     message_id: options.message_id,
@@ -254,7 +266,7 @@ export function createActionRequired(options: CreateActionRequiredOptions, cwd?:
     action: 'create',
     item_id: action.id,
     item_type: 'state',
-    after: { kind: action.kind, assignment_id: action.assignment_id, run_id: action.run_id },
+    after: { kind: action.kind, target: action.target, assignment_id: action.assignment_id, run_id: action.run_id },
     scope: action.scope,
     session_id: action.session_id,
   }, cwd);
@@ -318,6 +330,16 @@ export function resolveActionRequired(id: string, options: ResolveActionRequired
     };
     saveActionRequired(action, cwd);
 
+    if (action.target?.kind === 'continuation' && options.outcome !== 'resolved') {
+      denyContinuation(
+        action.target.continuation_id,
+        `approval ${action.id} ${options.outcome}`,
+        options.responded_by,
+        options.responded_by_id,
+        cwd,
+      );
+    }
+
     appendAuditEntry({
       actor: options.responded_by,
       actor_id: options.responded_by_id,
@@ -352,7 +374,7 @@ export function resolveActionRequired(id: string, options: ResolveActionRequired
       }
     }
 
-    const assignment = loadAssignment(action.assignment_id, cwd);
+    const assignment = action.assignment_id ? loadAssignment(action.assignment_id, cwd) : undefined;
     if (assignment) {
       if (options.outcome === 'resolved' && assignment.status === 'blocked') {
         transitionAssignment(assignment.id, 'started', {

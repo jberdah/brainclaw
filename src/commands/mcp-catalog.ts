@@ -888,7 +888,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_loop',
-    description: 'Loop engine facade: open/turn/complete_turn/takeover/advance/add_artifact/pause/resume/close/verify/request_input/provide_input/get/list multi-turn work loops (review, ideation, implementation, research, debug). Direct open requires allow_orphan=true because the caller owns subsequent dispatch. `takeover` fences one physical run and arms a fresh generation; it never changes protocol gates.',
+    description: 'Loop engine facade: open/turn/complete_turn/takeover/advance/add_artifact/pause/resume/close/verify/bind/continue/request_input/provide_input/get/list multi-turn work loops (review, ideation, implementation, research, debug). `continue` evaluates and persists a cross-loop continuation, then invokes the same public open or coordinate-review path; implementation downstreams additionally bind. Direct open requires allow_orphan=true because the caller owns subsequent dispatch.',
     // schemaSource is informational for now — grep target so future migrators
     // can locate zod-derived tools quickly. The parity test in
     // tests/unit/mcp-zod-parity.test.ts hard-codes its (tool, zod-schema)
@@ -906,8 +906,8 @@ const MCP_WRITE_TOOLS = [
       properties: {
         intent: {
           type: 'string',
-          enum: ['open', 'get', 'list', 'turn', 'complete_turn', 'takeover', 'advance', 'add_artifact', 'pause', 'resume', 'close', 'verify', 'bind', 'request_input', 'provide_input'],
-          description: 'Loop lifecycle intent. Review/ideation normally start via bclaw_coordinate; implementation/research/debug may use open with allow_orphan=true and then explicitly bind/turn/dispatch. `verify` runs the configured verification; request_input/provide_input are cross-kind clarification primitives.',
+          enum: ['open', 'get', 'list', 'turn', 'complete_turn', 'takeover', 'advance', 'add_artifact', 'pause', 'resume', 'close', 'verify', 'bind', 'continue', 'request_input', 'provide_input'],
+          description: 'Loop lifecycle intent. `continue` evaluates one next_action through persisted continuation policy and applies it through public open/bind semantics. Review/ideation normally start via bclaw_coordinate; implementation/research/debug may use open with allow_orphan=true and then explicitly bind/turn/dispatch.',
         },
         loop_id: { type: 'string', description: 'Target loop id (lop_…). Required for every intent except open and list.' },
         kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
@@ -950,6 +950,9 @@ const MCP_WRITE_TOOLS = [
         model: { type: 'string', description: 'turn dispatch: model override. Deprecated and ignored for engine-only bind.' },
         target_agents: { type: 'array', items: { type: 'string' }, description: 'turn dispatch: deterministic capability candidate pool used when the slot has no frozen agent.' },
         max_assignments: { type: 'number', description: 'Deprecated bind launch option retained for compatibility and ignored.' },
+        action_index: { type: 'number', description: 'continue: zero-based proposed next_action index (default 0).' },
+        autonomy_mode: { type: 'string', enum: ['autonomous', 'require_approval', 'deny'], description: 'continue: policy mode. require_approval creates ActionRequired; deny persists a terminal denial.' },
+        risk: { type: 'string', enum: ['normal', 'protected'], description: 'continue: protected risk always requires approval.' },
         to_phase: { type: 'string', description: 'advance: explicit target phase (otherwise the next phase).' },
         force: { type: 'boolean', description: 'advance: allow going backwards (increments iteration_count).' },
         reason: { type: 'string', description: 'advance / pause / close: optional reason string.' },

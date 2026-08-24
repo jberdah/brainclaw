@@ -266,6 +266,20 @@ export const BclawLoopBindSchema = z.object({
 });
 
 /**
+ * Evaluate and apply one persisted cross-loop continuation. This is an
+ * orchestration intent: the downstream mutation still traverses the public
+ * `open` and `bind` handlers, never a private Loop-store shortcut.
+ */
+export const BclawLoopContinueSchema = z.object({
+  intent: z.literal('continue'),
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  action_index: z.number().int().nonnegative().default(0),
+  autonomy_mode: z.enum(['autonomous', 'require_approval', 'deny']).default('autonomous'),
+  risk: z.enum(['normal', 'protected']).default('normal'),
+  ...CallerEnvelopeFields,
+});
+
+/**
  * pln#508 step 2 — `bclaw_loop(intent='request_input')`.
  *
  * A slot pauses on an operator question. The handler generates a fresh
@@ -339,6 +353,7 @@ export const BclawLoopRequestSchema = z.discriminatedUnion('intent', [
   BclawLoopCloseSchema,
   BclawLoopVerifySchema,
   BclawLoopBindSchema,
+  BclawLoopContinueSchema,
   BclawLoopRequestInputSchema,
   BclawLoopProvideInputSchema,
 ]);
@@ -360,6 +375,7 @@ export const BCLAW_LOOP_INTENTS = [
   'close',
   'verify',
   'bind',
+  'continue',
   'request_input',
   'provide_input',
 ] as const;
