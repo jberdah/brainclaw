@@ -148,14 +148,25 @@ export interface ContinuationProposal {
 export function evaluateContinuation(input: ContinuationProposalInput): ContinuationProposal {
   const evidence = validateArtifactEvidence(input.source_loop, input.source_artifact);
   if (!evidence.valid) throw new Error(`continuation_source_unattested: ${evidence.reasons.join(',')}`);
-  if (input.source_artifact.type !== 'plan_draft') throw new Error('continuation_source_invalid: expected plan_draft');
-  if (!input.source_artifact.implementation_verify) throw new Error('continuation_source_invalid: missing implementation_verify');
   if (containsPlaceholder(input.action)) throw new Error('continuation_action_placeholder: action is not executable');
   const args = input.action.args ?? {};
-  if (input.action.tool !== 'bclaw_loop' || args.intent !== 'open' || args.kind !== 'implementation') {
-    throw new Error('continuation_action_unsupported: only Ideation→Implementation is supported');
+  const ideationToImplementation = input.source_loop.kind === 'ideation'
+    && input.source_artifact.type === 'plan_draft'
+    && Boolean(input.source_artifact.implementation_verify)
+    && input.action.tool === 'bclaw_loop'
+    && args.intent === 'open'
+    && args.kind === 'implementation';
+  const targets = Array.isArray(args.targetAgents) ? args.targetAgents : [];
+  const implementationToReview = input.source_loop.kind === 'implementation'
+    && input.source_artifact.type === 'handoff'
+    && Boolean(input.source_artifact.ref)
+    && input.action.tool === 'bclaw_coordinate'
+    && args.intent === 'review'
+    && args.open_loop === true
+    && targets.length === 1;
+  if (!ideationToImplementation && !implementationToReview) {
+    throw new Error('continuation_action_unsupported: expected Ideation→Implementation or Implementation→Review');
   }
-  if (input.source_loop.kind !== 'ideation') throw new Error('continuation_source_invalid: source loop is not ideation');
 
   const sourceDigest = artifactEvidenceDigest(input.source_artifact);
   const actionHash = digest(input.action);
@@ -171,8 +182,10 @@ export function evaluateContinuation(input: ContinuationProposalInput): Continua
     : input.autonomy_mode === 'require_approval' || input.risk === 'protected'
       ? 'require_approval'
       : 'auto';
+  const evidenceReason = ideationToImplementation ? 'attested ideation plan_draft' : 'attested implementation handoff';
+  const actionReason = ideationToImplementation ? 'concrete implementation action' : 'concrete independent review action';
   const reason = decision === 'auto'
-    ? ['attested ideation plan_draft', 'concrete implementation action', 'normal risk under autonomous mode']
+    ? [evidenceReason, actionReason, 'normal risk under autonomous mode']
     : decision === 'require_approval'
       ? [input.risk === 'protected' ? 'protected risk requires operator approval' : 'project autonomy mode requires approval']
       : ['project autonomy mode denies continuation'];

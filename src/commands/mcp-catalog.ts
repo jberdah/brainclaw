@@ -888,7 +888,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_loop',
-    description: 'Loop engine facade: open/turn/complete_turn/takeover/advance/add_artifact/pause/resume/close/verify/bind/continue/request_input/provide_input/get/list multi-turn work loops (review, ideation, implementation, research, debug). `continue` evaluates and persists a cross-loop continuation, then invokes the same public open/bind semantics. Direct open requires allow_orphan=true because the caller owns subsequent dispatch.',
+    description: 'Loop engine facade: open/turn/complete_turn/takeover/advance/add_artifact/pause/resume/close/verify/bind/continue/request_input/provide_input/get/list multi-turn work loops (review, ideation, implementation, research, debug). `continue` evaluates and persists a cross-loop continuation, then invokes the same public open or coordinate-review path; implementation downstreams additionally bind. Direct open requires allow_orphan=true because the caller owns subsequent dispatch.',
     // schemaSource is informational for now — grep target so future migrators
     // can locate zod-derived tools quickly. The parity test in
     // tests/unit/mcp-zod-parity.test.ts hard-codes its (tool, zod-schema)

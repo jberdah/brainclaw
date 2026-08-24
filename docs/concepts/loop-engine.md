@@ -474,21 +474,26 @@ then `turn(dispatch:true)` for worker slots; `verify` runs their declared comman
 
 ### Persisted continuation authority
 
-An accepted ideation synthesis no longer exposes an ungoverned downstream
-`open`. Its `next_actions` points to `bclaw_loop(intent="continue")`. The
+An accepted ideation synthesis and an attested implementation handoff no
+longer expose ungoverned downstream mutations. Their `next_actions` point to
+`bclaw_loop(intent="continue")`. The
 continuation record binds the source loop, iteration, sealed artifact digest,
 canonical action hash and policy version into a deterministic key. It is
 written before the downstream mutation.
 
-`AUTO` invokes the ordinary public `open` handler with that key in
-`linked.continuation_key`, then invokes engine-only `bind`. A retry first scans
-existing loops for the key, so a crash after `open` but before the response
-reuses the same loop. A live concurrent owner is observed rather than stolen.
+For Ideation→Implementation, `AUTO` invokes the ordinary public `open` handler
+with that key in `linked.continuation_key`, then invokes engine-only `bind`.
+For Implementation→Review, it deterministically selects a project-registered,
+spawnable review-capable identity that did not occupy an implementation slot,
+then invokes the ordinary public `bclaw_coordinate(intent="review",
+open_loop=true)` path. If no independent reviewer exists, it fails closed.
+A retry first scans existing loops for the key, so a crash after either public
+mutation but before the response reuses the same loop. A live concurrent owner
+is observed rather than stolen.
 `REQUIRE_APPROVAL` creates an `ActionRequired` whose discriminated target is
 the continuation; approval resumes the same record, while rejection or expiry
-persists `DENY`. The first shipped policy supports Ideation→Implementation
-only; unsupported actions, placeholders, missing evidence and ambiguous
-downstreams fail closed.
+persists `DENY`. Unsupported actions, placeholders, missing evidence and
+ambiguous downstreams fail closed.
 
 ### Clarification is a cross-cutting primitive
 

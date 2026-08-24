@@ -1106,17 +1106,20 @@ export async function handleBclawAssignmentAction(payload: McpToolExecutionPaylo
         const downstreamId = resumed.record.downstream?.id;
         let bind: unknown;
         if (downstreamId) {
-          const handled = await handleBclawLoop({
-            args: {
-              intent: 'bind', loop_id: downstreamId,
-              agent: resolved.identity!.agent_name, agentId: resolved.identity!.agent_id,
-            },
-            cwd,
-            defaultActor: resolved.identity!.agent_name,
-            sessionId: connectionSessionId,
-          });
-          if (handled.response.status !== 'ok') throw new Error(handled.response.error ?? handled.summary);
-          bind = handled.response.result;
+          const { getLoop } = await import('../core/loops/store.js');
+          if (getLoop(downstreamId, cwd)?.kind === 'implementation') {
+            const handled = await handleBclawLoop({
+              args: {
+                intent: 'bind', loop_id: downstreamId,
+                agent: resolved.identity!.agent_name, agentId: resolved.identity!.agent_id,
+              },
+              cwd,
+              defaultActor: resolved.identity!.agent_name,
+              sessionId: connectionSessionId,
+            });
+            if (handled.response.status !== 'ok') throw new Error(handled.response.error ?? handled.summary);
+            bind = handled.response.result;
+          }
         }
         continuationResult = { continuation: resumed.record, bind };
       } else {

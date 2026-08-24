@@ -1016,7 +1016,7 @@ research, and debug; they are not a review-only command group.
 | `takeover <loop_id>` | slot, turn, expected epoch, cause, liveness evidence, external-effect policy, next workspace and coordinator identity | Fence one physical generation and arm a successor without changing the logical Assignment. |
 | `advance <loop_id>` | — | Advance through the protocol; optional `--to-phase`, `--force`, `--reason`. |
 | `add-artifact <loop_id>` | `--phase --type --body` | Attach a typed artifact; optional producer and ref. |
-| `continue <loop_id>` | — | Evaluate the first attested pipeline action and persist/apply `AUTO`, `REQUIRE_APPROVAL`, or `DENY`; options: `--action-index`, `--autonomy-mode`, `--risk`. |
+| `continue <loop_id>` | — | Evaluate an attested Ideation→Implementation or Implementation→Review action and persist/apply `AUTO`, `REQUIRE_APPROVAL`, or `DENY`; options: `--action-index`, `--autonomy-mode`, `--risk`. Review continuation selects an independent registered reviewer and fails closed if none is available. |
 
 ```bash
 brainclaw loop advance lop_abc --json

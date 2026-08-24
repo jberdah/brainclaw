@@ -265,15 +265,35 @@ describe('ideation -> implementation -> review public pipeline', () => {
     });
     assertOk(handoff);
     const reviewAction = handoff.next_actions?.[0];
-    assert.equal(reviewAction?.tool, 'bclaw_coordinate');
-    assert.equal((reviewAction?.args.linked as { source_loop_id?: string }).source_loop_id, implementationId);
-    assert.equal(reviewAction?.args.ref, integrated.integrated[0]?.commit_sha);
+    assert.equal(reviewAction?.tool, 'bclaw_loop');
+    assert.equal(reviewAction?.args.intent, 'continue');
+    assert.equal(reviewAction?.args.loop_id, implementationId);
 
-    const reviewArgs = { ...reviewAction!.args, targetAgents: ['codex'], autoExecute: false, agent: 'claude-code' };
-    const review = await call(workspace, reviewAction!.tool, reviewArgs);
+    process.env.BRAINCLAW_TEST_FAULT_CONTINUATION_AFTER_OPEN = '1';
+    const interruptedReview = await call(workspace, reviewAction!.tool, reviewAction!.args);
+    delete process.env.BRAINCLAW_TEST_FAULT_CONTINUATION_AFTER_OPEN;
+    assert.equal(interruptedReview.status, 'error');
+    assert.match(interruptedReview.error ?? '', /fault_injection: continuation_after_open/);
+    assert.equal(listLoops({ kind: 'review' }, workspace.dir).length, 1, 'review committed before simulated response loss');
+
+    const review = await call(workspace, reviewAction!.tool, reviewAction!.args);
     assertOk(review);
-    const reviewId = review.result?.loop_id as string;
+    const reviewId = (review.result?.loop as { id: string }).id;
+    const reviewContinuation = review.result?.continuation as {
+      id: string; state: string; action: { args: { targetAgents: string[]; ref?: string } }; downstream?: { id: string };
+    };
+    assert.equal(reviewContinuation.state, 'applied');
+    assert.deepEqual(reviewContinuation.action.args.targetAgents, ['claude-code']);
+    assert.equal(reviewContinuation.action.args.ref, integrated.integrated[0]?.commit_sha);
+    assert.equal(reviewContinuation.downstream?.id, reviewId);
     assert.equal(getLoop(reviewId, workspace.dir)?.linked?.source_loop_id, implementationId);
+    assert.equal(getLoop(reviewId, workspace.dir)?.linked?.continuation_key?.length, 64);
+    assert.equal(listLoops({ kind: 'review' }, workspace.dir).length, 1);
+
+    const replayedReview = await call(workspace, reviewAction!.tool, reviewAction!.args);
+    assertOk(replayedReview);
+    assert.equal((replayedReview.result?.loop as { id: string }).id, reviewId);
+    assert.equal(listLoops({ kind: 'review' }, workspace.dir).length, 1, 'review continuation is exactly once');
 
     const reviewClosed = await call(workspace, 'bclaw_loop', {
       intent: 'close', loop_id: reviewId, status: 'cancelled', reason: 'deterministic pipeline test cleanup', agent: 'claude-code',
