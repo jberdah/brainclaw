@@ -285,7 +285,7 @@ describe('P0C bclaw_loop(intent="bind") facade — engine-only handler wiring', 
     );
   });
 
-  it('carries synthesis-owned deterministic verification into the implementation next_action', async () => {
+  it('routes synthesis-owned verification through the governed continuation action', async () => {
     const ideation = openLoop({
       kind: 'ideation',
       title: 'pipeline synthesis',
@@ -309,13 +309,11 @@ describe('P0C bclaw_loop(intent="bind") facade — engine-only handler wiring', 
       cwd,
     });
     assert.equal(handled.response.status, 'ok');
-    assert.deepEqual(handled.response.next_actions?.[0]?.args?.verify, {
-      command: ['npm', 'test'], timeout_ms: 120_000,
-    });
-    assert.equal(
-      (handled.response.next_actions?.[0]?.args?.linked as { source_loop_id?: string })?.source_loop_id,
-      ideation.id,
-    );
+    assert.equal(handled.response.next_actions?.[0]?.tool, 'bclaw_loop');
+    assert.equal(handled.response.next_actions?.[0]?.args?.intent, 'continue');
+    assert.equal(handled.response.next_actions?.[0]?.args?.loop_id, ideation.id);
+    assert.equal(handled.response.next_actions?.[0]?.args?.autonomy_mode, 'autonomous');
+    assert.equal(handled.response.next_actions?.[0]?.args?.risk, 'normal');
   });
 
   it('a review loop bound via the facade → validation_error (not implementation)', async () => {

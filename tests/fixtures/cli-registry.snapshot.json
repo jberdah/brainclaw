@@ -4292,6 +4292,62 @@
     ],
     "options": [
       {
+        "defaultValue": "0",
+        "flags": "--action-index <n>",
+        "long": "--action-index",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "autonomous",
+        "flags": "--autonomy-mode <mode>",
+        "long": "--autonomy-mode",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "defaultValue": "normal",
+        "flags": "--risk <risk>",
+        "long": "--risk",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw loop continue"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "loop_id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
         "flags": "--agent <agent>",
         "long": "--agent",
         "mandatory": true,

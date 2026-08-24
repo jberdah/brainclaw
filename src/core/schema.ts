@@ -1057,11 +1057,20 @@ export const ActionRequiredResponseSchema = z.object({
 });
 export type ActionRequiredResponse = z.infer<typeof ActionRequiredResponseSchema>;
 
+export const ActionRequiredTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('assignment'), assignment_id: z.string() }),
+  z.object({ kind: z.literal('continuation'), continuation_id: z.string().regex(/^ctn_[a-f0-9]{24}$/) }),
+]);
+export type ActionRequiredTarget = z.infer<typeof ActionRequiredTargetSchema>;
+
 export const ActionRequiredSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
   short_label: z.string().optional(),
-  assignment_id: z.string(),
+  /** Legacy top-level assignment link; retained for v1 records. */
+  assignment_id: z.string().optional(),
+  /** Discriminated approval target. New records always persist this field. */
+  target: ActionRequiredTargetSchema.optional(),
   run_id: z.string().optional(),
   claim_id: z.string().optional(),
   message_id: z.string().optional(),
@@ -1083,6 +1092,14 @@ export const ActionRequiredSchema = z.object({
   resolved_at: z.string().optional(),
   response: ActionRequiredResponseSchema.optional(),
   tags: TagsWithDefaultSchema,
+}).superRefine((action, ctx) => {
+  const target = action.target ?? (action.assignment_id ? { kind: 'assignment' as const, assignment_id: action.assignment_id } : undefined);
+  if (!target) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['target'], message: 'ActionRequired requires an assignment or continuation target' });
+  }
+  if (target?.kind === 'assignment' && action.assignment_id && target.assignment_id !== action.assignment_id) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['target'], message: 'assignment target must match assignment_id' });
+  }
 });
 export type ActionRequired = z.infer<typeof ActionRequiredSchema>;
 

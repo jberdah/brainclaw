@@ -39,6 +39,12 @@ export const LoopLinksSchema = z.object({
   sequence_ids: z.array(z.string().min(1)).optional(),
   /** Upstream loop in an ideation → implementation → review pipeline. */
   source_loop_id: z.string().regex(/^lop_[0-9a-z]+$/).optional(),
+  /** Exact upstream artifact that authorized this continuation. */
+  source_artifact_id: z.string().regex(/^art_[0-9a-z]+$/).optional(),
+  /** Sealed digest of source_artifact_id at continuation evaluation time. */
+  source_artifact_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Durable, deterministic identity of the policy decision that created this loop. */
+  continuation_key: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export type LoopLinks = z.infer<typeof LoopLinksSchema>;
 

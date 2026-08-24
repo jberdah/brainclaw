@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { integrateLaneResults } from '../../src/commands/harvest.js';
-import { getLoop } from '../../src/core/loops/store.js';
+import { getLoop, listLoops } from '../../src/core/loops/store.js';
 import { getRuntimeSignalPath } from '../../src/core/runtime-signals.js';
 import { loadAssignment } from '../../src/core/assignments.js';
 import { loadClaim } from '../../src/core/claims.js';
@@ -47,10 +47,17 @@ function git(cwd: string, args: string[]): void {
   assert.equal(result.status, 0, result.stderr);
 }
 
+function actAs(identity: { agent_name: string; agent_id: string }): void {
+  process.env.BRAINCLAW_AGENT_NAME = identity.agent_name;
+  process.env.BRAINCLAW_AGENT = identity.agent_name;
+  process.env.BRAINCLAW_AGENT_ID = identity.agent_id;
+}
+
 describe('ideation -> implementation -> review public pipeline', () => {
   let workspace: TestWorkspace;
   let previousNoSpawn: string | undefined;
   let laneWorktree: string | undefined;
+  let codexAgent: { agent_name: string; agent_id: string };
 
   beforeEach(() => {
     previousNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
@@ -58,6 +65,7 @@ describe('ideation -> implementation -> review public pipeline', () => {
     workspace = createTestWorkspace({ prefix: 'bclaw-loop-pipeline-', currentAgent: 'claude-code' });
     saveAgentIdentity({ ...workspace.currentAgent, trust_level: 'trusted' }, workspace.dir);
     const codex = workspace.registerAgent('codex');
+    codexAgent = codex;
     saveAgentIdentity({ ...codex, trust_level: 'trusted' }, workspace.dir);
     fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# pipeline fixture\n');
     git(workspace.dir, ['init']);
@@ -91,6 +99,7 @@ describe('ideation -> implementation -> review public pipeline', () => {
   });
 
   afterEach(() => {
+    delete process.env.BRAINCLAW_TEST_FAULT_CONTINUATION_AFTER_OPEN;
     if (laneWorktree && fs.existsSync(laneWorktree)) {
       removeWorktree(workspace.dir, laneWorktree, { force: true });
     }
@@ -134,24 +143,44 @@ describe('ideation -> implementation -> review public pipeline', () => {
       },
     });
     assertOk(synthesis);
-    const implementationAction = synthesis.next_actions?.[0];
-    assert.equal(implementationAction?.tool, 'bclaw_loop');
-    assert.deepEqual(implementationAction?.args.verify, verify);
-    assert.equal((implementationAction?.args.linked as { source_loop_id?: string }).source_loop_id, ideationId);
+    const continuationAction = synthesis.next_actions?.[0];
+    assert.equal(continuationAction?.tool, 'bclaw_loop');
+    assert.equal(continuationAction?.args.intent, 'continue');
+    assert.equal(continuationAction?.args.loop_id, ideationId);
 
-    const implementationOpen = await call(workspace, implementationAction!.tool, implementationAction!.args);
-    assertOk(implementationOpen);
-    const implementationId = (implementationOpen.result?.loop as { id: string }).id;
+    process.env.BRAINCLAW_TEST_FAULT_CONTINUATION_AFTER_OPEN = '1';
+    const interrupted = await call(workspace, continuationAction!.tool, continuationAction!.args);
+    delete process.env.BRAINCLAW_TEST_FAULT_CONTINUATION_AFTER_OPEN;
+    assert.equal(interrupted.status, 'error');
+    assert.match(interrupted.error ?? '', /fault_injection: continuation_after_open/);
+    const createdBeforeRetry = listLoops({ kind: 'implementation' }, workspace.dir);
+    assert.equal(createdBeforeRetry.length, 1, 'the public open committed before the simulated response loss');
+
+    const continued = await call(workspace, continuationAction!.tool, continuationAction!.args);
+    assertOk(continued);
+    const implementationId = (continued.result?.loop as { id: string }).id;
+    const continuation = continued.result?.continuation as {
+      id: string; state: string; decision: string; downstream?: { id: string };
+    };
+    assert.match(continuation.id, /^ctn_/);
+    assert.equal(continuation.decision, 'auto');
+    assert.equal(continuation.state, 'applied');
+    assert.equal(continuation.downstream?.id, implementationId);
     assert.equal(getLoop(implementationId, workspace.dir)?.linked?.source_loop_id, ideationId);
+    assert.equal(getLoop(implementationId, workspace.dir)?.linked?.continuation_key?.length, 64);
+    assert.deepEqual(getLoop(implementationId, workspace.dir)?.protocol?.verify, verify);
 
-    const bound = await call(workspace, 'bclaw_loop', {
-      intent: 'bind', loop_id: implementationId, agent: 'claude-code',
-    });
-    assertOk(bound);
-    const boundLoop = bound.result?.loop as { current_phase: string; slots: Array<{ slot_id: string; lane?: string; assignment_id?: string }> };
+    const boundLoop = continued.result?.loop as { current_phase: string; slots: Array<{ slot_id: string; lane?: string; assignment_id?: string }> };
     assert.equal(boundLoop.current_phase, 'execute');
     assert.equal(boundLoop.slots[0]?.lane, 'pipeline');
     assert.equal(boundLoop.slots[0]?.assignment_id, undefined, 'bind is engine-only');
+    assert.equal(continued.next_actions?.[0]?.args.intent, 'turn');
+    assert.equal(continued.next_actions?.[0]?.args.dispatch, true);
+
+    const replayed = await call(workspace, continuationAction!.tool, continuationAction!.args);
+    assertOk(replayed);
+    assert.equal((replayed.result?.loop as { id: string }).id, implementationId, 'retry reuses the same downstream loop');
+    assert.equal((replayed.result?.continuation as { id: string }).id, continuation.id);
 
     const prematureVerify = await call(workspace, 'bclaw_loop', {
       intent: 'verify', loop_id: implementationId, slot_id: boundLoop.slots[0]!.slot_id, agent: 'claude-code',
@@ -252,5 +281,94 @@ describe('ideation -> implementation -> review public pipeline', () => {
     assertOk(reviewClosed);
     await call(workspace, 'bclaw_loop', { intent: 'close', loop_id: implementationId, status: 'completed', agent: 'claude-code' });
     await call(workspace, 'bclaw_loop', { intent: 'close', loop_id: ideationId, status: 'completed', agent: 'claude-code' });
+  });
+
+  it('persists approval and deny decisions and resumes the same continuation exactly once', async () => {
+    const plan = await call(workspace, 'bclaw_create', {
+      entity: 'plan', data: { text: 'Approval-gated implementation', status: 'todo' }, agent: 'claude-code',
+    });
+    const planId = (plan as unknown as { id: string }).id;
+    const sequence = await call(workspace, 'bclaw_create_sequence', {
+      name: 'approval sequence', items: [{ planId, rank: 1, lane: 'approval', scope_hint: 'approval.txt' }], agent: 'claude-code',
+    });
+    const sequenceId = (sequence as unknown as { sequence_id: string }).sequence_id;
+    const opened = await call(workspace, 'bclaw_loop', {
+      intent: 'open', kind: 'ideation', title: 'Approval design', allow_orphan: true,
+      phases: [{ name: 'synthesis' }], linked: { plan_ids: [planId], sequence_ids: [sequenceId] }, agent: 'claude-code',
+    });
+    assertOk(opened);
+    const ideationId = (opened.result.loop as { id: string }).id;
+    const synthesis = await call(workspace, 'bclaw_loop', {
+      intent: 'add_artifact', loop_id: ideationId, agent: 'claude-code',
+      artifact: {
+        phase: 'synthesis', type: 'plan_draft', body: 'Approval-gated plan.',
+        addresses_critique: ['art_critique1'],
+        implementation_verify: { command: [process.execPath, '-e', 'process.exit(0)'] },
+      },
+    });
+    assertOk(synthesis);
+
+    const gated = await call(workspace, 'bclaw_loop', {
+      intent: 'continue', loop_id: ideationId, autonomy_mode: 'require_approval', risk: 'normal', agent: 'claude-code',
+    });
+    assertOk(gated);
+    const continuation = gated.result.continuation as { id: string; state: string; action_required_id: string };
+    const approval = gated.result.action_required as { id: string; target: { kind: string; continuation_id: string } };
+    assert.equal(continuation.state, 'approval_required');
+    assert.equal(approval.id, continuation.action_required_id);
+    assert.deepEqual(approval.target, { kind: 'continuation', continuation_id: continuation.id });
+    assert.equal(listLoops({ kind: 'implementation' }, workspace.dir).length, 0);
+
+    actAs(codexAgent);
+    const approvedOutcome = await executeMcpToolCall({
+      name: 'bclaw_assignment_action', cwd: workspace.dir, connectionSessionId: 'sess_codex_approval',
+      args: {
+        action_id: approval.id, outcome: 'resolved', text: 'approved for deterministic test',
+        agent: codexAgent.agent_name, agentId: codexAgent.agent_id,
+      },
+    });
+    assert.notEqual(approvedOutcome.response.isError, true, JSON.stringify(approvedOutcome.response.structuredContent));
+    const approved = approvedOutcome.response.structuredContent as {
+      continuation_result: { continuation: { state: string; downstream: { id: string } } };
+    };
+    const resumed = approved.continuation_result as {
+      continuation: { state: string; downstream: { id: string } };
+    };
+    assert.equal(resumed.continuation.state, 'applied');
+    assert.equal(getLoop(resumed.continuation.downstream.id, workspace.dir)?.current_phase, 'execute');
+    assert.equal(listLoops({ kind: 'implementation' }, workspace.dir).length, 1);
+
+    const duplicateApproval = await executeMcpToolCall({
+      name: 'bclaw_assignment_action', cwd: workspace.dir, connectionSessionId: 'sess_codex_approval',
+      args: { action_id: approval.id, outcome: 'resolved', agent: codexAgent.agent_name, agentId: codexAgent.agent_id },
+    });
+    assert.notEqual(duplicateApproval.response.isError, true, JSON.stringify(duplicateApproval.response.structuredContent));
+    const duplicateResult = duplicateApproval.response.structuredContent as {
+      continuation_result: { continuation: { downstream: { id: string } } };
+    };
+    assert.equal(duplicateResult.continuation_result.continuation.downstream.id, resumed.continuation.downstream.id);
+    assert.equal(listLoops({ kind: 'implementation' }, workspace.dir).length, 1);
+
+    actAs(workspace.currentAgent);
+    const denySource = await call(workspace, 'bclaw_loop', {
+      intent: 'open', kind: 'ideation', title: 'Denied design', allow_orphan: true,
+      phases: [{ name: 'synthesis' }], linked: { plan_ids: [planId], sequence_ids: [sequenceId] }, agent: 'claude-code',
+    });
+    assertOk(denySource);
+    const denySourceId = (denySource.result.loop as { id: string }).id;
+    const denyDraft = await call(workspace, 'bclaw_loop', {
+      intent: 'add_artifact', loop_id: denySourceId, agent: 'claude-code',
+      artifact: {
+        phase: 'synthesis', type: 'plan_draft', body: 'Denied plan.', addresses_critique: ['art_critique2'],
+        implementation_verify: { command: [process.execPath, '-e', 'process.exit(0)'] },
+      },
+    });
+    assertOk(denyDraft);
+    const denied = await call(workspace, 'bclaw_loop', {
+      intent: 'continue', loop_id: denySourceId, autonomy_mode: 'deny', risk: 'normal', agent: 'claude-code',
+    });
+    assertOk(denied);
+    assert.equal((denied.result.continuation as { state: string }).state, 'denied');
+    assert.equal(listLoops({ kind: 'implementation' }, workspace.dir).length, 1, 'deny creates no downstream loop');
   });
 });

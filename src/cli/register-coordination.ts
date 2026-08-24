@@ -509,6 +509,19 @@ export function registerCoordinationCommands(program: Command): void {
       await runLoopCommand('add-artifact', { loop_id }, options, globalOpts.cwd);
     });
 
+  loopCmd
+    .command('continue <loop_id>')
+    .description('Evaluate and apply a persisted cross-loop continuation')
+    .option('--action-index <n>', 'Zero-based next_action index', '0')
+    .option('--autonomy-mode <mode>', 'autonomous, require_approval, or deny', 'autonomous')
+    .option('--risk <risk>', 'normal or protected', 'normal')
+    .option('--json', 'Machine-readable output')
+    .action(async (loop_id, options) => {
+      const globalOpts = program.opts();
+      const { runLoopCommand } = await import('../commands/loop.js');
+      await runLoopCommand('continue', { loop_id }, options, globalOpts.cwd);
+    });
+
   // --- attempt-authority (two-release writer guard; P4) ---
   const attemptAuthorityCmd = program
     .command('attempt-authority')

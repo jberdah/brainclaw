@@ -198,3 +198,22 @@ export {
   type TurnExecutionProjectionInput,
   type TurnProjectionStage,
 } from './turn-execution.js';
+export {
+  CONTINUATION_POLICY_VERSION,
+  ContinuationDecisionSchema,
+  ContinuationRecordSchema,
+  ContinuationStateSchema,
+  attachContinuationActionRequired,
+  denyContinuation,
+  ensureContinuation,
+  evaluateContinuation,
+  listContinuations,
+  loadContinuation,
+  resumeApprovedContinuation,
+  type ContinuationDecision,
+  type ContinuationProposal,
+  type ContinuationRecord,
+  type ContinuationState,
+  type EnsureContinuationInput,
+  type EnsureContinuationResult,
+} from './continuation.js';

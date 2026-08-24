@@ -408,7 +408,12 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:681c47cba85b79c3`
+- MCP public surface fingerprint: `sha256:be86e5571fcd0226`
+  (updated 2026-08-24 for persisted continuation authority: additive
+  `bclaw_loop(intent="continue")` inputs `action_index`, `autonomy_mode`, and
+  `risk`; the intent evaluates an attested Ideation→Implementation action,
+  persists AUTO/REQUIRE_APPROVAL/DENY, and reuses the public open/bind path.)
+  Previous: `sha256:681c47cba85b79c3`
   (`LoopSlotInput` gains optional `lane`, `scope_hint`, `plan_ids`, and
   `step_ids` fields so implementation-loop lane scope and provenance survive
   through the public facade. Existing callers remain valid.)

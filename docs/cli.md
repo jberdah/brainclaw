@@ -1016,9 +1016,11 @@ research, and debug; they are not a review-only command group.
 | `takeover <loop_id>` | slot, turn, expected epoch, cause, liveness evidence, external-effect policy, next workspace and coordinator identity | Fence one physical generation and arm a successor without changing the logical Assignment. |
 | `advance <loop_id>` | — | Advance through the protocol; optional `--to-phase`, `--force`, `--reason`. |
 | `add-artifact <loop_id>` | `--phase --type --body` | Attach a typed artifact; optional producer and ref. |
+| `continue <loop_id>` | — | Evaluate the first attested pipeline action and persist/apply `AUTO`, `REQUIRE_APPROVAL`, or `DENY`; options: `--action-index`, `--autonomy-mode`, `--risk`. |
 
 ```bash
 brainclaw loop advance lop_abc --json
+brainclaw loop continue lop_abc --autonomy-mode autonomous --risk normal --json
 brainclaw loop takeover lop_abc \
   --slot lsl_abc --turn-id tat_abc --expected-epoch 0 \
   --cause "worker is no longer live" \
@@ -1028,7 +1030,7 @@ brainclaw loop takeover lop_abc \
 ```
 
 The full public lifecycle (`open`, `get`, `list`, `pause`, `resume`, `close`,
-`bind`, `verify`, `request_input`, `provide_input`, and the verbs above) is the
+`bind`, `verify`, `continue`, `request_input`, `provide_input`, and the verbs above) is the
 MCP `bclaw_loop(intent)` facade. Direct MCP `open` requires
 `allow_orphan=true`; review and ideation normally start through
 `bclaw_coordinate` so opening and dispatch stay one operation. See the
@@ -2032,7 +2034,7 @@ The default catalog is intentionally small and centred on the canonical grammar.
 |---|---|
 | `bclaw_coordinate(intent)` | Assign, consult, review, reroute, or summarize across agents. Pass `open_loop: true` on `intent="review"` to also dispatch the reviewer turn. |
 | `bclaw_dispatch(intent)` | Parallelize execute across a sequence's lanes (analysis / execute / review). |
-| `bclaw_loop(intent)` | Open, inspect, or drive a multi-turn loop. The public lifecycle is `open`, `get`, `list`, `turn`, `complete_turn`, `advance`, `add_artifact`, `pause`, `resume`, and `close`; implementation loops also add engine-only `bind` (validate the linked sequence and enter `execute`, never spawn) and `verify`, and any kind may use `request_input` / `provide_input`. Trusted `turn(dispatch=true)` is the common worker launch path. `bclaw_coordinate` / `bclaw_dispatch` remain ergonomic shortcuts. A direct `open` must include `allow_orphan: true` to acknowledge that the caller will dispatch or drive it. |
+| `bclaw_loop(intent)` | Open, inspect, or drive a multi-turn loop. `continue` persists and applies policy-governed cross-loop progression through the public mutation path. Implementation loops add engine-only `bind` and `verify`; any kind may use `request_input` / `provide_input`. Trusted `turn(dispatch=true)` remains the only worker launch path. A direct `open` must include `allow_orphan: true`. |
 
 **Sequences**:
 
