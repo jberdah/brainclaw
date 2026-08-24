@@ -118,6 +118,7 @@ function pipelineNextActions(loop: LoopThread): NextAction[] {
         args: {
           intent: 'open', kind: 'implementation', title: `Implement ${loop.title}`,
           goal: loop.goal, linked: { plan_ids: planIds, sequence_ids: sequenceIds, source_loop_id: loop.id },
+          verify: draft.implementation_verify,
           slots: [{ role: 'implementer' }], allow_orphan: true,
         },
         when: 'start implementation from the accepted synthesis',
@@ -572,6 +573,7 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
                     body: req.artifact.body,
                     ref: req.artifact.ref,
                     addresses_critique: req.artifact.addresses_critique,
+                    implementation_verify: req.artifact.implementation_verify,
                   }
                 : undefined,
               actor,
@@ -668,6 +670,7 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
                 body: req.artifact.body,
                 ref: req.artifact.ref,
                 addresses_critique: req.artifact.addresses_critique,
+                implementation_verify: req.artifact.implementation_verify,
               },
               actor,
             },

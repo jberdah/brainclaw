@@ -34,6 +34,7 @@ export interface NewLoopArtifact {
   produced_by?: string;
   /** ideation synthesis provenance — critique ids a plan_draft addresses (unused by review). */
   addresses_critique?: string[];
+  implementation_verify?: { command: string[]; timeout_ms?: number };
 }
 
 export interface ReducerResult {
@@ -129,8 +130,22 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
       if (uniqueAddresses.length === 0) {
         return { artifacts: [], slot_outcome: 'failed', failure_reason: 'ideation synthesis must cite critique artifact ids in lane.artifacts' };
       }
+      if (!lane.implementation_verify) {
+        return {
+          artifacts: [],
+          slot_outcome: 'failed',
+          failure_reason: 'ideation synthesis must declare implementation_verify for deterministic downstream verification',
+        };
+      }
       return {
-        artifacts: [{ phase, type: artifactType, body: capBody(body), produced_by: attempt.agent, addresses_critique: uniqueAddresses }],
+        artifacts: [{
+          phase,
+          type: artifactType,
+          body: capBody(body),
+          produced_by: attempt.agent,
+          addresses_critique: uniqueAddresses,
+          implementation_verify: lane.implementation_verify,
+        }],
         slot_outcome: 'done',
       };
     }

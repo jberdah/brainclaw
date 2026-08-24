@@ -544,6 +544,8 @@ export const LoopArtifactSchema = z
      * critique artifact) is deferred to v1.1 per the plan.
      */
     addresses_critique: z.array(z.string().min(1)).optional(),
+    /** Executable acceptance command carried from synthesis into implementation. */
+    implementation_verify: LoopVerifyConfigSchema.optional(),
     /**
      * pln#492 phase 2.b — iteration window the artifact was produced in.
      * 0-indexed (proposal/early phases produce iteration=0). Optional for

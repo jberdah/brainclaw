@@ -68,6 +68,7 @@ export function artifactEvidenceDigest(artifact: Omit<LoopArtifact, 'evidence'>)
     produced_by: artifact.produced_by,
     produced_at: artifact.produced_at,
     addresses_critique: artifact.addresses_critique,
+    implementation_verify: artifact.implementation_verify,
     iteration: artifact.iteration ?? 0,
   });
 }

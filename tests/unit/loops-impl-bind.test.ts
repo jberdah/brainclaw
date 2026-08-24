@@ -285,6 +285,39 @@ describe('P0C bclaw_loop(intent="bind") facade — engine-only handler wiring', 
     );
   });
 
+  it('carries synthesis-owned deterministic verification into the implementation next_action', async () => {
+    const ideation = openLoop({
+      kind: 'ideation',
+      title: 'pipeline synthesis',
+      created_by: 'coord',
+      phases: [{ name: 'synthesis' }],
+      linked: { plan_ids: ['pln_chain'], sequence_ids: ['seq_chain'] },
+    }, cwd);
+    const handled = await handleBclawLoop({
+      args: {
+        intent: 'add_artifact',
+        loop_id: ideation.id,
+        artifact: {
+          phase: 'synthesis',
+          type: 'plan_draft',
+          body: 'Implement the accepted pipeline design.',
+          addresses_critique: ['art_critique1'],
+          implementation_verify: { command: ['npm', 'test'], timeout_ms: 120_000 },
+        },
+        agent: 'coord',
+      },
+      cwd,
+    });
+    assert.equal(handled.response.status, 'ok');
+    assert.deepEqual(handled.response.next_actions?.[0]?.args?.verify, {
+      command: ['npm', 'test'], timeout_ms: 120_000,
+    });
+    assert.equal(
+      (handled.response.next_actions?.[0]?.args?.linked as { source_loop_id?: string })?.source_loop_id,
+      ideation.id,
+    );
+  });
+
   it('a review loop bound via the facade → validation_error (not implementation)', async () => {
     const seqId = seedReadySequence(cwd);
     const review = openLoop({
