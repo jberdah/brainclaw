@@ -321,7 +321,8 @@ export function withCodexWorkspaceRoot(
   worktreePath: string | undefined,
   isWin32 = process.platform === 'win32',
 ): InvokeCommand {
-  if (agent.trim().toLowerCase() !== 'codex' || !worktreePath) return invoke;
+  const executableName = path.win32.basename(invoke.executable).replace(/\.(?:cmd|exe|bat|com)$/i, '').toLowerCase();
+  if (agent.trim().toLowerCase() !== 'codex' || executableName !== 'codex' || !worktreePath) return invoke;
   const args = [...invoke.args];
   const subcommandIndex = args.indexOf('exec');
   const insertAt = subcommandIndex >= 0 ? subcommandIndex : 0;

@@ -108,6 +108,12 @@ describe('defaultExecutionAdapter', () => {
     assert.match(pinned.bashCommand, /codex --cd "C:\\Users\\worker/);
     assert.doesNotMatch(pinned.bashCommand, /--add-dir/);
     assert.equal(withCodexWorkspaceRoot(invoke, 'claude-code', worktree, true), invoke);
+    const nonCodexExecutable = { ...invoke, executable: 'node', bashCommand: 'node -e "process.exit(0)"' };
+    assert.equal(
+      withCodexWorkspaceRoot(nonCodexExecutable, 'codex', worktree, true),
+      nonCodexExecutable,
+      'an agent label alone must not inject Codex CLI flags into another executable',
+    );
   });
 
   it('uses an environment-attesting bootstrap and exact terminal hashes on POSIX and Windows', () => {

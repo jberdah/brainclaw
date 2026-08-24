@@ -408,7 +408,11 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:81243f3d507c274e`
+- MCP public surface fingerprint: `sha256:681c47cba85b79c3`
+  (`LoopSlotInput` gains optional `lane`, `scope_hint`, `plan_ids`, and
+  `step_ids` fields so implementation-loop lane scope and provenance survive
+  through the public facade. Existing callers remain valid.)
+  Previous: `sha256:81243f3d507c274e`
   (updated 2026-08-23 for the common Loop Engine worker driver: `turn` exposes
   real dispatch/model/candidate controls and `complete_turn` exposes the full
   AttemptAuthority fence; bind remains engine-only with compatibility inputs.)
