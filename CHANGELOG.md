@@ -7,6 +7,51 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.0] — 2026-08-24
+
+The implementation-loop release: Brainclaw now carries an idea all the way
+from synthesis to lane-scoped execution, deterministic verification, handoff,
+and independent review without losing the policy or provenance that shaped it.
+
+### Added
+
+- **A public ideation → implementation → review pipeline.** An ideation
+  synthesis can open a linked implementation loop with its verification policy
+  intact; `handoff_ready` emits the explicit review call, and all three loops
+  retain their source-chain references for inspection through `list` and `get`.
+- **Deterministic lane binding and lane-scoped verification.** Sequence items
+  are validated against their linked plans and steps, paired one-to-one with
+  worker slots, and verified inside the active AttemptAuthority generation's
+  assignment worktree. Multi-lane verification requires a current green report
+  from every bound lane.
+- **A full public-facade regression proving the workflow end to end.** The test
+  drives real synthesis, bind, fenced dispatch, verification, handoff, and
+  review creation rather than calling internal helpers as a substitute for the
+  shipped contract.
+
+### Changed
+
+- **Implementation briefs are scoped to the lane.** Bound slots carry their
+  lane, plan/step ids, and scope hint through the MCP facade, so dispatch can
+  retrieve path-related decisions, constraints, traps, and runtime context
+  without flooding every worker with unrelated memory.
+- **Codex workers use one canonical lane workspace on Windows.** Workspace
+  selection is injected only for the actual Codex CLI, keeping fake/custom
+  adapters untouched and preventing split writable roots during sandboxed runs.
+
+### Fixed
+
+- **Verification fails closed before command execution when lane authority is
+  ambiguous or stale.** A caller can no longer narrate a green result, verify
+  the coordinator checkout by accident, or omit `slot_id` when several lane
+  worktrees exist.
+- **Handoff review preserves the exact implementation result.** Review requests
+  now carry lane scope plus commit and branch references instead of falling
+  back to an ambient checkout.
+- **The generated MCP schema and governance fingerprint include the new optional
+  lane/provenance fields.** Strict clients see the same additive contract that
+  the runtime accepts.
+
 ## [1.27.0] — 2026-08-23
 
 ### Added
