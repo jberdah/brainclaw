@@ -76,7 +76,15 @@ export const defaultVerifyRunner: VerifyRunner = (config) => {
     if (k.startsWith('BRAINCLAW_') || k === 'BCLAW_PROMPT_FILE') delete env[k];
   }
   const started = Date.now();
-  const r = spawnSync(config.command[0]!, config.command.slice(1), {
+  const requestedExecutable = config.command[0]!;
+  const npmCli = process.platform === 'win32' && (requestedExecutable === 'npm' || requestedExecutable === 'npx')
+    ? path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', `${requestedExecutable}-cli.js`)
+    : undefined;
+  // Node cannot spawn .cmd shims with shell:false on Windows. Invoke npm's JS
+  // entrypoint through the current Node binary so the no-shell security contract holds.
+  const executable = npmCli ? process.execPath : requestedExecutable;
+  const commandArgs = npmCli ? [npmCli, ...config.command.slice(1)] : config.command.slice(1);
+  const r = spawnSync(executable, commandArgs, {
     cwd: config.cwd,
     env,
     shell: false,
@@ -128,6 +136,9 @@ export function resolveVerifyCommand(thread: LoopThread, cwd: string | undefined
     }
     if (!selected && thread.slots.some((slot) => slot.lane) && candidates.length === 0) {
       throw new Error(`verify: implementation loop ${thread.id} has bound lanes but no assignment worktree; dispatch and settle the execute turn first`);
+    }
+    if (selected?.lane && !selected.assignment_id) {
+      throw new Error(`verify: slot ${selected.slot_id} is bound to lane ${selected.lane} but has no assignment worktree; dispatch and settle the execute turn first`);
     }
     const candidate = candidates[0];
     if (selected?.assignment_id && !candidate?.assignment?.worktree_path) {

@@ -94,6 +94,11 @@ describe('pln#632 verify-command runner', () => {
       () => runVerify({ loop_id: loop.id, actor: 'agt_i', runner: runnerReturning(GREEN) }, cwd),
       /bound lanes but no assignment worktree/,
     );
+    assert.throws(
+      () => runVerify({ loop_id: loop.id, slot_id: loop.slots[0]!.slot_id, actor: 'agt_i', runner: runnerReturning(GREEN) }, cwd),
+      /bound to lane only but has no assignment worktree/,
+      'an explicit slot must not fall back to the project root',
+    );
 
     const assignment = createAssignment({
       id: 'asgn_laneonly', claim_id: 'clm_laneonly', agent: 'codex', dispatcher_agent: 'coord',
@@ -259,6 +264,13 @@ describe('pln#632 verify-command runner', () => {
     const bad = defaultVerifyRunner({ command: [process.execPath, '-e', 'process.exit(3)'], cwd, timeout_ms: 30000 });
     assert.equal(bad.passed, false);
     assert.equal(bad.exit_code, 3);
+  });
+
+  it('defaultVerifyRunner resolves the npm launcher without enabling a shell', () => {
+    const cwd = ws();
+    const result = defaultVerifyRunner({ command: ['npm', '--version'], cwd, timeout_ms: 30000 });
+    assert.equal(result.passed, true, result.stderr_tail);
+    assert.equal(result.exit_code, 0);
   });
 
   it('stamps the report with the SNAPSHOT iteration if the loop advances during the spawn (review F1)', () => {
