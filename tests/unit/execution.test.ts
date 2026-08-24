@@ -104,9 +104,9 @@ describe('defaultExecutionAdapter', () => {
     const worktree = 'C:\\Users\\worker\\.brainclaw\\worktrees\\project\\lane';
     const pinned = withCodexWorkspaceRoot(invoke, 'codex', worktree, true);
     const execIndex = pinned.args.indexOf('exec');
-    assert.deepEqual(pinned.args.slice(execIndex - 4, execIndex), ['--cd', worktree, '--add-dir', worktree]);
+    assert.deepEqual(pinned.args.slice(execIndex - 2, execIndex), ['--cd', worktree]);
     assert.match(pinned.bashCommand, /codex --cd "C:\\Users\\worker/);
-    assert.match(pinned.bashCommand, /--add-dir "C:\\Users\\worker/);
+    assert.doesNotMatch(pinned.bashCommand, /--add-dir/);
     assert.equal(withCodexWorkspaceRoot(invoke, 'claude-code', worktree, true), invoke);
   });
 

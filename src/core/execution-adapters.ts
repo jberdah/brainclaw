@@ -311,8 +311,9 @@ function buildManualEnvPrefix(claimId?: string): string {
  * on child_process.cwd is insufficient for non-interactive Windows launches:
  * the Codex sandbox can retain the coordinator workspace and apply_patch then
  * refuses writes in ~/.brainclaw/worktrees even when NTFS grants access.
- * `--cd` defines the primary root and `--add-dir` keeps the generated worktree
- * explicitly writable, per the Codex CLI contract.
+ * `--cd` defines the primary root. Do not redundantly add the same path with
+ * `--add-dir`: the unelevated Windows sandbox cannot enforce split writable
+ * root sets and refuses to prepare its wrapper in that configuration.
  */
 export function withCodexWorkspaceRoot(
   invoke: InvokeCommand,
@@ -324,11 +325,11 @@ export function withCodexWorkspaceRoot(
   const args = [...invoke.args];
   const subcommandIndex = args.indexOf('exec');
   const insertAt = subcommandIndex >= 0 ? subcommandIndex : 0;
-  args.splice(insertAt, 0, '--cd', worktreePath, '--add-dir', worktreePath);
+  args.splice(insertAt, 0, '--cd', worktreePath);
   const quote = (value: string): string => isWin32
     ? `"${value.replace(/"/g, '""')}"`
     : `'${value.replace(/'/g, `'\\''`)}'`;
-  const flags = `--cd ${quote(worktreePath)} --add-dir ${quote(worktreePath)}`;
+  const flags = `--cd ${quote(worktreePath)}`;
   const prefix = invoke.executable;
   const suffix = invoke.bashCommand.startsWith(`${prefix} `)
     ? invoke.bashCommand.slice(prefix.length + 1)
