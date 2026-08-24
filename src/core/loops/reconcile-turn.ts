@@ -468,6 +468,7 @@ function convergeLockedTurn(
               body: a.body,
               produced_by: a.produced_by,
               addresses_critique: a.addresses_critique,
+              implementation_verify: a.implementation_verify,
             },
           }, cwd);
         }
@@ -501,6 +502,7 @@ function convergeLockedTurn(
             type: primary.type,
             body: primary.body,
             addresses_critique: primary.addresses_critique,
+            implementation_verify: primary.implementation_verify,
           },
         } : {}),
       }, cwd);

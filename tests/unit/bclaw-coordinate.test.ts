@@ -993,6 +993,7 @@ describe('bclaw_coordinate — side effects', () => {
         intent: 'ideate',
         task: 'Should we extract the dispatcher into a separate package?',
         agent: 'claude-code',
+        linked: { plan_ids: ['pln_chain'], sequence_ids: ['seq_chain'], source_loop_id: 'lop_upstream1' },
       });
 
       assert.equal(response.status, 'ok');
@@ -1016,6 +1017,9 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal(loop.current_phase, 'proposal');
       assert.equal(loop.slots.length, 1, 'single-agent mode → only the champion slot');
       assert.equal(loop.slots[0].role, 'champion');
+      assert.deepEqual(loop.linked, {
+        plan_ids: ['pln_chain'], sequence_ids: ['seq_chain'], source_loop_id: 'lop_upstream1',
+      });
 
       // Iteration block carried from DEFAULT_PROTOCOLS (pln#492 phase 2.b)
       assert.ok(loop.protocol?.iteration);
@@ -1385,6 +1389,15 @@ describe('bclaw_coordinate — turn-owned INITIAL reviewer dispatch (pln#630)', 
     assert.notEqual(committed[0]!.turn_id, committed[1]!.turn_id, 'distinct turn_ids (distinct slot_ids)');
     assert.notEqual(committed[0]!.child_ids.assignment_id, committed[1]!.child_ids.assignment_id, 'distinct assignment ids');
     assert.notEqual(committed[0]!.claim_id, committed[1]!.claim_id, 'parallel slots own distinct claims');
+  });
+
+  it('parses pipeline provenance for a downstream review loop', () => {
+    const result = CoordinateRequestSchema.safeParse({
+      intent: 'review', task: 'Review implementation', open_loop: true,
+      linked: { source_loop_id: 'lop_source123', plan_ids: ['pln_a'], sequence_ids: ['seq_a'] },
+    });
+    assert.ok(result.success);
+    assert.equal(result.data.linked?.source_loop_id, 'lop_source123');
   });
 
   it('non-regression: assign mints NO reservation (turn-owned is review-open_loop only)', async () => {

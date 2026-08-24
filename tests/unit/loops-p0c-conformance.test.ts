@@ -491,7 +491,7 @@ describe('P0C — exhaustive phase-aware reducers', () => {
     { kind: 'review', phase: 'followup_review', expected: 'verdict', lane: { review_verdict: 'approve', review_summary: 'green' } },
     { kind: 'ideation', phase: 'critique', expected: 'critique', lane: { artifact_type: 'critique', body: 'counterexample' }, critiques: [{ body: 'counterexample' }] },
     { kind: 'ideation', phase: 'revision', expected: 'revision', lane: { artifact_type: 'revision', body: 'revised proposal' } },
-    { kind: 'ideation', phase: 'synthesis', expected: 'plan_draft', lane: { artifact_type: 'plan_draft', body: 'implementation plan', artifacts: ['art_critique1'] } },
+    { kind: 'ideation', phase: 'synthesis', expected: 'plan_draft', lane: { artifact_type: 'plan_draft', body: 'implementation plan', artifacts: ['art_critique1'], implementation_verify: { command: ['npm', 'test'] } } },
     { kind: 'implementation', phase: 'execute', expected: 'execute_report', lane: { artifact_type: 'execute_report', body: 'implementation complete' } },
     { kind: 'research', phase: 'investigate', expected: 'finding', lane: { artifact_type: 'finding', body: 'source-backed finding' } },
     { kind: 'research', phase: 'synthesize', expected: 'synthesis', lane: { artifact_type: 'synthesis', body: 'answer synthesis' } },

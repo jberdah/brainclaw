@@ -306,6 +306,38 @@ function buildManualEnvPrefix(claimId?: string): string {
   return buildClaimEnvPrefix(claimId);
 }
 
+/**
+ * Make the isolated worktree the explicit Codex workspace root. Relying only
+ * on child_process.cwd is insufficient for non-interactive Windows launches:
+ * the Codex sandbox can retain the coordinator workspace and apply_patch then
+ * refuses writes in ~/.brainclaw/worktrees even when NTFS grants access.
+ * `--cd` defines the primary root. Do not redundantly add the same path with
+ * `--add-dir`: the unelevated Windows sandbox cannot enforce split writable
+ * root sets and refuses to prepare its wrapper in that configuration.
+ */
+export function withCodexWorkspaceRoot(
+  invoke: InvokeCommand,
+  agent: string,
+  worktreePath: string | undefined,
+  isWin32 = process.platform === 'win32',
+): InvokeCommand {
+  const executableName = path.win32.basename(invoke.executable).replace(/\.(?:cmd|exe|bat|com)$/i, '').toLowerCase();
+  if (agent.trim().toLowerCase() !== 'codex' || executableName !== 'codex' || !worktreePath) return invoke;
+  const args = [...invoke.args];
+  const subcommandIndex = args.indexOf('exec');
+  const insertAt = subcommandIndex >= 0 ? subcommandIndex : 0;
+  args.splice(insertAt, 0, '--cd', worktreePath);
+  const quote = (value: string): string => isWin32
+    ? `"${value.replace(/"/g, '""')}"`
+    : `'${value.replace(/'/g, `'\\''`)}'`;
+  const flags = `--cd ${quote(worktreePath)}`;
+  const prefix = invoke.executable;
+  const suffix = invoke.bashCommand.startsWith(`${prefix} `)
+    ? invoke.bashCommand.slice(prefix.length + 1)
+    : invoke.bashCommand;
+  return { ...invoke, args, bashCommand: `${prefix} ${flags} ${suffix}` };
+}
+
 export class CliExecutionAdapter implements ExecutionAdapter {
   readonly id = 'cli';
 
@@ -330,6 +362,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
 
   prepareManualCommand(invoke: InvokeCommand, options: ExecutionAdapterStartOptions): ManualExecutionCommand {
     const isWin32 = process.platform === 'win32';
+    invoke = withCodexWorkspaceRoot(invoke, options.agent, options.worktreePath, isWin32);
     const shell = isWin32 ? 'cmd' : (invoke.shell ? 'bash' : 'sh');
     if (
       options.turnEcho?.contract_hash
@@ -381,6 +414,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
 
   start(invoke: InvokeCommand, options: ExecutionAdapterStartOptions): SpawnResult {
     const isWin32 = process.platform === 'win32';
+    invoke = withCodexWorkspaceRoot(invoke, options.agent, options.worktreePath, isWin32);
 
     // F7 (trp_0e5150d3): route worker env through buildWorkerIdentityEnv so the
     // worker is an independent agent — coordinator identity (BRAINCLAW_AGENT*,

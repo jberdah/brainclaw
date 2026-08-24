@@ -24,6 +24,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { loadAssignment } from '../assignments.js';
 import { getLoop } from './store.js';
 import { withLoopLock } from './lock.js';
 import { addArtifactWithEvidence } from './verbs.js';
@@ -31,6 +32,8 @@ import { artifactsInIteration } from './iteration-engine.js';
 import { evidenceDigest } from './evidence.js';
 import { eligibleArtifactsForPurpose } from './gate-policy.js';
 import { captureWorkspaceDigest } from './workspace-digest.js';
+import { findReservationByAssignmentId } from './attempt-reservation.js';
+import { resolveTurnGenerationChain } from './attempt-generations.js';
 import {
   VERIFY_DEFAULT_TIMEOUT_MS,
   LOOP_ARTIFACT_BODY_MAX_BYTES,
@@ -75,7 +78,15 @@ export const defaultVerifyRunner: VerifyRunner = (config) => {
     if (k.startsWith('BRAINCLAW_') || k === 'BCLAW_PROMPT_FILE') delete env[k];
   }
   const started = Date.now();
-  const r = spawnSync(config.command[0]!, config.command.slice(1), {
+  const requestedExecutable = config.command[0]!;
+  const npmCli = process.platform === 'win32' && (requestedExecutable === 'npm' || requestedExecutable === 'npx')
+    ? path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', `${requestedExecutable}-cli.js`)
+    : undefined;
+  // Node cannot spawn .cmd shims with shell:false on Windows. Invoke npm's JS
+  // entrypoint through the current Node binary so the no-shell security contract holds.
+  const executable = npmCli ? process.execPath : requestedExecutable;
+  const commandArgs = npmCli ? [npmCli, ...config.command.slice(1)] : config.command.slice(1);
+  const r = spawnSync(executable, commandArgs, {
     cwd: config.cwd,
     env,
     shell: false,
@@ -107,18 +118,50 @@ export const defaultVerifyRunner: VerifyRunner = (config) => {
 export type ResolvedVerify = { kind: 'ok'; config: VerifyCommandConfig } | { kind: 'unconfigured' };
 
 /**
- * Resolve the verify command for a loop. PR1: the loop-PROJECT cwd only (the
- * lane-worktree cwd for a sequenced impl loop is a follow-up). Returns `unconfigured`
- * when the loop opted out (no `protocol.verify`).
+ * Resolve the verify command for a loop. Bound implementation lanes run only
+ * in their assignment worktree; legacy/unbound loops retain the project cwd.
+ * Returns `unconfigured` when the loop opted out (no `protocol.verify`).
  */
-export function resolveVerifyCommand(thread: LoopThread, cwd: string | undefined): ResolvedVerify {
+function assignmentWorktree(assignmentId: string, cwd: string | undefined): string | undefined {
+  const assignment = loadAssignment(assignmentId, cwd);
+  const reservation = findReservationByAssignmentId(assignmentId, cwd);
+  const generation = reservation
+    ? resolveTurnGenerationChain(cwd ?? reservation.store_root, reservation.turn_id)?.latest_generation
+    : undefined;
+  return generation?.workspace_path ?? assignment?.worktree_path;
+}
+
+export function resolveVerifyCommand(thread: LoopThread, cwd: string | undefined, slotId?: string): ResolvedVerify {
   const cfg = thread.protocol?.verify;
   if (!cfg) return { kind: 'unconfigured' };
+  let verifyCwd = path.resolve(cwd ?? process.cwd());
+  if (thread.kind === 'implementation') {
+    const selected = slotId ? thread.slots.find((slot) => slot.slot_id === slotId) : undefined;
+    if (slotId && !selected) throw new Error(`verify: slot ${slotId} not found on loop ${thread.id}`);
+    const candidates = (selected ? [selected] : thread.slots)
+      .filter((slot) => slot.assignment_id)
+      .map((slot) => ({ slot, worktree_path: assignmentWorktree(slot.assignment_id!, cwd) }))
+      .filter((entry) => entry.worktree_path);
+    if (!selected && candidates.length > 1) {
+      throw new Error(`verify: implementation loop ${thread.id} has multiple bound worktrees; pass slot_id to verify one lane deterministically`);
+    }
+    if (!selected && thread.slots.some((slot) => slot.lane) && candidates.length === 0) {
+      throw new Error(`verify: implementation loop ${thread.id} has bound lanes but no assignment worktree; dispatch and settle the execute turn first`);
+    }
+    if (selected?.lane && !selected.assignment_id) {
+      throw new Error(`verify: slot ${selected.slot_id} is bound to lane ${selected.lane} but has no assignment worktree; dispatch and settle the execute turn first`);
+    }
+    const candidate = candidates[0];
+    if (selected?.assignment_id && !candidate?.worktree_path) {
+      throw new Error(`verify: slot ${selected.slot_id} assignment ${selected.assignment_id} has no worktree_path`);
+    }
+    if (candidate?.worktree_path) verifyCwd = path.resolve(candidate.worktree_path);
+  }
   return {
     kind: 'ok',
     config: {
       command: cfg.command,
-      cwd: path.resolve(cwd ?? process.cwd()),
+      cwd: verifyCwd,
       timeout_ms: cfg.timeout_ms ?? VERIFY_DEFAULT_TIMEOUT_MS,
     },
   };
@@ -149,6 +192,7 @@ interface VerifyEvidenceBindings {
   command_digest: string;
   workspace_digest: string;
   workspace_stable: boolean;
+  lane?: string;
 }
 
 export function buildVerifyReportBody(
@@ -172,6 +216,7 @@ export function buildVerifyReportBody(
 
 export interface RunVerifyInput {
   loop_id: string;
+  slot_id?: string;
   actor: string;
   /** Test seam; defaults to {@link defaultVerifyRunner}. */
   runner?: VerifyRunner;
@@ -188,8 +233,13 @@ export interface RunVerifyResult {
 }
 
 /** True when an authoritative, still-fresh engine report exists for this iteration. */
-function hasVerifyReportForIteration(thread: LoopThread, iteration: number): boolean {
-  const reports = artifactsInIteration(thread, iteration).filter((artifact) => artifact.type === 'verify_report');
+function hasVerifyReportForIteration(thread: LoopThread, iteration: number, lane?: string): boolean {
+  const reports = artifactsInIteration(thread, iteration).filter((artifact) => {
+    if (artifact.type !== 'verify_report') return false;
+    if (!lane) return true;
+    try { return (JSON.parse(artifact.body ?? '{}') as { lane?: string }).lane === lane; }
+    catch { return false; }
+  });
   return eligibleArtifactsForPurpose(thread, reports, 'command_green').eligible.length > 0;
 }
 
@@ -209,7 +259,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
   const snapshot = withLoopLock<
     | { state: 'unconfigured'; thread: LoopThread }
     | { state: 'deduped'; thread: LoopThread }
-    | { state: 'run'; thread: LoopThread; config: VerifyCommandConfig; iteration: number; phase: string }
+    | { state: 'run'; thread: LoopThread; config: VerifyCommandConfig; iteration: number; phase: string; lane?: string }
   >({
     cwd,
     intent: 'verify',
@@ -218,14 +268,21 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
     work: () => {
       const thread = getLoop(input.loop_id, cwd);
       if (!thread) throw new Error(`loop ${input.loop_id} not found`);
-      const resolved = resolveVerifyCommand(thread, cwd);
+      const inferredSlots = thread.kind === 'implementation' && !input.slot_id
+        ? thread.slots.filter((slot) => slot.assignment_id && assignmentWorktree(slot.assignment_id, cwd))
+        : [];
+      const selectedSlot = input.slot_id
+        ? thread.slots.find((slot) => slot.slot_id === input.slot_id)
+        : inferredSlots.length === 1 ? inferredSlots[0] : undefined;
+      const lane = selectedSlot?.lane;
+      const resolved = resolveVerifyCommand(thread, cwd, selectedSlot?.slot_id ?? input.slot_id);
       if (resolved.kind === 'unconfigured') return { state: 'unconfigured', thread };
       const iteration = thread.iteration_count;
-      if (hasVerifyReportForIteration(thread, iteration)) return { state: 'deduped', thread };
+      if (hasVerifyReportForIteration(thread, iteration, lane)) return { state: 'deduped', thread };
       // Snapshot the iteration + phase we are about to verify. The command tests THIS
       // iteration's working tree; the report must be attributed to it even if a
       // concurrent advance bumps the loop's iteration while we spawn (review F1).
-      return { state: 'run', thread, config: resolved.config, iteration, phase: thread.current_phase };
+      return { state: 'run', thread, config: resolved.config, iteration, phase: thread.current_phase, lane };
     },
   });
 
@@ -233,7 +290,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
   if (snapshot.state === 'deduped') return { thread: snapshot.thread, deduped: true };
 
   // --- OUT OF LOCK: run the command (may take minutes). ---
-  const { config, iteration, phase } = snapshot;
+  const { config, iteration, phase, lane } = snapshot;
   const command_digest = evidenceDigest({ command: config.command });
   const workspaceBefore = captureWorkspaceDigest(config.cwd);
   const runResult = runner(config);
@@ -242,7 +299,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
   const reportAfterRun = buildVerifyReportBody(
     config,
     { ...runResult, passed: runResult.passed && workspace_stable },
-    { command_digest, workspace_digest: workspaceAfter, workspace_stable },
+    { command_digest, workspace_digest: workspaceAfter, workspace_stable, lane },
   );
 
   // --- Lock scope 2: re-check idempotency (by SNAPSHOT iteration), then append. ---
@@ -257,7 +314,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
       // Dedup on the SNAPSHOT iteration — a report for the iteration we verified already
       // landed (a concurrent verify won). Checking the snapshot (not the current)
       // iteration is what makes this correct after a concurrent advance (review F1).
-      if (hasVerifyReportForIteration(thread, iteration)) {
+      if (hasVerifyReportForIteration(thread, iteration, lane)) {
         return { thread, report: reportAfterRun, deduped: true };
       }
       // Close the final out-of-lock race: the bytes verified above must still be the
@@ -268,7 +325,7 @@ export function runVerify(input: RunVerifyInput, cwd?: string): RunVerifyResult 
       const report = buildVerifyReportBody(
         config,
         { ...runResult, passed: runResult.passed && commitStable },
-        { command_digest, workspace_digest: workspaceAtCommit, workspace_stable: commitStable },
+        { command_digest, workspace_digest: workspaceAtCommit, workspace_stable: commitStable, lane },
       );
       const updated = addArtifactWithEvidence(
         {

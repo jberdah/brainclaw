@@ -1242,6 +1242,11 @@ export const LaneResultSchema = z.object({
    * reconcile this to its phase's required artifact type.
    */
   artifact_type: z.string().min(1).optional(),
+  /** Synthesis-only executable acceptance policy for the downstream implementation loop. */
+  implementation_verify: z.object({
+    command: z.array(z.string().min(1)).min(1),
+    timeout_ms: z.number().int().positive().max(15 * 60 * 1000).optional(),
+  }).optional(),
   /**
    * pln#628 Focus 4B — review-loop verdict. A worker running a review-loop turn
    * sets this to signal whether the change is good to merge (`approve`) or needs

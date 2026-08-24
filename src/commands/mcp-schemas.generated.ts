@@ -284,6 +284,26 @@ export const generatedSchemas = {
       "phase": {
         "type": "string"
       },
+      "lane": {
+        "type": "string"
+      },
+      "scope_hint": {
+        "type": "string"
+      },
+      "plan_ids": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "step_ids": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
       "status": {
         "type": "string",
         "enum": [

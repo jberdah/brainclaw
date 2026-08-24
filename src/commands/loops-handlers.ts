@@ -1,5 +1,5 @@
 import { ZodError } from 'zod';
-import type { FacadeResponse } from '../core/facade-schema.js';
+import type { FacadeResponse, NextAction } from '../core/facade-schema.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
 import { dispatchLoopTurn } from '../core/loop-turn-dispatch.js';
@@ -86,6 +86,10 @@ function successResponse(
   durationMs: number,
   summary: string,
 ): HandleBclawLoopResult {
+  const resultLoop = result && typeof result === 'object' && 'loop' in result
+    ? (result as { loop?: LoopThread }).loop
+    : undefined;
+  const nextActions = resultLoop ? pipelineNextActions(resultLoop) : [];
   return {
     response: {
       status: 'ok',
@@ -95,9 +99,58 @@ function successResponse(
       side_effects,
       warnings,
       duration_ms: durationMs,
+      ...(nextActions.length > 0 ? { next_actions: nextActions } : {}),
     },
     summary,
   };
+}
+
+/** Cross-loop affordances: explicit next calls, never hidden orchestration. */
+function pipelineNextActions(loop: LoopThread): NextAction[] {
+  if (loop.kind === 'ideation') {
+    const draft = [...loop.artifacts].reverse().find((artifact) => artifact.type === 'plan_draft');
+    if (!draft || (loop.current_phase !== 'synthesis' && loop.status !== 'completed')) return [];
+    const planIds = loop.linked?.plan_ids ?? [];
+    const sequenceIds = loop.linked?.sequence_ids ?? [];
+    if (planIds.length > 0 && sequenceIds.length > 0) {
+      return [{
+        tool: 'bclaw_loop',
+        args: {
+          intent: 'open', kind: 'implementation', title: `Implement ${loop.title}`,
+          goal: loop.goal, linked: { plan_ids: planIds, sequence_ids: sequenceIds, source_loop_id: loop.id },
+          verify: draft.implementation_verify,
+          slots: [{ role: 'implementer' }], allow_orphan: true,
+        },
+        when: 'start implementation from the accepted synthesis',
+      }];
+    }
+    return [{
+      tool: 'bclaw_create',
+      args: { entity: 'plan', text: draft.body ?? '<materialize the plan_draft artifact>', status: 'todo' },
+      when: 'materialize the synthesis before opening its implementation loop',
+    }];
+  }
+  if (loop.kind === 'implementation' && (loop.current_phase === 'handoff_ready' || loop.status === 'completed')) {
+    const handoff = [...loop.artifacts].reverse().find((artifact) => artifact.type === 'handoff');
+    const reviewScope = [...new Set(loop.slots.map((slot) => slot.scope_hint?.trim()).filter((scope): scope is string => Boolean(scope)))].join(',');
+    return [{
+      tool: 'bclaw_coordinate',
+      args: {
+        intent: 'review', open_loop: true,
+        task: handoff?.ref
+          ? `Review implementation loop ${loop.id}; handoff ${handoff.ref.kind}:${handoff.ref.id}`
+          : `Review implementation loop ${loop.id} (${loop.title})`,
+        targetAgents: ['<reviewer>'],
+        ...(reviewScope ? { scope: reviewScope } : {}),
+        ...(handoff?.ref && (handoff.ref.kind === 'commit' || handoff.ref.kind === 'branch')
+          ? { ref: handoff.ref.id }
+          : {}),
+        linked: { source_loop_id: loop.id, plan_ids: loop.linked?.plan_ids, sequence_ids: loop.linked?.sequence_ids },
+      },
+      when: 'implementation evidence is handoff-ready',
+    }];
+  }
+  return [];
 }
 
 function errorResponse(
@@ -525,6 +578,7 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
                     body: req.artifact.body,
                     ref: req.artifact.ref,
                     addresses_critique: req.artifact.addresses_critique,
+                    implementation_verify: req.artifact.implementation_verify,
                   }
                 : undefined,
               actor,
@@ -621,6 +675,7 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
                 body: req.artifact.body,
                 ref: req.artifact.ref,
                 addresses_critique: req.artifact.addresses_critique,
+                implementation_verify: req.artifact.implementation_verify,
               },
               actor,
             },
@@ -774,7 +829,7 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
           return errorResponse('verify', 'not_found', `unknown loop_id ${req.loop_id}`, Date.now() - startMs);
         }
         const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
-        const result = runVerify({ loop_id: req.loop_id, actor }, options.cwd);
+        const result = runVerify({ loop_id: req.loop_id, slot_id: req.slot_id, actor }, options.cwd);
         const newEvents = findNewLoopEvents(result.thread.id, beforeEvents, options.cwd);
         const summary = result.unconfigured
           ? `verify: loop has no protocol.verify — falling back to an agent-narrated verify_report`

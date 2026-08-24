@@ -217,9 +217,12 @@ describe('commit-intent — consistent reads + GC', () => {
 
   it('gcCommitMarkers removes applied markers older than the cutoff', () => {
     const loop = seedLoop(cwd);
-    commitViaIntent(completeTurnIntentInput(loop), cwd);
-    // maxAge = -1 → everything is "older than now + 1ms" → removed.
-    const removed = gcCommitMarkers(loop.id, -1, cwd);
+    const intent = commitViaIntent(completeTurnIntentInput(loop), cwd);
+    const marker = path.join(cwd, '.brainclaw', 'loops', 'commits', loop.id, `${intent.intent_id}.applied.json`);
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(marker, old, old);
+
+    const removed = gcCommitMarkers(loop.id, 1_000, cwd);
     assert.ok(removed >= 1, 'the .applied marker was GC-d');
   });
 });

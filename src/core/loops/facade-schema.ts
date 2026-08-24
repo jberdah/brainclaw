@@ -124,6 +124,21 @@ export const BclawLoopCompleteTurnSchema = z.object({
       ref: LoopRefSchema.optional(),
       /** pln#492 synthesis audit trail. Required when type === 'plan_draft'. */
       addresses_critique: z.array(z.string().min(1)).optional(),
+      implementation_verify: z
+        .object({
+          command: z.array(z.string().min(1)).min(1),
+          timeout_ms: z.number().int().positive().optional(),
+        })
+        .optional(),
+    })
+    .superRefine((artifact, ctx) => {
+      if (artifact.type === 'plan_draft' && !artifact.implementation_verify) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "plan_draft requires implementation_verify for deterministic downstream verification",
+          path: ['implementation_verify'],
+        });
+      }
     })
     .optional(),
   expected_version: z.number().int().nonnegative().optional(),
@@ -157,14 +172,30 @@ export const BclawLoopAdvanceSchema = z.object({
 export const BclawLoopAddArtifactSchema = z.object({
   intent: z.literal('add_artifact'),
   loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
-  artifact: z.object({
-    phase: z.string().min(1),
-    type: z.string().min(1),
-    body: z.string().optional(),
-    ref: LoopRefSchema.optional(),
-    /** pln#492 synthesis audit trail. Required when type === 'plan_draft'. */
-    addresses_critique: z.array(z.string().min(1)).optional(),
-  }),
+  artifact: z
+    .object({
+      phase: z.string().min(1),
+      type: z.string().min(1),
+      body: z.string().optional(),
+      ref: LoopRefSchema.optional(),
+      /** pln#492 synthesis audit trail. Required when type === 'plan_draft'. */
+      addresses_critique: z.array(z.string().min(1)).optional(),
+      implementation_verify: z
+        .object({
+          command: z.array(z.string().min(1)).min(1),
+          timeout_ms: z.number().int().positive().optional(),
+        })
+        .optional(),
+    })
+    .superRefine((artifact, ctx) => {
+      if (artifact.type === 'plan_draft' && !artifact.implementation_verify) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "plan_draft requires implementation_verify for deterministic downstream verification",
+          path: ['implementation_verify'],
+        });
+      }
+    }),
   expected_version: z.number().int().nonnegative().optional(),
   ...CallerEnvelopeFields,
 });
@@ -202,6 +233,8 @@ export const BclawLoopCloseSchema = z.object({
 export const BclawLoopVerifySchema = z.object({
   intent: z.literal('verify'),
   loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  /** Required when an implementation loop has more than one bound lane. */
+  slot_id: z.string().regex(/^lsl_[0-9a-z]+$/).optional(),
   // No expected_version: runVerify is idempotent by (loop, iteration) via its own
   // two-lock re-check, not optimistic-concurrency CAS (review F3).
   ...CallerEnvelopeFields,

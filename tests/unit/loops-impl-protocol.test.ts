@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   decideNextPhase,
+  evaluateGateCondition,
   hasPassingVerifyReportInIteration,
   type LoopArtifact,
   type LoopThread,
@@ -34,6 +35,11 @@ function verifyReport(passed: boolean, iteration: number): LoopArtifact {
     iteration,
     produced_at: '2026-07-24T00:00:00.000Z', produced_by: 'agt_worker',
   } as LoopArtifact;
+}
+
+function laneVerifyReport(lane: string): LoopArtifact {
+  const report = verifyReport(true, 0);
+  return { ...report, body: JSON.stringify({ command: 'npm test', exit_code: 0, passed: true, lane }) };
 }
 
 describe('pln#609 — enriched implementation protocol literal', () => {
@@ -96,5 +102,19 @@ describe('pln#609 — command_green iteration exit (pure)', () => {
     const thread = makeThread({ iteration_count: 0, artifacts: [] });
     assert.equal(hasPassingVerifyReportInIteration(thread, 0), false);
     assert.notEqual((decideNextPhase(thread, impl) as { reason?: string }).reason, 'command_green');
+  });
+
+  it('requires a green report from every bound implementation lane', () => {
+    const slots = [
+      { slot_id: 'lsl_a', role: 'implementer', status: 'done' as const, lane: 'api' },
+      { slot_id: 'lsl_b', role: 'implementer', status: 'done' as const, lane: 'ui' },
+    ];
+    const partial = makeThread({ slots, artifacts: [laneVerifyReport('api')] });
+    assert.equal(hasPassingVerifyReportInIteration(partial, 0), false);
+    const complete = makeThread({ slots, artifacts: [laneVerifyReport('api'), laneVerifyReport('ui')] });
+    assert.equal(hasPassingVerifyReportInIteration(complete, 0), true);
+    const gate = DEFAULT_PROTOCOLS.implementation.phases.find((phase) => phase.name === 'verify')!.advance_gate!;
+    assert.equal(evaluateGateCondition(partial, gate).passed, false, 'verify phase waits for every lane report');
+    assert.equal(evaluateGateCondition(complete, gate).passed, true);
   });
 });
