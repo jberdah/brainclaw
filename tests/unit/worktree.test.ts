@@ -23,37 +23,11 @@ import {
   resolveWorktreeDepsMode,
   detectPackageManager,
   provisionWorktreeDeps,
-  grantCodexSandboxWorktreeAccess,
 } from '../../src/core/worktree.js';
 import { saveConfig, defaultConfig } from '../../src/core/config.js';
 import { buildProtocolSection } from '../../src/core/dispatcher.js';
 import { createCoordinatorClaim, saveClaim, loadClaim } from '../../src/core/claims.js';
 import { ensureMemoryDir } from '../../src/core/io.js';
-
-describe('grantCodexSandboxWorktreeAccess', () => {
-  it('is a no-op outside Codex dispatches', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-acl-noop-'));
-    try {
-      assert.equal(grantCodexSandboxWorktreeAccess(dir, 'claude-code'), undefined);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('grants the Windows Codex sandbox group modify access when available', { skip: process.platform !== 'win32' }, () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-acl-codex-'));
-    try {
-      const warning = grantCodexSandboxWorktreeAccess(dir, 'codex');
-      assert.equal(warning, undefined);
-      const acl = spawnSync('icacls', [dir], { encoding: 'utf-8', windowsHide: true });
-      assert.equal(acl.status, 0, acl.stderr);
-      assert.match(acl.stdout, /CodexSandboxUsers/);
-      assert.match(acl.stdout, /\(M\)/);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
 
 // trp_37b05a15 — Next.js detection drives the Turbopack node_modules-symlink
 // warning at worktree creation.

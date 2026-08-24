@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { canSpawnAgent, attemptExecution, getAssignmentAckPath, type ExecutionResult } from '../../src/core/execution.js';
 import { buildInvokeCommand, type InvokeCommand } from '../../src/core/agent-capability.js';
-import { buildAckWrapCommand, defaultExecutionAdapter, writeContractBootstrapScript } from '../../src/core/execution-adapters.js';
+import { buildAckWrapCommand, defaultExecutionAdapter, withCodexWorkspaceRoot, writeContractBootstrapScript } from '../../src/core/execution-adapters.js';
 import { CoordinateRequestSchema, ExecutionStatusSchema } from '../../src/core/facade-schema.js';
 import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
@@ -98,6 +98,18 @@ describe('canSpawnAgent', () => {
 });
 
 describe('defaultExecutionAdapter', () => {
+  it('pins Codex non-interactive runs to the dispatched worktree', () => {
+    const invoke = buildInvokeCommand('codex', 'edit the lane');
+    assert.ok(invoke);
+    const worktree = 'C:\\Users\\worker\\.brainclaw\\worktrees\\project\\lane';
+    const pinned = withCodexWorkspaceRoot(invoke, 'codex', worktree, true);
+    const execIndex = pinned.args.indexOf('exec');
+    assert.deepEqual(pinned.args.slice(execIndex - 4, execIndex), ['--cd', worktree, '--add-dir', worktree]);
+    assert.match(pinned.bashCommand, /codex --cd "C:\\Users\\worker/);
+    assert.match(pinned.bashCommand, /--add-dir "C:\\Users\\worker/);
+    assert.equal(withCodexWorkspaceRoot(invoke, 'claude-code', worktree, true), invoke);
+  });
+
   it('uses an environment-attesting bootstrap and exact terminal hashes on POSIX and Windows', () => {
     const hashes = {
       contract_hash: 'a'.repeat(64),
