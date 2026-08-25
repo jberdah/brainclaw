@@ -243,11 +243,17 @@ describe('core/memory-compactor', () => {
 
     it('archives duplicate constraints and decisions from a real store', () => {
       const state = createState();
+      // Keep this fixture relative to the test clock. Absolute 2026-04 dates
+      // eventually crossed the compactor's stale-age threshold and made this
+      // duplicate-only scenario archive trp_keep as a third, unrelated item.
+      const recentOld = new Date(Date.now() - 2 * 24 * 60 * 60_000).toISOString();
+      const recentNew = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+      const recentKeep = new Date().toISOString();
       state.active_constraints.push(
         {
           id: 'cst_dup_old',
           text: 'Validate JWT tokens before processing API requests',
-          created_at: '2026-04-01T09:00:00Z',
+          created_at: recentOld,
           author: 'alice',
           status: 'active',
           tags: ['auth'],
@@ -256,7 +262,7 @@ describe('core/memory-compactor', () => {
         {
           id: 'cst_dup_new',
           text: 'Validate JWT tokens before processing API requests in the gateway',
-          created_at: '2026-04-02T09:00:00Z',
+          created_at: recentNew,
           author: 'bob',
           status: 'active',
           tags: ['security'],
@@ -267,7 +273,7 @@ describe('core/memory-compactor', () => {
         {
           id: 'dec_dup_old',
           text: 'Use SQLite for local development and automated tests',
-          created_at: '2026-04-01T10:00:00Z',
+          created_at: recentOld,
           author: 'alice',
           tags: ['storage'],
           related_paths: ['src/storage'],
@@ -275,7 +281,7 @@ describe('core/memory-compactor', () => {
         {
           id: 'dec_dup_new',
           text: 'Use SQLite for local development and automated test runs',
-          created_at: '2026-04-02T10:00:00Z',
+          created_at: recentNew,
           author: 'bob',
           tags: ['local-dev'],
           related_paths: ['src/storage'],
@@ -284,7 +290,7 @@ describe('core/memory-compactor', () => {
       state.known_traps.push({
         id: 'trp_keep',
         text: 'Do not reuse session ids across hosts',
-        created_at: '2026-04-03T09:00:00Z',
+        created_at: recentKeep,
         author: 'alice',
         status: 'active',
         severity: 'high',
