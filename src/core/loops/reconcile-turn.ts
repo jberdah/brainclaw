@@ -1020,10 +1020,33 @@ function convergeFailedLockedTurn(
   // Assignment is a business projection of the same failed turn. Leaving it
   // offered/started while the run, slot, and claim are terminal recreates the
   // orphaned-state ambiguity this convergence path exists to remove.
-  const assignment = loadAssignment(run.assignment_id, cwd);
+  let assignment = loadAssignment(run.assignment_id, cwd);
   if (assignment && !['completed', 'failed', 'blocked', 'timed_out', 'cancelled', 'expired', 'rerouted'].includes(assignment.status)) {
+    const assignmentId = assignment.id;
     try {
-      transitionAssignment(assignment.id, 'failed', {
+      // A running AgentRun is stronger execution evidence than a lagging
+      // Assignment projection. Legacy/file workers can leave that projection
+      // at created or accepted; walk the legal FSM edges before recording the
+      // terminal failure instead of declining forever on created -> failed or
+      // accepted -> failed. Each edge is durable, so a crash resumes from the
+      // last projection on the next lazy pass.
+      if (assignment.status === 'created' || assignment.status === 'retrying') {
+        transitionAssignment(assignmentId, 'offered', {
+          actor,
+          syncAgentRun: false,
+          status_reason: `turn ${reservation.turn_id} failure projection catch-up`,
+        }, cwd);
+        assignment = loadAssignment(assignmentId, cwd);
+      }
+      if (assignment?.status === 'accepted') {
+        transitionAssignment(assignmentId, 'started', {
+          actor,
+          syncAgentRun: false,
+          status_reason: `turn ${reservation.turn_id} failure projection catch-up`,
+        }, cwd);
+        assignment = loadAssignment(assignmentId, cwd);
+      }
+      transitionAssignment(assignmentId, 'failed', {
         actor,
         syncAgentRun: false,
         status_reason: `turn ${reservation.turn_id} failed: ${transportReason}`,

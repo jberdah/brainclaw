@@ -487,7 +487,7 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     // but the claim release must arrive as a loop-recorded business decision —
     // slot marked failed via complete_turn, audited as such — in the SAME lazy
     // pass, so retry lanes are never starved.
-    const { loopId, runId } = makeTurnOwnedLane();
+    const { loopId, runId, assignmentId } = makeTurnOwnedLane();
     const run = loadAgentRun(runId, ws.dir)!;
 
     const result = reconcileAgentRun(runId, ws.dir, {
@@ -495,6 +495,8 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     });
     assert.equal(result.action, 'inferred_failed');
     assert.equal(loadClaim('clm_turn', ws.dir).status, 'released', 'non-famine: released in the same lazy pass');
+    assert.equal(loadAssignment(assignmentId, ws.dir)!.status, 'failed',
+      'a lagging created assignment is advanced through legal FSM edges before failure');
     // The release is the LOOP's business decision, recorded and audited as such.
     const reloaded = getLoop(loopId, ws.dir)!;
     assert.equal(reloaded.slots.find((s) => s.slot_id === 'lsl_r')!.status, 'failed',
