@@ -7,6 +7,12 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.3] — 2026-08-26
+
+The DGX monorepo reliability patch: Code Map cascades become durable and
+observable, active-session routing is consistent, and invalid dispatches fail
+before creating misleading execution state.
+
 ### Added
 
 - **Durable monorepo Code Map cascades.** MCP cascade refreshes return a job

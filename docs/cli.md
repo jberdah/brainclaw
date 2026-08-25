@@ -639,11 +639,11 @@ Full reference (freshness model, supported languages, WASM bundling): [docs/code
 
 ### `brainclaw code-map status [--cascade]`
 
-Store presence, freshness badge (`fresh` / `stale_changed_files` / `stale_extractor` / `stale_grammar` / `partial` / `missing_index`), and index stats (files, nodes, edges). Read-only. In a multi-project workspace, `--cascade` adds a per-child recap (which nested projects have a built index vs `missing_index`, plus an aggregate count).
+Store presence, freshness badge (`fresh` / `stale_changed_files` / `stale_extractor` / `stale_grammar` / `partial` / `missing_index`), and index stats (files, nodes, edges). Read-only. In a multi-project workspace, `--cascade` adds compact coverage counts and names only non-fresh projects. On the MCP surface, the equivalent `bclaw_code_status(cascade=true)` also follows the latest durable cascade job.
 
 ### `brainclaw code-map refresh [--all|--changed] [--cascade]`
 
-Build or update the index. `--changed` (default) re-parses only touched files; `--all` does a full re-index. Run this when status shows `missing_index` or a stale badge. Fails fast (never blocks) if another writer holds the project lock. In a multi-project workspace, `--cascade` refreshes **every nested project** into its own store plus a root store scoped to the files no child owns (zero double-indexing) — one command at the root indexes the whole monorepo per-project. See [docs/code-map.md](code-map.md#cascading-a-multi-project-workspace---cascade).
+Build or update the index. `--changed` (default) re-parses only touched files; `--all` does a full re-index. Run this when status shows `missing_index` or a stale badge. Fails fast (never blocks) if another writer holds the project lock. In a multi-project workspace, `--cascade` synchronously refreshes each discovered project into its own store plus a root store scoped to files no child owns (zero double-indexing). The MCP equivalent starts a durable background job instead; follow it with `bclaw_code_status(cascade=true)`. See [docs/code-map.md](code-map.md#cascading-a-multi-project-workspace---cascade).
 
 ### `brainclaw code-map find <query> [--limit <n>]`
 

@@ -8,6 +8,36 @@ guarantees this changelog follows.
 
 ---
 
+## [1.28.3] — 2026-08-26
+
+**Changed — durable Code Map cascade execution**
+
+- `bclaw_code_refresh({ cascade: true })` now returns a durable `job_id`
+  immediately for multi-project workspaces instead of keeping the MCP request
+  open for the whole synchronous cascade.
+- `bclaw_code_status({ cascade: true })` adds the latest job's lifecycle and
+  progress (`queued | running | completed | failed`, project counts and current
+  project), then a bounded terminal summary with outcome counts and problem
+  projects. Discovery truncation and `no_eligible_files`, `locked`, and `failed`
+  outcomes remain explicit.
+- All Code Map MCP tools now resolve against the active session project selected
+  by `bclaw_work` / `bclaw_switch`; this corrects routing behavior without
+  changing their input schemas.
+
+**Added — non-blocking proximity hints on canonical memory creation**
+
+- Successful `bclaw_create` calls for decisions, constraints, and traps may add
+  `nearby_items` (at most three bounded previews with ids and match reasons).
+  The requested creation is never rejected solely because a nearby item exists.
+
+**Changed — admission failures become pre-mutation**
+
+- Unsupported true cross-project auto-execution and empty `stdin_pipe` prompt
+  delivery now fail before claims, assignments, loops, or worker processes are
+  created. Existing successful response shapes and input schemas are unchanged.
+
+No tool was added, removed, or renamed in this release.
+
 ## [1.20.3] — 2026-08-03
 
 **Changed — `bclaw_dispatch_status` diagnosis values under the fs-activity veto (#170)**
