@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import { ensureAgentRunProjection, loadAgentRun, transitionAgentRun } from '../agentruns.js';
-import { loadAssignment } from '../assignments.js';
+import { convergeAssignmentToTerminal, loadAssignment } from '../assignments.js';
 import { createRuntimeEvent } from '../events.js';
 import { nowISO } from '../ids.js';
 import { prepareAttemptTakeoverV2, type PrepareAttemptTakeoverV2Input } from './attempt-authority.js';
@@ -178,6 +178,16 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
     claim_id: reservation.claim_id,
     capability_snapshot: reservation.capability_snapshot!,
   };
+  if (takeover.previous_generation.assignment_id !== takeover.next_generation.assignment_id) {
+    try {
+      convergeAssignmentToTerminal(
+        takeover.previous_generation.assignment_id,
+        'cancelled',
+        `fenced by ${input.mode ?? 'takeover'} to epoch ${takeover.next_generation.attempt_epoch}`,
+        input.cwd,
+      );
+    } catch { /* immutable close cell already fences the old assignment */ }
+  }
   const assignment = loadAssignment(takeover.next_generation.assignment_id, input.cwd);
   const previousRun = loadAgentRun(takeover.previous_generation.run_id, input.cwd);
   if (previousRun && !['completed', 'failed', 'cancelled', 'timed_out', 'interrupted'].includes(previousRun.status)) {

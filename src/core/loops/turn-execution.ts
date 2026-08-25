@@ -264,7 +264,11 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   if (slot.agent_id !== undefined && slot.agent_id !== input.agent_id) {
     return preconditionDenied(`slot ${input.slot_id} belongs to agent_id '${slot.agent_id}', not '${input.agent_id ?? 'none'}'`);
   }
-  if (slot.claim_id !== undefined && slot.claim_id !== input.claim_id) {
+  if (
+    slot.claim_id !== undefined
+    && slot.claim_id !== input.claim_id
+    && ['assigned', 'working', 'waiting_input'].includes(slot.status)
+  ) {
     return preconditionDenied(`slot ${input.slot_id} is bound to claim ${slot.claim_id}, not ${input.claim_id}`);
   }
   if (
