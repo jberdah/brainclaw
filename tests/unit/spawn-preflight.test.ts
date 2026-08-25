@@ -13,6 +13,8 @@ import {
   preflightAgents,
   type SpawnCheckEntry,
 } from '../../src/core/spawn-check.js';
+import { assertPromptDelivery } from '../../src/core/execution-adapters.js';
+import { buildHarnessInvocation } from '../../src/core/harness-adapters/index.js';
 
 function entry(overrides: Partial<SpawnCheckEntry> & { status: SpawnCheckEntry['status'] }): SpawnCheckEntry {
   return {
@@ -97,5 +99,21 @@ describe('preflightAgentSpawn / preflightAgents — async behaviour', () => {
     assert.equal(results.length, 2, 'deduped to 2 distinct agents');
     assert.equal(blocked.length, 0);
     assert.equal(all_ok, true);
+  });
+});
+
+describe('Codex validation probe prompt delivery', () => {
+  it('builds a non-empty stdin payload independently of the command argv', () => {
+    const invoke = buildHarnessInvocation('codex', 'Reply with exactly: OK', { mode: 'consult', platform: 'linux' })?.invoke;
+    assert.ok(invoke);
+    assert.equal(invoke.promptDelivery, 'stdin_pipe');
+    assert.equal(invoke.promptText, 'Reply with exactly: OK');
+    assert.doesNotThrow(() => assertPromptDelivery(invoke));
+  });
+
+  it('refuses the silent /dev/null failure mode before spawn', () => {
+    const invoke = buildHarnessInvocation('codex', 'probe', { mode: 'consult', platform: 'linux' })?.invoke;
+    assert.ok(invoke);
+    assert.throws(() => assertPromptDelivery({ ...invoke, promptText: '' }), /promptText is empty/);
   });
 });

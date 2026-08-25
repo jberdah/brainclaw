@@ -108,13 +108,13 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_remove` | memory | Archive or purge a canonical entity |
 | `bclaw_transition` | memory | Move an entity through its validated state machine |
 | `bclaw_move` | memory | Relocate an item to another project, id-preserving (multi-project) |
-| `bclaw_code_status` | discovery | Code Map freshness badge + index stats (store presence, files/nodes/edges) |
+| `bclaw_code_status` | discovery | Active-session Code Map freshness + stats; `cascade:true` follows durable monorepo refresh progress and exceptions |
 | `bclaw_code_find` | discovery | Search the Code Map symbol index by name (function/class/component/hook/type) |
 | `bclaw_code_brief` | discovery | Ranked reading list + related decisions/traps before editing a symbol or path |
 | `bclaw_code_impact` | discovery | Explainable local blast radius from resolved imports: definition, direct dependents, opt-in bounded transitives, tests, and count-based risk |
 | `bclaw_code_export` | discovery | Compact bounded local nodes/edges around one symbol or file; preserves edge kind/source/confidence, with optional Mermaid projection |
 | `bclaw_code_outline` | discovery | Source-ordered symbols of one indexed file (span, exported, confidence) — no reparse |
-| `bclaw_code_refresh` | discovery | Rebuild the Code Map index (`scope: changed \| all`) |
+| `bclaw_code_refresh` | discovery | Rebuild the Code Map index (`scope: changed \| all`); `cascade:true` starts a durable background job |
 
 See [code map](../code-map.md) for the full Code Map reference (CLI, freshness model, supported languages).
 

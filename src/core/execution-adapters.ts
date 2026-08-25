@@ -345,6 +345,15 @@ export function withCodexWorkspaceRoot(
   return { ...invoke, args, bashCommand };
 }
 
+/** Refuse a stdin-delivery invoke that would otherwise inherit `/dev/null`. */
+export function assertPromptDelivery(invoke: InvokeCommand): void {
+  if (invoke.promptDelivery === 'stdin_pipe' && !invoke.promptText?.trim()) {
+    throw new Error(
+      'Invalid stdin_pipe invocation: promptText is empty; refusing to spawn an agent with ignored stdin.',
+    );
+  }
+}
+
 export class CliExecutionAdapter implements ExecutionAdapter {
   readonly id = 'cli';
 
@@ -420,6 +429,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
   }
 
   start(invoke: InvokeCommand, options: ExecutionAdapterStartOptions): SpawnResult {
+    assertPromptDelivery(invoke);
     const isWin32 = process.platform === 'win32';
     invoke = withCodexWorkspaceRoot(invoke, options.agent, options.worktreePath, isWin32);
 
@@ -463,7 +473,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     const spawnExecutable = resolvedExecutable ?? invoke.executable;
     const useShell = isWin32 && /\.(cmd|bat)$/i.test(spawnExecutable);
 
-    const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
+    const needsStdin = invoke.promptDelivery === 'stdin_pipe';
 
     // pln#520 step 4: when we ack-wrap, the SHELL redirects stdout/stderr to the
     // per-assignment log files (fds passed via stdio are NOT inherited through

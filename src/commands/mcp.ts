@@ -1400,8 +1400,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_impact' || name === 'bclaw_code_export' || name === 'bclaw_code_outline' || name === 'bclaw_code_refresh') {
       const { JsonlBackend } = await import('../core/code-map/backend.js');
       const be = new JsonlBackend();
+      // Session-scoped project selection is authoritative for Code Map too.
+      const codeCwd = scopeInfo.cwd;
       if (name === 'bclaw_code_status') {
-        const status = await be.status({ cwd, cascade: args.cascade === true });
+        const status = await be.status({ cwd: codeCwd, cascade: args.cascade === true });
         const diskVersion = readDiskBrainclawVersion();
         return {
           response: toolResponse({
@@ -1422,7 +1424,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
       if (name === 'bclaw_code_refresh') {
         const scope = args.scope === 'all' ? 'all' : 'changed';
-        const result = await be.refresh({ scope, cwd, cascade: args.cascade === true });
+        if (args.cascade === true) {
+          const { startCascadeRefreshJob, summarizeCascadeRefreshJob } = await import('../core/code-map/cascade-jobs.js');
+          const job = startCascadeRefreshJob(codeCwd, scope);
+          if (job) {
+            return {
+              response: toolResponse({
+                content: [{ type: 'text', text: `Code Map cascade started: job=${job.job_id}, projects=${job.projects_total}. Follow with bclaw_code_status(cascade=true).` }],
+                structuredContent: {
+                  started: true,
+                  ...summarizeCascadeRefreshJob(job),
+                  next_actions: [{ tool: 'bclaw_code_status', args: { cascade: true }, when: 'follow progress and terminal per-project diagnostics' }],
+                },
+              }),
+            };
+          }
+        }
+        const result = await be.refresh({ scope, cwd: codeCwd, cascade: args.cascade === true });
         const cascadeNote = result.cascade ? ` cascade=${result.cascade.children_refreshed} child(ren)+root` : '';
         return {
           response: toolResponse({
@@ -1437,7 +1455,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           return { response: createToolErrorResponse('validation_error', 'bclaw_code_find requires a non-empty query.') };
         }
         const limit = typeof args.limit === 'number' ? args.limit : undefined;
-        const result = await be.find({ query, limit, cwd });
+        const result = await be.find({ query, limit, cwd: codeCwd });
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map find "${result.query}": ${result.matches.length} match(es), freshness=${result.freshness_badge.freshness}` }],
@@ -1458,7 +1476,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const maxEdges = typeof args.maxEdges === 'number' ? args.maxEdges : undefined;
         const minConfidence = typeof args.minConfidence === 'number' ? args.minConfidence : undefined;
         const format = args.format === 'mermaid' ? 'mermaid' : args.format === 'json' ? 'json' : undefined;
-        const result = await be.exportGraph({ target, targetKind, direction, depth, maxNodes, maxEdges, minConfidence, format, cwd });
+        const result = await be.exportGraph({ target, targetKind, direction, depth, maxNodes, maxEdges, minConfidence, format, cwd: codeCwd });
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map export "${result.target}": ${result.nodes.length} node(s), ${result.edges.length} edge(s), depth=${result.limits.max_depth}, freshness=${result.freshness_badge.freshness}` }],
@@ -1475,7 +1493,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
         const depth = typeof args.depth === 'number' ? args.depth : undefined;
         const limit = typeof args.limit === 'number' ? args.limit : undefined;
-        const result = await be.impact({ target, depth, limit, cwd });
+        const result = await be.impact({ target, depth, limit, cwd: codeCwd });
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map impact "${result.target}": ${result.risk.counters.direct_dependents} direct, ${result.risk.counters.transitive_dependents} transitive dependent(s), risk=${result.risk.score}, freshness=${result.freshness_badge.freshness}` }],
@@ -1490,7 +1508,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           return { response: createToolErrorResponse('validation_error', 'bclaw_code_outline requires a non-empty path.') };
         }
         const limit = typeof args.limit === 'number' ? args.limit : undefined;
-        const result = await be.outline({ path: outlinePath, limit, cwd });
+        const result = await be.outline({ path: outlinePath, limit, cwd: codeCwd });
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map outline "${result.path}": ${result.symbols.length}/${result.symbol_count} symbol(s), index=${result.index_status}, freshness=${result.freshness_badge.freshness}` }],
@@ -1504,7 +1522,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', 'bclaw_code_brief requires a non-empty target.') };
       }
       const limit = typeof args.limit === 'number' ? args.limit : undefined;
-      const result = await be.brief({ target, limit, cwd });
+      const result = await be.brief({ target, limit, cwd: codeCwd });
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `Code Map brief "${result.target}": ${result.suggested_files_to_read.length} file(s) to read, freshness=${result.freshness_badge.freshness}` }],

@@ -55,16 +55,17 @@ describe('pln#601 scoreEntry — separator/case-insensitive discriminant', () =>
     assert.equal(kebab, 10);
   });
 
-  it('tiers are preserved: exact > prefix > substring > sub-token floor', () => {
+  it('tiers are preserved and sub-token-only noise scores zero', () => {
     const exact = scoreEntry(entry({ name: 'parseConfig' }), 'parseConfig');
     const prefix = scoreEntry(entry({ name: 'parseConfigFile' }), 'parseConfig');
     const substr = scoreEntry(entry({ name: 'tryParseConfigOnce' }), 'parseConfig');
-    // "registry" shares only the sub-token bucket with a "parseConfig" query in the
-    // real gather path; here we assert an unrelated name floors at 1.
+    // Candidate gathering may share a generic token across languages/projects;
+    // without a normalized textual match that candidate is noise, not evidence.
     const floor = scoreEntry(entry({ name: 'unrelatedThing' }), 'parseConfig');
     assert.ok(exact > prefix, `exact ${exact} > prefix ${prefix}`);
     assert.ok(prefix > substr, `prefix ${prefix} > substring ${substr}`);
     assert.ok(substr > floor, `substring ${substr} > floor ${floor}`);
+    assert.equal(floor, 0);
   });
 
   it('exported symbols still outrank internal ones at the same tier', () => {

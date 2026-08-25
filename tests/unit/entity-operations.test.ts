@@ -166,6 +166,23 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
   });
 
   describe('trap', () => {
+    it('returns bounded proximity hints without blocking a legitimate duplicate', () => {
+      const original = createEntity('trap', {
+        text: 'Codex preflight loses the stdin prompt and rejects a healthy reviewer',
+        author: 'testuser',
+      }, workspace.dir);
+      const duplicate = createEntity('trap', {
+        text: 'Codex preflight loses stdin prompt and rejects the healthy reviewer',
+        author: 'testuser',
+      }, workspace.dir);
+
+      assert.notEqual(duplicate.id, original.id, 'creation remains non-blocking');
+      assert.equal(duplicate.nearby_items?.length, 1);
+      assert.equal(duplicate.nearby_items?.[0]?.id, original.id);
+      assert.match(duplicate.nearby_items?.[0]?.reason ?? '', /similar|exact/);
+      assert.ok((duplicate.nearby_items?.[0]?.preview.length ?? 0) <= 160);
+    });
+
     it('transition active -> resolved follows the registry', () => {
       const created = createEntity('trap', {
         text: 'danger',

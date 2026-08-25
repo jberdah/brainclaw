@@ -558,9 +558,12 @@ export function handleBclawCreate(payload: McpToolExecutionPayload, ctx: McpWrit
       targetCwd,
     );
     const createText = `✔ created ${entity} ${result.id}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}`;
+    const proximityText = result.nearby_items?.length
+      ? `Nearby existing ${entity} item(s): ${result.nearby_items.map((item) => `${item.id} (${item.reason})`).join(', ')}. Creation was kept; review before adding another duplicate.`
+      : undefined;
     const createContent = autoRepair
-      ? [{ type: 'text' as const, text: createText }, { type: 'text' as const, text: renderAutoRepairWarning(autoRepair, actor ?? 'unknown') }]
-      : [{ type: 'text' as const, text: createText }];
+      ? [{ type: 'text' as const, text: createText }, { type: 'text' as const, text: renderAutoRepairWarning(autoRepair, actor ?? 'unknown') }, ...(proximityText ? [{ type: 'text' as const, text: proximityText }] : [])]
+      : [{ type: 'text' as const, text: createText }, ...(proximityText ? [{ type: 'text' as const, text: proximityText }] : [])];
     // pln#634 — a freshly created plan whose steps are never added is the most
     // common half-finished shape in the store; a sequence with no readiness
     // check is the second. Only those two emit a follow-up.

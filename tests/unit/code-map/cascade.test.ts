@@ -105,6 +105,40 @@ describe('code-map cascade (DGX Finding 2 — monorepo-native refresh)', () => {
     assert.equal(byPath.get('applications/app_b')?.files_indexed, null);
   });
 
+  it('status distinguishes a valid empty infrastructure project from an extraction failure', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cascade-empty-'));
+    cleanup.push(root);
+    makeStore(root, 'workspace', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    const infra = path.join(root, 'infra', 'redis');
+    makeStore(infra, 'redis');
+    fs.writeFileSync(path.join(infra, 'docker-compose.yml'), 'services: {}\n');
+
+    const be = new JsonlBackend();
+    const refreshed = await be.refresh({ cwd: root, scope: 'all', cascade: true });
+    const result = refreshed.cascade?.children.find((child) => child.path === 'infra/redis');
+    assert.equal(result?.outcome, 'no_eligible_files');
+    assert.equal(result?.files_indexed, 0);
+    assert.match(result?.reason ?? '', /no eligible source files/);
+
+    const status = await be.status({ cwd: root, cascade: true });
+    const child = status.cascade?.children.find((entry) => entry.path === 'infra/redis');
+    assert.equal(child?.store_exists, true);
+    assert.equal(child?.files_indexed, 0);
+    assert.equal(child?.reason, 'no_eligible_files');
+  });
+
+  it('warns when nested-project discovery is truncated instead of implying complete coverage', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cascade-depth-'));
+    cleanup.push(root);
+    makeStore(root, 'workspace', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    const deep = path.join(root, 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7');
+    makeStore(deep, 'too_deep');
+
+    const status = await new JsonlBackend().status({ cwd: root, cascade: true });
+    assert.equal(status.cascade?.discovery_truncated, true);
+    assert.equal(status.cascade?.children.some((child) => child.path.endsWith('d7')), false);
+  });
+
   it('migrates a prior monolithic root index — cascade --all compacts child files out of the root store', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cascmig-'));
     cleanup.push(root);

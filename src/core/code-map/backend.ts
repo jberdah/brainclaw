@@ -19,7 +19,8 @@ import { exportSubgraph, type CodeGraphExportOutput, type CodeGraphExportOptions
 import { fileId } from './ids.js';
 import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } from './aggregate.js';
 import { defaultMemoryReader } from './memory-reader.js';
-import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
+import { inspectNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
+import { latestCascadeRefreshJob, summarizeCascadeRefreshJob, type CascadeRefreshJobSummary } from './cascade-jobs.js';
 import { loadConfig } from '../config.js';
 import { codeMapDir } from './paths.js';
 import type { FreshnessBadge, FreshnessStatus, Manifest, ParseStatus, Span } from './types.js';
@@ -45,6 +46,7 @@ export interface CodeStatusChild {
   store_exists: boolean;
   freshness: FreshnessStatus | 'missing_index';
   files_indexed: number | null;
+  reason?: 'no_eligible_files';
 }
 
 export interface CodeStatus {
@@ -66,6 +68,9 @@ export interface CodeStatus {
     /** Children that already have a built code index (manifest present). */
     indexed_children: number;
     total_children: number;
+    discovery_truncated: boolean;
+    /** Latest durable MCP cascade job, including progress or terminal diagnostics. */
+    refresh_job?: CascadeRefreshJobSummary;
   };
 }
 
@@ -320,17 +325,26 @@ function isMultiProjectWorkspace(cwd?: string): boolean {
 /** Per-child store recap for `status(cascade)` in a multi-project workspace. */
 function buildCascadeStatus(rootCwd?: string): NonNullable<CodeStatus['cascade']> {
   const root = rootCwd ?? process.cwd();
-  const children: CodeStatusChild[] = listNestedProjects(root).map((abs) => {
+  const discovery = inspectNestedProjects(root);
+  const children: CodeStatusChild[] = discovery.projects.map((abs) => {
     const m = readManifest(abs);
     return {
       path: path.relative(root, abs).replace(/\\/g, '/') || '.',
       store_exists: m ? true : storeExists(abs),
       freshness: m ? m.freshness.status : 'missing_index',
       files_indexed: m ? m.stats.files_indexed : null,
+      ...(m && m.stats.files_indexed === 0 ? { reason: 'no_eligible_files' as const } : {}),
     };
   });
   const indexed = children.filter((c) => c.freshness !== 'missing_index').length;
-  return { children, indexed_children: indexed, total_children: children.length };
+  const latestJob = latestCascadeRefreshJob(root);
+  return {
+    children,
+    indexed_children: indexed,
+    total_children: children.length,
+    discovery_truncated: discovery.truncated,
+    ...(latestJob ? { refresh_job: summarizeCascadeRefreshJob(latestJob) } : {}),
+  };
 }
 
 /**
@@ -418,17 +432,17 @@ export class JsonlBackend implements CodeQueryBackend {
       // A cascade is only fully "acquired" when EVERY project got its lock; if a
       // child or the root was skipped under a live writer, surface that instead
       // of reporting a clean lock_acquired=true over a partial cascade (codex review).
-      const skipped = allProjects.filter((p) => !p.lock_acquired);
+      const incomplete = allProjects.filter((p) => p.outcome === 'locked' || p.outcome === 'failed');
       return {
         ran: allProjects.some((p) => p.ran),
         scope,
-        lock_acquired: skipped.length === 0,
+        lock_acquired: incomplete.length === 0,
         freshness_badge: badge(root.freshness, {
           files_parsed: root.files_parsed,
           children_refreshed: cascade.children_refreshed,
         }),
-        ...(skipped.length > 0
-          ? { lock_status: `${skipped.length} project(s) skipped (lock held): ${skipped.map((p) => p.path).join(', ')}` }
+        ...(incomplete.length > 0
+          ? { lock_status: `${incomplete.length} project(s) incomplete: ${incomplete.map((p) => `${p.path} (${p.outcome})`).join(', ')}` }
           : {}),
         cascade,
       };
