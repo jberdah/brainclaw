@@ -14,6 +14,7 @@ import {
   attachAssignmentMessageToClaim,
   createCoordinatorClaim,
   ensureClaimAssignmentBinding,
+  releaseClaimIfActive,
 } from './claims.js';
 import { generateDispatchBrief } from './dispatcher.js';
 import { search } from './search.js';
@@ -27,6 +28,7 @@ import type { LoopContextCategory } from './loops/types.js';
 import { getLoop } from './loops/store.js';
 import { prepareTurnExecution } from './loops/turn-execution.js';
 import { sendMessage } from './messaging.js';
+import { removeWorktree } from './worktree.js';
 
 export interface DispatchLoopTurnInput {
   loop_id: string;
@@ -169,6 +171,19 @@ export async function dispatchLoopTurn(input: DispatchLoopTurnInput): Promise<Di
     if (prepared.kind !== 'won') {
       result.execution_status = 'inbox_only';
       result.error = prepared.reason;
+      if (prepared.claim_disposition === 'release' && !claim.reusedExisting) {
+        try {
+          const released = releaseClaimIfActive(claim.claimId, input.cwd);
+          if (released.released && claim.worktreePath) {
+            try { removeWorktree(input.cwd, claim.worktreePath, { force: true }); }
+            catch (cleanupError) {
+              result.error += `; denied-claim worktree cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+            }
+          }
+        } catch (cleanupError) {
+          result.error += `; denied-claim cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+        }
+      }
       return result;
     }
 

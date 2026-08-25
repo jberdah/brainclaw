@@ -299,6 +299,34 @@ describe('generic Loop Engine worker dispatch', () => {
     assert.equal(reboundSlot.current_turn_id, second.turn_id);
   });
 
+  it('releases a fresh claim and removes its worktree when turn admission is denied', async () => {
+    const cwd = project();
+    roots.push(cwd);
+    const loop = openLoop({
+      kind: 'ideation', title: 'denied turn cleanup', created_by: 'agt_coord',
+      phases: [{ name: 'critique' }],
+      slots: [{
+        slot_id: 'lsl_stalebinding', role: 'critic', agent: 'codex',
+        status: 'assigned', claim_id: 'clm_stale_binding', current_turn_id: 'tat_stale_binding',
+      }],
+      stop_condition: { kind: 'max_iterations', n: 1 },
+    }, cwd);
+
+    const denied = await dispatchLoopTurn({
+      loop_id: loop.id,
+      slot_id: 'lsl_stalebinding',
+      task: 'must fail before authority',
+      dispatcher_agent: 'coord',
+      dispatcher_agent_id: 'agt_coord',
+      auto_execute: false,
+      cwd,
+    });
+    assert.match(denied.error ?? '', /bound to claim clm_stale_binding/);
+    assert.ok(denied.claim_id && denied.worktree_path);
+    assert.equal(loadClaim(denied.claim_id, cwd).status, 'released');
+    assert.equal(fs.existsSync(denied.worktree_path), false, 'fresh denied-claim worktree is not leaked');
+  });
+
   it('selects a compatible worker deterministically for an unbound slot', async () => {
     const cwd = project();
     roots.push(cwd);
