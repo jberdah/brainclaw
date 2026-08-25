@@ -379,7 +379,7 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_code_status',
-    description: 'Code Map status for this project: store presence, freshness badge (fresh / stale_changed_files / stale_extractor / stale_grammar / stale_git_head / partial / missing_index), and index stats (files, nodes, edges). Read-only; never refreshes. Pair with bclaw_code_refresh when freshness is missing_index or stale. In a multi-project workspace, cascade=true adds a per-child recap (which nested projects have a built index vs missing_index).',
+    description: 'Code Map status for the active session project: store presence, freshness badge, and index stats. Read-only; never refreshes. In a multi-project workspace, cascade=true adds per-child coverage plus progress/terminal diagnostics for the latest durable cascade job.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
@@ -465,7 +465,7 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_code_refresh',
-    description: 'Rebuild the Code Map index for this project (Tree-sitter parse + shards + indexes, behind the per-project lock). scope="changed" (default) reparses changed files; scope="all" does a full refresh + compaction. A live competing lock fails fast with a clear status — refresh never blocks. Returns the resulting freshness_badge. In a multi-project workspace, cascade=true refreshes EVERY nested project into its own store + the root store scoped to files no child owns (zero double-indexing) — so one call at the root indexes the whole monorepo per-project.',
+    description: 'Rebuild the Code Map index for the active session project. scope="changed" (default) reparses changed files; scope="all" does a full refresh + compaction. In a multi-project workspace, cascade=true starts a durable background job immediately; follow it with bclaw_code_status(cascade=true), which reports progress and terminal per-project diagnostics without an MCP timeout.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',

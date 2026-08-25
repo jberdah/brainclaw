@@ -151,7 +151,15 @@ export async function checkAgentSpawn(agent: string, options: SpawnCheckOptions 
     const stderrTail = stderrRaw ? stderrRaw.split(/\r?\n/).filter(Boolean) : undefined;
 
     if (completed) {
-      return { agent, binary, status: 'ok', delivered, completed: true, duration_ms, detail: 'ack + completed round-trip' };
+      return {
+        agent,
+        binary,
+        status: 'ok',
+        delivered,
+        completed: true,
+        duration_ms,
+        detail: `validation probe: ack + completed round-trip (${invoke.promptDelivery}, ${invoke.promptText?.length ?? 0} prompt bytes)`,
+      };
     }
     if (failed) {
       const tail = stderrRaw || readLogTail(root, assignmentId, 'stdout', 400).trim();

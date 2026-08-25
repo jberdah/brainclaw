@@ -1242,6 +1242,7 @@ describe('bclaw_coordinate — cross-project routing (pln#359 phase 1b)', () => 
       scope: 'src/helper.ts',
       targetAgents: ['codex'],
       project: 'target-project',
+      autoExecute: false,
       agent: 'claude-code',
     });
 
@@ -1264,19 +1265,37 @@ describe('bclaw_coordinate — cross-project routing (pln#359 phase 1b)', () => 
     assert.equal(sourceClaims.length, 0, 'no claim in SOURCE');
   });
 
-  it('emits a warning when project= is set with default autoExecute (auto-spawn disabled)', async () => {
-    const response = await coordinate(sourceWorkspace, {
-      intent: 'assign',
-      task: 'XP dispatch warning case',
-      targetAgents: ['codex'],
-      project: 'target-project',
-      agent: 'claude-code',
+  it('refuses default cross-project autoExecute before creating durable state', async () => {
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_coordinate',
+      args: {
+        intent: 'assign',
+        task: 'XP dispatch admission case',
+        targetAgents: ['codex'],
+        project: 'target-project',
+        agent: 'claude-code',
+      },
+      cwd: sourceWorkspace.dir,
     });
 
+    assert.equal(outcome.response.isError, true);
+    assert.match(outcome.response.content?.[0]?.text ?? '', /admission refused before creating/);
+    assert.equal(listClaims(targetWorkspace.dir).filter((c) => c.status === 'active').length, 0);
+    assert.equal(readInbox({ agent: 'codex' }, targetWorkspace.dir).messages.length, 0);
+  });
+
+  it('treats an explicit project resolving to the active cwd as same-project', async () => {
+    const localName = loadProjectConfig(sourceWorkspace.dir).project_name;
+    const response = await coordinate(sourceWorkspace, {
+      intent: 'assign',
+      task: 'Explicit local routing stays executable',
+      targetAgents: ['codex'],
+      project: localName,
+      agent: 'claude-code',
+    });
     assert.equal(response.status, 'ok');
-    const warns = response.warnings ?? [];
-    const hit = warns.find((w) => w.includes('cross-project') && w.includes('auto-spawn disabled'));
-    assert.ok(hit, `Expected cross-project auto-spawn warning. Got: ${JSON.stringify(warns)}`);
+    assert.equal(listClaims(sourceWorkspace.dir).filter((c) => c.status === 'active').length, 1);
+    assert.ok(!(response.warnings ?? []).some((warning) => warning.includes('cross-project')));
   });
 
   it('rejects an unknown project name with validation_error from resolveProjectCwd', async () => {

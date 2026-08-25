@@ -110,7 +110,7 @@ describe('pln#631 root-aggregated find (traversal)', () => {
     assert.notEqual(forced.freshness_badge.details.traversal, 'workspace');
   });
 
-  it('an unindexed child contributes to coverage but does NOT drag the badge to missing', async () => {
+  it('an unindexed child makes workspace coverage partial without hiding indexed matches', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agg2-'));
     cleanup.push(root);
     makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
@@ -129,9 +129,11 @@ describe('pln#631 root-aggregated find (traversal)', () => {
 
     const res = await be.find({ query: 'orbitAlpha', cwd: root, traversal: 'auto' });
     assert.ok(res.matches.some((m) => m.name === 'orbitAlpha'), 'indexed child still surfaces');
-    assert.notEqual(res.freshness_badge.status, 'missing_index', 'aggregate is NOT missing when some stores are indexed');
-    assert.notEqual(res.freshness_badge.freshness, 'missing');
+    assert.equal(res.freshness_badge.status, 'partial', 'incomplete workspace coverage must never report fresh');
+    assert.equal(res.freshness_badge.freshness, 'partial');
+    assert.equal(res.freshness_badge.details.unindexed_project_count, 1);
     assert.deepEqual(res.freshness_badge.details.unindexed_projects, ['core_services/app_b'], 'the unindexed child is reported');
+    assert.equal((res.freshness_badge.details.project_status_counts as Record<string, number>).missing_index, 1);
   });
 
   it('resolveTraversal: auto at a root → workspace; auto at a child → single', async () => {
@@ -185,13 +187,13 @@ describe('pln#631 root-aggregated find (traversal)', () => {
     const res = await be2.find({ query: 'craterBeta', cwd: root, traversal: 'auto' });
     assert.equal(res.freshness_badge.freshness, 'stale', 'a lagging child drags the coarse rollup to stale');
     assert.equal(
-      (res.freshness_badge.details.per_project as Record<string, string>)['core_services/app_b'],
+      (res.freshness_badge.details.non_fresh_projects as Array<{ path: string; status: string }>).find((p) => p.path === 'core_services/app_b')?.status,
       'stale_git_head',
-      'the lagging child is flagged stale_git_head in per_project',
+      'the lagging child is flagged stale_git_head in the compact exception list',
     );
     // The fresh children are NOT falsely flagged (null manifest head → no drift).
     assert.notEqual(
-      (res.freshness_badge.details.per_project as Record<string, string>)['applications/app_a'],
+      (res.freshness_badge.details.non_fresh_projects as Array<{ path: string; status: string }>).find((p) => p.path === 'applications/app_a')?.status,
       'stale_git_head',
     );
   });

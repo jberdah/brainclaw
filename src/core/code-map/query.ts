@@ -330,7 +330,7 @@ export function isTestPath(p: string): boolean {
 /**
  * Score a symbol index entry against the query. Matching is separator/case
  * INSENSITIVE (pln#601): an exact NORMALIZED match scores highest, then prefix,
- * then substring, then the sub-token floor. Exported symbols + components/hooks
+ * then substring; sub-token-only candidates score zero. Exported symbols + components/hooks
  * get a small boost; test-file symbols are biased DOWN so a test helper never
  * outranks the real definition of the same name (the Fable-audit brief-noise
  * companion to the find defect). Exported for focused ranking tests.
@@ -343,7 +343,7 @@ export function scoreEntry(entry: SymbolIndexEntry, query: string): number {
   else if (name === q) score += 10;         // exact, style-insensitive
   else if (name.startsWith(q)) score += 6;  // prefix
   else if (name.includes(q)) score += 3;    // substring
-  else score += 1;                          // matched only via a sub-token bucket
+  else return 0;                            // shared-token noise is not a match
   score *= entry.score_hint; // exported (1.0) vs internal (0.8)
   if (entry.subtype === 'component' || entry.subtype === 'hook') score += 1;
   // pln#601 — source over test: a test/spec symbol of the same name must not
@@ -481,6 +481,8 @@ export function findInStore(
     // §6.1 — lazy validate before serving as confident.
     const confident = validateEntry(entry, checker, acc, root, maxBytes, ctx.cwd, ctx.preferredDirName);
     if (!confident) continue;
+    const score = scoreEntry(entry, query);
+    if (score <= 0) continue;
     ranked.push({
       match: {
         node_id: entry.node_id,
@@ -489,7 +491,7 @@ export function findInStore(
         file_id: entry.file_id,
         kind: entry.kind,
         subtype: entry.subtype ?? null,
-        score: scoreEntry(entry, query),
+        score,
       },
       centrality: importCentrality(entry, resolutionIndex),
     });

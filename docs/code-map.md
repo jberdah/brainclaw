@@ -126,11 +126,11 @@ all return a `freshness_badge`:
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `bclaw_code_status` | read | Store presence, freshness badge, index stats. Never refreshes. |
+| `bclaw_code_status` | read | Active-session project store, freshness, index stats; `cascade=true` also follows the latest cascade job. Never refreshes. |
 | `bclaw_code_find` | read | Ranked symbol-index search (`query`, optional `limit`). Never refreshes. |
 | `bclaw_code_brief` | read | Reading brief for a symbol/path (`target`, optional `limit`, files capped at 12). Never refreshes. |
 | `bclaw_code_export` | read | Bounded local subgraph around required `target`; direction/depth/node/edge caps, confidence filtering, and optional Mermaid projection. Never refreshes. |
-| `bclaw_code_refresh` | write | Rebuild the index. `scope` = `"changed"` (default) or `"all"`. Fails fast on a live lock. |
+| `bclaw_code_refresh` | write | Rebuild the index. `scope` = `"changed"` (default) or `"all"`; MCP `cascade=true` starts a durable background job and returns immediately. |
 
 The read tools never trigger a parse — if `bclaw_code_status` /
 `bclaw_code_find` / `bclaw_code_brief` report `missing_index` or a stale badge,
@@ -178,7 +178,7 @@ No read command parses files or refreshes the index. `bclaw_work` can suggest
 that explicit refresh, but never performs it lazily.
 ## Lifecycle — pull-based, no daemon
 
-Code Map never runs in the background and never auto-reindexes. The model is lazy
+Code Map never auto-reindexes and has no daemon. The model is lazy
 reconciliation at the read path:
 
 1. You edit or pull code — the index does not change.
@@ -186,7 +186,9 @@ reconciliation at the read path:
    file-hash diff vs the stored shards), so a stale index is always *visible*,
    never silently wrong.
 3. `refresh --changed` re-parses only the changed files (incremental); `--all` does
-   a full rebuild + orphan compaction.
+   a full rebuild + orphan compaction. The one bounded background path is an
+   explicitly requested MCP monorepo cascade, whose durable progress is read
+   through `bclaw_code_status(cascade=true)`.
 4. `bclaw_work` nudges a refresh when the badge is `missing_index` or stale, so an
    agent knows to reconcile before trusting the map.
 
@@ -240,9 +242,15 @@ double-indexing**, even when projects nest inside one another. `--cascade` is
 opt-in; without it, the root refresh keeps its single-tree behaviour (above), and
 single-project repos ignore the flag entirely.
 
-`status --cascade` (or `bclaw_code_status(cascade=true)`) adds a per-child recap —
-which nested projects have a built index vs `missing_index`, plus an aggregate
-count — so you can see workspace-wide freshness from the root.
+The CLI cascade stays synchronous. MCP `bclaw_code_refresh(cascade=true)` returns
+a durable `job_id` immediately, avoiding the client timeout that a large workspace
+can hit; follow it with `bclaw_code_status(cascade=true)`. Status reports completed
+and total project counts, the project currently being indexed, and terminal
+outcomes. Successful rows are aggregated; only exceptions are named. A project
+with a valid empty index is labeled `no_eligible_files`, while lock contention and
+refresh failures remain distinct (`locked` / `failed`). `discovery_truncated=true`
+warns that the bounded nested-project scan could not inspect deeper branches, so
+the reported project total must not be treated as complete.
 
 ### Workspace-wide `find` / `brief`
 
@@ -250,8 +258,11 @@ Once the per-child indexes exist (built by `--cascade`), `find` and `brief` run
 at a multi-project workspace **root** automatically aggregate across every child
 project's store — no flag needed. Matches are project-tagged with
 workspace-relative paths, and the freshness badge merges per-store status (worst
-status wins) plus coverage (how many projects are indexed, listing any unindexed
-children). An aggregated `brief` also surfaces **cross-package reverse
+status wins) plus coverage. Missing child stores make the top-line badge
+`partial`, never `fresh`; diagnostics carry status counts and only the non-fresh
+exceptions instead of repeating every project. Weak shared-token candidates that
+do not contain the normalized query are omitted rather than returned as plausible
+score-1/2 noise. An aggregated `brief` also surfaces **cross-package reverse
 dependents**: sibling packages that import the defining package's public name
 rank into the reading list, flagged `cross_package`.
 

@@ -12,6 +12,7 @@
  * @module
  */
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { buildClaimEnvPrefix } from '../core/execution-profile.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
@@ -457,11 +458,21 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   // for state-mutating helpers; the outer `cwd` (source) stays in scope
   // for the few cases that genuinely need source attribution.
   const dispatchCwd = resolveProjectCwd(req.project, cwd);
-  const isCrossProject = dispatchCwd !== cwd;
+  const isCrossProject = path.resolve(dispatchCwd) !== path.resolve(cwd);
   if (isCrossProject && req.autoExecute !== false) {
-    warnings.push(
-      `cross-project dispatch (project='${req.project}') — auto-spawn disabled; the target agent picks up the brief async via its own bclaw_work.`,
-    );
+    return {
+      response: createToolErrorResponse(
+        'cross_project_auto_execute_unsupported',
+        `cross-project dispatch (project='${req.project}') cannot auto-execute from the source process; admission refused before creating a claim, assignment, or loop.`,
+        {
+          next_actions: [{
+            tool: 'bclaw_coordinate',
+            args: { ...req, autoExecute: false },
+            when: 'create an inbox-only cross-project assignment that the target agent will pick up with bclaw_work',
+          }],
+        },
+      ),
+    };
   }
   const effectiveAutoExecute = isCrossProject ? false : req.autoExecute;
 
@@ -1141,7 +1152,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     // existing length===0 guard skips loop creation. Skipped when open_loop
     // is off, preflight=false, or BRAINCLAW_NO_SPAWN is set (handled inside
     // preflightAgents). Cross-project dispatch never auto-spawns, so skip.
-    if (req.open_loop === true && req.preflight !== false && !req.project && loopReviewerAgents.length > 0) {
+    if (req.open_loop === true && req.preflight !== false && !isCrossProject && loopReviewerAgents.length > 0) {
       try {
         const { preflightAgents } = await import('../core/spawn-check.js');
         const pf = await preflightAgents(loopReviewerAgents, { cwd: dispatchCwd });
@@ -1324,7 +1335,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             // (that is the double-spawn hole), and do NOT release the (possibly shared) claim; leave
             // the slot for reconcile/self-heal. LEGACY: the unchanged inline mint runs.
             let usedTurnOwned = false;
-            if (turnOwnedReviewEnabled() && !req.project) {
+            if (turnOwnedReviewEnabled() && !isCrossProject) {
               const prep = prepareTurnOwnedReviewDispatch({
                 loopId: loop.id,
                 slotId: slot.slot_id,

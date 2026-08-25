@@ -7,6 +7,37 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.3] — 2026-08-26
+
+The DGX monorepo reliability patch: Code Map cascades become durable and
+observable, active-session routing is consistent, and invalid dispatches fail
+before creating misleading execution state.
+
+### Added
+
+- **Durable monorepo Code Map cascades.** MCP cascade refreshes return a job
+  handle immediately; `bclaw_code_status(cascade=true)` reports progress,
+  compact outcome counts, failures, lock contention, valid zero-source stores,
+  and truncated project discovery.
+- **Memory proximity hints.** Canonical decision, constraint, and trap creation
+  reports up to three similar existing items without blocking the write.
+
+### Changed
+
+- **Code Map follows the active session project.** Every MCP Code Map tool now
+  uses the same resolved project scope as `bclaw_work` and `bclaw_switch`.
+- **Workspace search is honest and compact.** Missing child indexes produce a
+  `partial` badge, aggregate diagnostics no longer repeat every successful
+  project, and shared-token-only symbol noise is omitted.
+
+### Fixed
+
+- **Dispatch admission distinguishes explicit-local from cross-project.** An
+  explicit project resolving to the active checkout remains auto-executable;
+  unsupported true cross-project auto-execution fails before durable state.
+- **Empty stdin dispatches fail before spawn.** A `stdin_pipe` invocation with
+  no prompt can no longer silently launch a healthy CLI against `/dev/null`.
+
 ## [1.28.2] — 2026-08-25
 
 The Loop/Dispatch dogfood reliability patch: worker outcomes now converge every

@@ -16,6 +16,7 @@
 
 import path from 'node:path';
 import { loadState, mutateState } from './state.js';
+import { detectDuplicates } from './duplicates.js';
 import {
   archiveCandidate,
   listCandidates,
@@ -337,6 +338,8 @@ export interface CreateResult {
   entity: EntityName;
   id: string;
   short_label?: string;
+  /** Non-blocking, bounded hints about pre-existing same-kind memory. */
+  nearby_items?: Array<{ id: string; source: 'state' | 'candidate'; reason: string; preview: string }>;
 }
 
 export interface UpdateResult {
@@ -709,6 +712,24 @@ export function createEntity(
   cwd: string,
 ): CreateResult {
   assertKnownEntity(name, 'create');
+  const proximityKinds = new Set<EntityName>(['decision', 'constraint', 'trap']);
+  const nearby = proximityKinds.has(name) && typeof data.text === 'string'
+    ? detectDuplicates(
+        data.text,
+        name,
+        loadState(cwd),
+        listCandidates(undefined, cwd).filter((candidate) => candidate.status === 'pending'),
+      ).slice(0, 3).map((match) => ({
+        id: match.id,
+        source: match.source,
+        reason: match.reason,
+        preview: match.text.length > 160 ? `${match.text.slice(0, 157)}…` : match.text,
+      }))
+    : [];
+  const result = (base: Omit<CreateResult, 'nearby_items'>): CreateResult => ({
+    ...base,
+    ...(nearby.length ? { nearby_items: nearby } : {}),
+  });
   switch (name) {
     case 'plan': {
       // Explicit field whitelist + required-author check brings plan create in line
@@ -728,7 +749,7 @@ export function createEntity(
         estimatedEffort: data.estimated_effort as number | undefined,
       }, cwd);
       stampProvenanceOnStateItem('plan', res.id, defaultProvenance(data), cwd);
-      return { entity: name, id: res.id, short_label: res.shortLabel };
+      return result({ entity: name, id: res.id, short_label: res.shortLabel });
     }
     case 'decision': {
       const res = createDecision({
@@ -740,7 +761,7 @@ export function createEntity(
         planId: data.plan_id as string | undefined,
       }, cwd);
       stampProvenanceOnStateItem('decision', res.id, defaultProvenance(data), cwd);
-      return { entity: name, id: res.id, short_label: res.shortLabel };
+      return result({ entity: name, id: res.id, short_label: res.shortLabel });
     }
     case 'constraint': {
       const res = createConstraint({
@@ -751,7 +772,7 @@ export function createEntity(
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
       stampProvenanceOnStateItem('constraint', res.id, defaultProvenance(data), cwd);
-      return { entity: name, id: res.id, short_label: res.shortLabel };
+      return result({ entity: name, id: res.id, short_label: res.shortLabel });
     }
     case 'trap': {
       const res = createTrap({
@@ -762,7 +783,7 @@ export function createEntity(
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
       stampProvenanceOnStateItem('trap', res.id, defaultProvenance(data), cwd);
-      return { entity: name, id: res.id, short_label: res.shortLabel };
+      return result({ entity: name, id: res.id, short_label: res.shortLabel });
     }
     case 'runtime_note': {
       const id = generateId('runtime_note');

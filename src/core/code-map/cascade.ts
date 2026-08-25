@@ -20,7 +20,7 @@
  * refreshes existing brainclaw projects, it does not initialise new ones.
  */
 import path from 'node:path';
-import { scanNestedBrainclawProjects } from '../workspace-projects.js';
+import { scanNestedBrainclawProjectsDetailed } from '../workspace-projects.js';
 import { loadConfig } from '../config.js';
 import { refresh as runRefresh } from './refresh.js';
 import { readManifest } from './store.js';
@@ -59,7 +59,12 @@ export interface CascadeProjectResult {
   lock_acquired: boolean;
   files_parsed: number;
   files_compacted: number;
+  /** Total files present in the resulting index; null when refresh failed. */
+  files_indexed: number | null;
   freshness: Manifest['freshness']['status'];
+  outcome: 'indexed' | 'no_eligible_files' | 'locked' | 'failed';
+  reason?: string;
+  error?: string;
   lock_status?: string;
 }
 
@@ -72,6 +77,8 @@ export interface CascadeResult {
   /** One entry per nested brainclaw project refreshed (excludes the root). */
   children: CascadeProjectResult[];
   children_refreshed: number;
+  /** True when the bounded filesystem discovery could not inspect deeper branches. */
+  discovery_truncated: boolean;
 }
 
 export interface RefreshCascadeInput {
@@ -79,6 +86,12 @@ export interface RefreshCascadeInput {
   scope: 'changed' | 'all';
   ownerAgent?: string | null;
   ownerAgentId?: string | null;
+  onProgress?: (progress: {
+    completed: number;
+    total: number;
+    current_project: string | null;
+    last_result?: CascadeProjectResult;
+  }) => void;
 }
 
 /**
@@ -87,14 +100,19 @@ export interface RefreshCascadeInput {
  * cascade and the `status --cascade` recap so both agree on the project set.
  */
 export function listNestedProjects(rootCwd: string): string[] {
+  return inspectNestedProjects(rootCwd).projects;
+}
+
+export function inspectNestedProjects(rootCwd: string): { projects: string[]; truncated: boolean } {
   const root = path.resolve(rootCwd);
-  return Array.from(
+  const discovered = scanNestedBrainclawProjectsDetailed(root);
+  return { projects: Array.from(
     new Set(
-      scanNestedBrainclawProjects(root)
+      discovered.projects
         .map((c) => path.resolve(c.path))
         .filter((abs) => abs !== root && isStrictlyUnder(abs, root)),
     ),
-  ).sort();
+  ).sort(), truncated: discovered.truncated };
 }
 
 /**
@@ -107,7 +125,8 @@ export async function refreshWorkspaceCascade(input: RefreshCascadeInput): Promi
 
   // Enumerate nested brainclaw projects strictly under the root (FS scan, so it
   // is strategy-agnostic). De-dup + sort by path for deterministic output.
-  const childAbsPaths = listNestedProjects(rootCwd);
+  const discovery = inspectNestedProjects(rootCwd);
+  const childAbsPaths = discovery.projects;
 
   // Every project to refresh, root first.
   const allProjects = [rootCwd, ...childAbsPaths];
@@ -118,35 +137,65 @@ export async function refreshWorkspaceCascade(input: RefreshCascadeInput): Promi
     const nestedUnder = allProjects.filter((p) => p !== projectCwd && isStrictlyUnder(p, projectCwd));
     const extraIgnorePatterns = nestedUnder.map((p) => `${toPosix(path.relative(projectCwd, p))}/**`);
     const projectId = projectIdFor(projectCwd);
-    const result = await runRefresh({
-      projectId,
-      projectRoot: projectCwd,
-      scope: input.scope,
-      cwd: projectCwd,
-      extraIgnorePatterns,
-      ownerAgent: input.ownerAgent ?? null,
-      ownerAgentId: input.ownerAgentId ?? null,
-    });
-    return {
-      path: isRoot ? '.' : toPosix(path.relative(rootCwd, projectCwd)),
-      project_id: projectId,
-      is_root: isRoot,
-      ran: result.ran,
-      lock_acquired: result.lock_acquired,
-      files_parsed: result.files_parsed,
-      files_compacted: result.files_compacted,
-      freshness: result.freshness.status,
-      ...(result.lock_status ? { lock_status: result.lock_status } : {}),
-    };
+    const projectPath = isRoot ? '.' : toPosix(path.relative(rootCwd, projectCwd));
+    try {
+      const result = await runRefresh({
+        projectId,
+        projectRoot: projectCwd,
+        scope: input.scope,
+        cwd: projectCwd,
+        extraIgnorePatterns,
+        ownerAgent: input.ownerAgent ?? null,
+        ownerAgentId: input.ownerAgentId ?? null,
+      });
+      const filesIndexed = readManifest(projectCwd)?.stats.files_indexed ?? 0;
+      const outcome = !result.lock_acquired
+        ? 'locked'
+        : filesIndexed === 0 ? 'no_eligible_files' : 'indexed';
+      return {
+        path: projectPath,
+        project_id: projectId,
+        is_root: isRoot,
+        ran: result.ran,
+        lock_acquired: result.lock_acquired,
+        files_parsed: result.files_parsed,
+        files_compacted: result.files_compacted,
+        files_indexed: filesIndexed,
+        freshness: result.freshness.status,
+        outcome,
+        ...(outcome === 'no_eligible_files' ? { reason: 'no eligible source files found' } : {}),
+        ...(result.lock_status ? { lock_status: result.lock_status, reason: result.lock_status } : {}),
+      };
+    } catch (error) {
+      return {
+        path: projectPath,
+        project_id: projectId,
+        is_root: isRoot,
+        ran: false,
+        lock_acquired: false,
+        files_parsed: 0,
+        files_compacted: 0,
+        files_indexed: readManifest(projectCwd)?.stats.files_indexed ?? null,
+        freshness: 'partial',
+        outcome: 'failed',
+        reason: 'refresh_failed',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   };
 
   // Children first, then the root (sequential — each holds its own project lock
   // briefly; never blocks bclaw_work, rule 8).
   const children: CascadeProjectResult[] = [];
+  const total = childAbsPaths.length + 1;
+  input.onProgress?.({ completed: 0, total, current_project: childAbsPaths[0] ? toPosix(path.relative(rootCwd, childAbsPaths[0])) : '.' });
   for (const childCwd of childAbsPaths) {
-    children.push(await refreshOne(childCwd, false));
+    const result = await refreshOne(childCwd, false);
+    children.push(result);
+    input.onProgress?.({ completed: children.length, total, current_project: children.length < childAbsPaths.length ? toPosix(path.relative(rootCwd, childAbsPaths[children.length]!)) : '.', last_result: result });
   }
   const rootResult = await refreshOne(rootCwd, true);
+  input.onProgress?.({ completed: total, total, current_project: null, last_result: rootResult });
 
   return {
     is_cascade: true,
@@ -154,5 +203,6 @@ export async function refreshWorkspaceCascade(input: RefreshCascadeInput): Promi
     root_result: rootResult,
     children,
     children_refreshed: children.length,
+    discovery_truncated: discovery.truncated,
   };
 }

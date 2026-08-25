@@ -255,10 +255,9 @@ interface PerStoreBadge {
 }
 
 /**
- * Merge per-store badges into one workspace badge: worst status among the INDEXED
- * stores (a missing-index child contributes to coverage, never drags the top-line),
- * plus coverage + workspace-relative detail path-sets. Only when EVERY store is
- * un-indexed is the whole workspace `missing_index`.
+ * Merge per-store badges into one workspace badge. Missing child indexes are a
+ * PARTIAL workspace, never a fresh one: serving the indexed subset is useful,
+ * but the top-line signal must describe the coverage actually searched.
  */
 function mergeBadges(perStore: PerStoreBadge[]): FreshnessBadge {
   const total = perStore.length;
@@ -275,14 +274,28 @@ function mergeBadges(perStore: PerStoreBadge[]): FreshnessBadge {
   for (const p of indexed) {
     if (statusRank(p.badge.status) > statusRank(worst)) worst = p.badge.status;
   }
+  if (unindexed.length > 0) worst = 'partial';
+
+  const statusCounts: Record<string, number> = {};
+  for (const p of perStore) {
+    const status = p.hasIndex ? p.badge.status : 'missing_index';
+    statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+  }
+  const exceptionalProjects = perStore
+    .filter((p) => p.hasIndex && p.badge.status !== 'fresh')
+    .map((p) => ({ path: p.ref.relPath || '.', status: p.badge.status }));
 
   const details: Record<string, unknown> = {
     traversal: 'workspace',
     projects_indexed: indexed.length,
     projects_total: total,
-    per_project: Object.fromEntries(perStore.map((p) => [p.ref.relPath || '.', p.badge.status])),
+    project_status_counts: statusCounts,
   };
-  if (unindexed.length) details.unindexed_projects = unindexed;
+  if (unindexed.length) {
+    details.unindexed_project_count = unindexed.length;
+    details.unindexed_projects = unindexed;
+  }
+  if (exceptionalProjects.length) details.non_fresh_projects = exceptionalProjects;
 
   const prefixMerge = (key: keyof SpotCheckDetails): string[] => {
     const out: string[] = [];
@@ -338,7 +351,7 @@ export function aggregateFind(
     const r = findInStore(query, { cwd: ref.cwd }, checker, acc);
     // Per-store badge: drive `partial` from THIS store's own budget-skips (review F2),
     // NOT the shared checker.exhausted flag — else an early store spending the budget
-    // would mislabel every fully-fresh later store as `partial` in per_project. Then
+    // would mislabel every fully-fresh later store as `partial` in diagnostics. Then
     // apply per-store HEAD drift against the one workspace HEAD (review F3) so a child
     // whose index lags the working tree is flagged even under an otherwise-fresh root.
     let badge = deriveBadge(r.base, acc, false, r.matches.length > 0, r.emptyCandidates);
