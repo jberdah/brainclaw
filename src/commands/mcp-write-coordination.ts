@@ -59,12 +59,18 @@ import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import { prepareTurnOwnedReviewDispatch, turnOwnedReviewEnabled } from '../core/review-loop-turn-dispatch.js';
 import { prepareTurnExecution } from '../core/loops/turn-execution.js';
+import { findReservationByAssignmentId } from '../core/loops/attempt-reservation.js';
+import { resolveTurnGenerationChain } from '../core/loops/attempt-generations.js';
+import { readLocalAuthorityHome } from '../core/loops/attempt-rollout.js';
+import { takeoverLoopAttempt } from '../core/loops/attempt-takeover.js';
+import { getLoop as getLoopThread } from '../core/loops/store.js';
 import { removeWorktree } from '../core/worktree.js';
 import type { TurnEcho } from '../core/execution-adapters.js';
-import type { ExecutionContractRef } from '../core/execution-contract.js';
+import { resolveCapabilitySnapshot, type ExecutionContractRef } from '../core/execution-contract.js';
 import {
   createAssignment,
   generateAssignmentId,
+  listAssignments,
   patchAssignmentMessageId,
   transitionAssignment,
 } from '../core/assignments.js';
@@ -1545,7 +1551,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       ...(reviewExecStatus ? { execution_status: reviewExecStatus } : {}),
     };
 
-  } else if (req.intent === 'reroute') {
+  } else if (req.intent === 'reroute') reroute: {
     const activeClaims = listClaims(dispatchCwd).filter(
       (c) => c.status === 'active' && (req.scope ? c.scope === req.scope : true),
     );
@@ -1579,6 +1585,156 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
           },
         ),
       };
+    }
+    {
+      const activePredecessors = listAssignments(dispatchCwd, { claim_id: oldClaim.id })
+        .filter((a) => !['completed', 'cancelled', 'expired', 'rerouted'].includes(a.status));
+      const owned = activePredecessors
+        .map((assignment) => ({ assignment, reservation: findReservationByAssignmentId(assignment.id, dispatchCwd) }))
+        .find((candidate) => candidate.reservation !== undefined);
+      if (owned?.reservation) {
+        const reservation = owned.reservation;
+        const loop = getLoopThread(reservation.loop_id, dispatchCwd);
+        const generation = resolveTurnGenerationChain(dispatchCwd, reservation.turn_id)?.latest_generation;
+        const authorityHome = readLocalAuthorityHome(dispatchCwd);
+        if (!loop || loop.status !== 'open' || !generation || !authorityHome || !reservation.execution_contract) {
+          return { response: createToolErrorResponse('reroute_authority_unavailable',
+            `loop-owned reroute cannot establish AttemptAuthority for ${owned.assignment.id}`, {
+              loop_id: reservation.loop_id, turn_id: reservation.turn_id,
+              has_loop: Boolean(loop), has_generation: Boolean(generation),
+              has_authority_home: Boolean(authorityHome),
+              has_execution_contract: Boolean(reservation.execution_contract),
+              released_claim: null, active_claim: oldClaim.id,
+            }) };
+        }
+        const newIdentity = ensureAgentRegisteredForDispatch(newAgentName, dispatchCwd);
+        const rerouteHarness = resolveHarnessBinding(newAgentName, resolveModel(newAgentName, { override: req.model }));
+        const successorSnapshot = resolveCapabilitySnapshot(
+          newAgentName, reservation.execution_contract.capability_requirement, newIdentity?.agent_id, rerouteHarness,
+        );
+        if (!successorSnapshot.accepted) {
+          return { response: createToolErrorResponse('reroute_target_incompatible',
+            `reroute target ${newAgentName} does not satisfy the immutable execution contract`, {
+              reasons: successorSnapshot.reasons, released_claim: null,
+              active_claim: oldClaim.id, assignment_id: owned.assignment.id,
+            }) };
+        }
+
+        saveClaim({ ...oldClaim, status: 'released' as const, released_at: nowISO() }, dispatchCwd);
+        appendAuditEntry({ actor: oldClaim.agent, action: 'release_claim', item_id: oldClaim.id, item_type: 'claim', scope: oldClaim.scope }, dispatchCwd);
+        let successorClaim: ReturnType<typeof createCoordinatorClaim> | undefined;
+        let takeoverCommitted = false;
+        try {
+          successorClaim = createCoordinatorClaim({
+            agent: newAgentName, scope: oldClaim.scope, description: req.task,
+            dispatcherAgent: senderAgent, sessionId: connectionSessionId,
+            cwd: dispatchCwd, worktreeBaseRef: req.ref,
+            worktreeBranchSuffix: `attempt-${generation.attempt_epoch + 1}`,
+          });
+          if (successorClaim.scopeConflict || !successorClaim.worktreePath) {
+            throw new Error(successorClaim.scopeConflict
+              ? `scope remained owned by ${successorClaim.conflictAgent ?? 'another agent'}`
+              : successorClaim.worktreeWarning ?? 'successor worktree is unavailable');
+          }
+          const taken = takeoverLoopAttempt({
+            loop_id: reservation.loop_id, slot_id: reservation.slot_id, turn_id: reservation.turn_id,
+            expected_epoch: generation.attempt_epoch, authority_home: authorityHome,
+            actor: senderAgent, actor_id: senderAgentId, writer_id: senderAgentId ?? senderAgent,
+            cause: `coordinate reroute from claim ${oldClaim.id} to ${successorClaim.claimId}`,
+            liveness_evidence: `operator-requested reroute of assignment ${owned.assignment.id}`,
+            external_effect_policy: 'none', next_workspace_path: successorClaim.worktreePath,
+            next_executor: {
+              agent: newAgentName, agent_id: newIdentity?.agent_id, claim_id: successorClaim.claimId,
+              capability_snapshot: successorSnapshot,
+            }, cwd: dispatchCwd,
+          });
+          takeoverCommitted = true;
+          const prepared = prepareTurnExecution({
+            kind: loop.kind, loop_id: loop.id, slot_id: reservation.slot_id, phase: reservation.phase,
+            agent: newAgentName, agent_id: newIdentity?.agent_id, claim_id: successorClaim.claimId,
+            dispatcher_agent: senderAgent, dispatcher_agent_id: senderAgentId,
+            dispatcher_session_id: connectionSessionId, scope: oldClaim.scope,
+            description: req.task, task: req.task, cwd: dispatchCwd,
+            worktree_path: successorClaim.worktreePath,
+            assignment_tags: ['coordinate', 'assign', 'reroute', 'turn-owned', 'loop'],
+            run_tags: ['turn-owned', 'loop', 'reroute'],
+            capability_requirement: reservation.execution_contract.capability_requirement,
+            harness_binding: rerouteHarness,
+          });
+          if (prepared.kind !== 'won') throw new Error(`successor generation did not win launch: ${prepared.reason}`);
+          if (prepared.assignment_id !== taken.assignment_id || prepared.run_id !== taken.run_id) {
+            throw new Error('successor projections diverged from immutable takeover generation');
+          }
+          artifacts.push({ type: 'claim', id: successorClaim.claimId }, { type: 'assignment', id: prepared.assignment_id });
+          side_effects.push(
+            { action: 'release', entity: 'claim', id: oldClaim.id },
+            { action: 'create', entity: 'claim', id: successorClaim.claimId },
+            { action: 'create', entity: 'assignment', id: prepared.assignment_id },
+          );
+          const fence: AttemptFenceBrief = {
+            turn_id: prepared.turn_id, run_id: prepared.run_id, nonce: prepared.nonce,
+            attempt_epoch: prepared.attempt_epoch!, workspace_digest: prepared.workspace_digest!,
+          };
+          const queued = queueCoordinateMessage({
+            agent: newAgentName,
+            text: buildCoordinateBrief(newAgentName, req.task, {
+              claimId: successorClaim.claimId, scope: oldClaim.scope,
+              worktreePath: successorClaim.worktreePath, assignmentId: prepared.assignment_id,
+              executionContractRef: prepared.execution_contract_ref, attemptFence: fence,
+            }),
+            messageType: 'assign', ref: oldClaim.scope, scope: oldClaim.scope, requiresAck: true,
+            claimId: successorClaim.claimId, assignmentId: prepared.assignment_id,
+            releasedClaimId: oldClaim.id, tags: ['coordinate', 'assign', 'reroute', 'turn-owned', 'loop'],
+            payload: {
+              intent: req.intent, scope: oldClaim.scope, claim_id: successorClaim.claimId,
+              assignment_id: prepared.assignment_id, worktree_path: successorClaim.worktreePath,
+              released_claim_id: oldClaim.id, previous_agent: oldClaim.agent,
+              turn_id: prepared.turn_id, run_id: prepared.run_id, attempt_epoch: prepared.attempt_epoch,
+            }, commandMode: 'worker', harnessBinding: rerouteHarness,
+          });
+          attachAssignmentMessageToClaim(successorClaim.claimId, queued.entry.message_id, dispatchCwd);
+          linkClaimToAssignment(successorClaim.claimId, prepared.assignment_id, dispatchCwd);
+          transitionAssignment(prepared.assignment_id, 'offered', { actor: senderAgent }, dispatchCwd);
+          patchAssignmentMessageId(prepared.assignment_id, queued.entry.message_id, dispatchCwd);
+          transitionAssignment(owned.assignment.id, 'rerouted', {
+            actor: senderAgent, status_reason: `reroute: superseded by generation ${prepared.attempt_epoch}`,
+          }, dispatchCwd);
+          side_effects.push({ action: 'update', entity: 'assignment', id: owned.assignment.id });
+          const turnEcho: TurnEcho = {
+            ...fence, contract_hash: prepared.execution_contract_ref!.hash,
+            capability_snapshot_hash: prepared.execution_contract_ref!.snapshot_hash,
+          };
+          const delivery_plan = [queued.entry];
+          const execution_status = await runCoordinateExecution([
+            { entry: queued.entry, invoke: queued.invoke, worktreePath: successorClaim.worktreePath, turnEcho },
+          ], { autoExecute: effectiveAutoExecute !== false, senderAgent, senderAgentId, cwd: dispatchCwd, warnings });
+          result = {
+            released_claim: oldClaim.id, old_agent: oldClaim.agent, new_agent: newAgentName,
+            new_claim_id: successorClaim.claimId, loop_id: loop.id, turn_id: prepared.turn_id,
+            assignment_id: prepared.assignment_id, run_id: prepared.run_id,
+            attempt_epoch: prepared.attempt_epoch, selected_targets: resolvedAgents,
+            delivery_plan, messages_sent: toMessageSummary(delivery_plan),
+            commands: commandHints, execution_status,
+          };
+          break reroute;
+        } catch (error) {
+          if (!takeoverCommitted) {
+            if (successorClaim && successorClaim.claimId !== oldClaim.id) {
+              releaseClaimIfActive(successorClaim.claimId, dispatchCwd, {
+                agent: senderAgent, agent_id: senderAgentId, session_id: connectionSessionId, override: true,
+              });
+            }
+            saveClaim({ ...oldClaim, status: 'active' as const, released_at: undefined }, dispatchCwd);
+          }
+          return { response: createToolErrorResponse(
+            takeoverCommitted ? 'reroute_successor_incomplete' : 'reroute_transaction_rolled_back',
+            error instanceof Error ? error.message : String(error), {
+              takeover_committed: takeoverCommitted,
+              active_claim: takeoverCommitted ? successorClaim?.claimId : oldClaim.id,
+              previous_claim: oldClaim.id, loop_id: loop.id, turn_id: reservation.turn_id,
+            }) };
+        }
+      }
     }
     saveClaim({ ...oldClaim, status: 'released' as const, released_at: nowISO() }, dispatchCwd);
     appendAuditEntry({ actor: oldClaim.agent, action: 'release_claim', item_id: oldClaim.id, item_type: 'claim', scope: oldClaim.scope }, dispatchCwd);

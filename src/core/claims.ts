@@ -1089,6 +1089,8 @@ export interface CoordinatorClaimOptions {
   cwd: string;
   worktreeBaseRef?: string;
   resetExistingWorktreeBranch?: boolean;
+  /** Optional isolation suffix for a physical successor of the same logical scope. */
+  worktreeBranchSuffix?: string;
 }
 
 export interface CoordinatorClaimResult {
@@ -1204,7 +1206,10 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
   // `.github/workflows` previously produced `feat/.github-…` (leading dot),
   // which git rejects and the whole spawn failed.
   const branchSlug = sanitizeBranchComponent(options.scope);
-  const worktreeBranch = `feat/${branchSlug}`;
+  const branchSuffix = options.worktreeBranchSuffix
+    ? `-${sanitizeBranchComponent(options.worktreeBranchSuffix)}`
+    : '';
+  const worktreeBranch = `feat/${branchSlug}${branchSuffix}`;
   try {
     worktreePath = createWorktree(options.cwd, worktreeBranch, {
       sessionId: options.sessionId,

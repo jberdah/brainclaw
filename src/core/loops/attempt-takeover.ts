@@ -6,7 +6,7 @@ import { loadAssignment } from '../assignments.js';
 import { createRuntimeEvent } from '../events.js';
 import { nowISO } from '../ids.js';
 import { prepareAttemptTakeoverV2, type PrepareAttemptTakeoverV2Input } from './attempt-authority.js';
-import { generationDigest } from './attempt-generations.js';
+import { generationDigest, resolveTurnGenerationChain } from './attempt-generations.js';
 import { commitViaIntent } from './commit-intent.js';
 import { evidenceDigest } from './evidence.js';
 import { withLoopLock } from './lock.js';
@@ -67,7 +67,9 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
       if (!reservation || reservation.loop_id !== loop.id || reservation.slot_id !== slot.slot_id) {
         throw new Error(`turn ${input.turn_id} does not own ${loop.id}/${slot.slot_id}`);
       }
-      if (slot.current_turn_id !== input.turn_id || slot.assignment_id !== reservation.child_ids.assignment_id) {
+      const activeGeneration = resolveTurnGenerationChain(input.cwd, input.turn_id)?.latest_generation;
+      const activeAssignmentId = activeGeneration?.assignment_id ?? reservation.child_ids.assignment_id;
+      if (slot.current_turn_id !== input.turn_id || slot.assignment_id !== activeAssignmentId) {
         throw new Error(`slot ${slot.slot_id} is no longer bound to turn ${input.turn_id}`);
       }
 
@@ -82,6 +84,12 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
 
       const now = nowISO();
       const mutationId = crypto.randomUUID();
+      const executor = takeover.next_generation.executor ?? {
+        agent: reservation.agent,
+        agent_id: reservation.agent_id,
+        claim_id: reservation.claim_id,
+        capability_snapshot: reservation.capability_snapshot!,
+      };
       const event: LoopEvent = {
         event_id: crypto.randomUUID(),
         loop_id: loop.id,
@@ -93,6 +101,9 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
         slot_id: slot.slot_id,
         turn_id: input.turn_id,
         assignment_id: takeover.next_generation.assignment_id,
+        claim_id: executor.claim_id,
+        agent: executor.agent,
+        agent_id: executor.agent_id,
         from_epoch: takeover.previous_generation.attempt_epoch,
         to_epoch: takeover.next_generation.attempt_epoch,
         from_run_id: takeover.previous_generation.run_id,
@@ -104,6 +115,17 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
         ...loop,
         version: loop.version + 1,
         mutation_id: mutationId,
+        slots: loop.slots.map((candidate) => candidate.slot_id === slot.slot_id
+          ? {
+              ...candidate,
+              agent: executor.agent,
+              agent_id: executor.agent_id,
+              assignment_id: takeover.next_generation.assignment_id,
+              claim_id: executor.claim_id,
+              current_turn_id: input.turn_id,
+              status: 'assigned' as const,
+            }
+          : candidate),
         updated_at: now,
       };
       commitViaIntent({ loop_id: loop.id, base_version: loop.version, events: [event], thread_snapshot: next }, input.cwd);
@@ -112,6 +134,12 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
   });
 
   const { takeover, reservation } = transaction;
+  const executor = takeover.next_generation.executor ?? {
+    agent: reservation.agent,
+    agent_id: reservation.agent_id,
+    claim_id: reservation.claim_id,
+    capability_snapshot: reservation.capability_snapshot!,
+  };
   const assignment = loadAssignment(takeover.next_generation.assignment_id, input.cwd);
   const previousRun = loadAgentRun(takeover.previous_generation.run_id, input.cwd);
   if (previousRun && !['completed', 'failed', 'cancelled', 'timed_out', 'interrupted'].includes(previousRun.status)) {
@@ -127,17 +155,17 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
     id: takeover.next_generation.run_id,
     short_label: takeover.next_generation.run_id,
     assignment_id: takeover.next_generation.assignment_id,
-    claim_id: reservation.claim_id,
+    claim_id: executor.claim_id,
     attempt_index: takeover.next_generation.attempt_epoch + 1,
-    agent: reservation.agent,
-    agent_id: reservation.agent_id,
+    agent: executor.agent,
+    agent_id: executor.agent_id,
     transport: 'cli_spawn',
     status: 'created',
     scope: assignment?.scope ?? reservation.execution_contract?.workspace_policy.scope ?? reservation.cwd,
     description: assignment?.description ?? `Attempt generation ${takeover.next_generation.attempt_epoch} for ${input.turn_id}`,
     worktree_path: takeover.next_generation.workspace_path,
     execution_contract_ref: takeover.execution_contract_ref,
-    capability_snapshot: reservation.capability_snapshot,
+    capability_snapshot: executor.capability_snapshot,
     tags: ['turn-owned', 'loop', 'attempt-takeover', `attempt-generation:${takeover.next_generation.attempt_epoch}`],
   }, input.cwd);
   try {

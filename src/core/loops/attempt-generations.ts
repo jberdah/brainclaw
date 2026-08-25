@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
+import { CapabilitySnapshotSchema, type CapabilitySnapshot } from '../execution-contract.js';
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
 
@@ -42,9 +43,19 @@ export const GenerationFenceSchema = z.object({
 
 export type GenerationFence = z.infer<typeof GenerationFenceSchema>;
 
+export const GenerationExecutorSchema = z.object({
+  agent: z.string().min(1),
+  agent_id: z.string().min(1).optional(),
+  claim_id: z.string().min(1),
+  capability_snapshot: CapabilitySnapshotSchema,
+}).strict();
+export type GenerationExecutor = z.infer<typeof GenerationExecutorSchema>;
+
 export const AttemptGenerationSchema = GenerationFenceSchema.extend({
   schema_version: z.literal(ATTEMPT_AUTHORITY_VERSION),
   generation_kind: z.literal('attempt_generation'),
+  /** Executor ownership is generation-scoped so a reroute never inherits stale provenance. */
+  executor: GenerationExecutorSchema.optional(),
   created_at: z.string().min(1),
 }).strict();
 
@@ -186,8 +197,9 @@ function stableId(prefix: string, material: string): string {
 }
 
 /** Compatible with the existing logical Assignment derivation. */
-export function deriveGenerationAssignmentId(turnId: string): string {
-  return stableId('asgn', `${turnId}:assignment`);
+export function deriveGenerationAssignmentId(turnId: string, attemptEpoch = 0): string {
+  const salt = attemptEpoch === 0 ? 'assignment' : `assignment:${attemptEpoch}`;
+  return stableId('asgn', `${turnId}:${salt}`);
 }
 
 /** Epoch zero preserves the existing run id; every later epoch is fresh. */
@@ -206,6 +218,7 @@ export interface PrepareInitialGenerationInput {
   contract_hash: string;
   workspace_path: string;
   workspace_digest: string;
+  executor?: { agent: string; agent_id?: string; claim_id: string; capability_snapshot: CapabilitySnapshot };
   launch_nonce?: string;
   created_at?: string;
 }
@@ -215,7 +228,7 @@ export function prepareInitialGeneration(input: PrepareInitialGenerationInput): 
     schema_version: ATTEMPT_AUTHORITY_VERSION,
     generation_kind: 'attempt_generation',
     turn_id: input.turn_id,
-    assignment_id: deriveGenerationAssignmentId(input.turn_id),
+    assignment_id: deriveGenerationAssignmentId(input.turn_id, 0),
     attempt_epoch: 0,
     run_id: deriveGenerationRunId(input.turn_id, 0),
     launch_nonce: input.launch_nonce ?? crypto.randomUUID(),
@@ -224,6 +237,7 @@ export function prepareInitialGeneration(input: PrepareInitialGenerationInput): 
     workspace_path: input.workspace_path,
     workspace_digest: input.workspace_digest,
     authority_home: AuthorityHomeSchema.parse(input.authority_home),
+    executor: input.executor,
     created_at: input.created_at ?? nowISO(),
   });
 }
@@ -232,6 +246,7 @@ export interface PrepareNextGenerationInput {
   contract_hash: string;
   workspace_path: string;
   workspace_digest: string;
+  executor?: GenerationExecutor;
   launch_nonce?: string;
   created_at?: string;
 }
@@ -244,6 +259,7 @@ export function prepareNextGeneration(
   const attemptEpoch = parsed.attempt_epoch + 1;
   return AttemptGenerationSchema.parse({
     ...parsed,
+    assignment_id: deriveGenerationAssignmentId(parsed.turn_id, attemptEpoch),
     attempt_epoch: attemptEpoch,
     run_id: deriveGenerationRunId(parsed.turn_id, attemptEpoch),
     launch_nonce: input.launch_nonce ?? crypto.randomUUID(),
@@ -251,6 +267,7 @@ export function prepareNextGeneration(
     workspace_id: deriveGenerationWorkspaceId(parsed.turn_id, attemptEpoch),
     workspace_path: input.workspace_path,
     workspace_digest: input.workspace_digest,
+    executor: input.executor ?? parsed.executor,
     created_at: input.created_at ?? nowISO(),
   });
 }
@@ -302,7 +319,7 @@ function assertValidSuccessor(current: AttemptGeneration, next: AttemptGeneratio
   }
   const invalid = [
     current.turn_id !== next.turn_id && 'turn_id',
-    current.assignment_id !== next.assignment_id && 'assignment_id',
+    next.assignment_id === current.assignment_id && 'assignment_id',
     next.attempt_epoch !== current.attempt_epoch + 1 && 'attempt_epoch',
     next.run_id === current.run_id && 'run_id',
     next.launch_nonce === current.launch_nonce && 'launch_nonce',

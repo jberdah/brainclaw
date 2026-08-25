@@ -95,7 +95,11 @@ export function turnOwnedLaneEvidence(
   const chain = resolveTurnGenerationChain(cwd, reservation.turn_id);
   const generation = chain?.latest_generation;
   const runId = generation?.run_id ?? reservation.child_ids.run_id;
-  const completion = readCompletionSignals(cwd, reservation.child_ids.assignment_id, generation?.run_id).completed;
+  const completion = readCompletionSignals(
+    cwd,
+    generation?.assignment_id ?? reservation.child_ids.assignment_id,
+    generation?.run_id,
+  ).completed;
   const nonce = lane.nonce ?? completion?.nonce;
   if (!nonce && !reservation.execution_contract_ref) return undefined;
   return {
@@ -298,6 +302,7 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
     ? resolvedGeneration.latest_generation
     : undefined;
   const activeRunId = activeGeneration?.run_id ?? reservation.child_ids.run_id;
+  const activeAssignmentId = activeGeneration?.assignment_id ?? reservation.child_ids.assignment_id;
   const activeContractRef = activeGeneration
     ? executionContractForGeneration(reservation, activeGeneration).ref
     : reservation.execution_contract_ref;
@@ -335,12 +340,12 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   if (activeContractRef) {
     const completion = readCompletionSignals(
       cwd ?? process.cwd(),
-      reservation.child_ids.assignment_id,
+      activeAssignmentId,
       activeGeneration?.run_id,
     ).completed;
     const bootstrapAck = readContractAck(
       cwd ?? process.cwd(),
-      reservation.child_ids.assignment_id,
+      activeAssignmentId,
       activeGeneration?.run_id,
     );
     const accepted = {
@@ -394,7 +399,7 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
           event_type: 'run_blocked',
           text: `reconcileTurn: post-crossing execution-contract acceptance anomaly for ${turn_id}; convergence WITHHELD and respawn=false`,
           tags: ['loops', 'reconcile', 'contract-anomaly', 'turn-attempt'],
-          assignment_id: reservation.child_ids.assignment_id,
+          assignment_id: activeAssignmentId,
           run_id: activeRunId,
           status_reason: 'execution_contract_acceptance_mismatch',
         }, cwd);
@@ -417,15 +422,15 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   try {
     const bodies = readCompletionSignals(
       cwd ?? process.cwd(),
-      reservation.child_ids.assignment_id,
+      activeAssignmentId,
       activeGeneration?.run_id,
     );
     const matchedCompleted = bodies.completed?.status === 'completed' && evidenceMatchesAttempt(reservation, {
-      assignment_id: reservation.child_ids.assignment_id,
+      assignment_id: activeAssignmentId,
       ...bodies.completed,
     });
     const matchedFailed = bodies.failed?.status === 'failed' && evidenceMatchesAttempt(reservation, {
-      assignment_id: reservation.child_ids.assignment_id,
+      assignment_id: activeAssignmentId,
       ...bodies.failed,
     });
     if (matchedFailed && (matchedCompleted || lane.status === 'completed')) {
@@ -435,7 +440,7 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
           event_type: 'run_blocked',
           text: `reconcileTurn: turn ${turn_id} has a completed(lane/sentinel)+failed(sentinel) contradiction — auto-stop WITHHELD (§13 R4), escalating to human`,
           tags: ['loops', 'reconcile', 'conflict', 'turn-attempt'],
-          assignment_id: reservation.child_ids.assignment_id,
+          assignment_id: activeAssignmentId,
           run_id: activeRunId,
           status_reason: 'turn_evidence_contradiction',
         }, cwd);
@@ -541,6 +546,13 @@ function convergeLockedTurn(
   }
   const acceptedGeneration = generationState?.latest_generation;
   const acceptedRunId = acceptedGeneration?.run_id ?? reservation.child_ids.run_id;
+  const acceptedAssignmentId = acceptedGeneration?.assignment_id ?? reservation.child_ids.assignment_id;
+  const acceptedExecutor = acceptedGeneration?.executor ?? {
+    agent: reservation.agent,
+    agent_id: reservation.agent_id,
+    claim_id: reservation.claim_id,
+    capability_snapshot: reservation.capability_snapshot,
+  };
   const acceptedNonce = acceptedGeneration?.launch_nonce ?? reservation.launch?.token;
   const acceptedEpoch = acceptedGeneration?.attempt_epoch ?? reservation.epoch;
   const acceptedContractHash = acceptedGeneration?.contract_hash
@@ -565,7 +577,7 @@ function convergeLockedTurn(
   // transition but BEFORE its own deferred release would otherwise leak the retained claim
   // until the staleness sweep — releaseCoordinatorClaim is idempotent (no-op if not active).
   if (LOOP_TERMINAL.has(loop.status)) {
-    releaseCoordinatorClaim(loadAssignment(reservation.child_ids.assignment_id, cwd)?.claim_id ?? reservation.claim_id, cwd);
+    releaseCoordinatorClaim(loadAssignment(acceptedAssignmentId, cwd)?.claim_id ?? acceptedExecutor.claim_id, cwd);
     return { reconciled: true, reason: `loop already ${loop.status} (idempotent no-op)`, artifacts_added: 0, loop_status: loop.status };
   }
 
@@ -603,13 +615,13 @@ function convergeLockedTurn(
             evidence_context: {
               channel: 'reconcile_turn',
               producer_kind: 'slot',
-              producer_id: reservation.agent,
-              agent_id: reservation.agent_id,
+              producer_id: acceptedExecutor.agent,
+              agent_id: acceptedExecutor.agent_id,
               slot_id: slot.slot_id,
               slot_role: slot.role,
               turn_id,
-              assignment_id: reservation.child_ids.assignment_id,
-              claim_id: reservation.claim_id,
+              assignment_id: acceptedAssignmentId,
+              claim_id: acceptedExecutor.claim_id,
               run_id: acceptedRunId,
               nonce: acceptedNonce,
               attempt_epoch: acceptedEpoch,
@@ -635,13 +647,13 @@ function convergeLockedTurn(
         evidence_context: {
           channel: 'reconcile_turn',
           producer_kind: 'slot',
-          producer_id: reservation.agent,
-          agent_id: reservation.agent_id,
+          producer_id: acceptedExecutor.agent,
+          agent_id: acceptedExecutor.agent_id,
           slot_id: slot.slot_id,
           slot_role: slot.role,
           turn_id,
-          assignment_id: reservation.child_ids.assignment_id,
-          claim_id: reservation.claim_id,
+          assignment_id: acceptedAssignmentId,
+          claim_id: acceptedExecutor.claim_id,
           run_id: acceptedRunId,
           nonce: acceptedNonce,
           attempt_epoch: acceptedEpoch,
@@ -671,7 +683,7 @@ function convergeLockedTurn(
         event_type: 'loop_artifact_harvested',
         text: `reconcileTurn: harvested turn ${turn_id} on slot ${slot.slot_id} → loop ${loop.id} (${slot_outcome}, ${artifacts_added} artifact(s), phase ${reservation.phase})`,
         tags: ['loops', 'reconcile', 'harvest', 'turn-attempt'],
-        assignment_id: reservation.child_ids.assignment_id,
+        assignment_id: acceptedAssignmentId,
         run_id: acceptedRunId,
         attempt_epoch: acceptedGeneration?.attempt_epoch,
         workspace_digest: acceptedGeneration?.workspace_digest,
@@ -688,7 +700,7 @@ function convergeLockedTurn(
   // (a crash that recorded the turn but not the settle still converges on replay; the
   // fix-cycle re-dispatch mints a fresh run/assignment, so completing the old is correct). ──
   settleRunCompleted(acceptedRunId, actor, cwd);
-  settleAssignment(reservation.child_ids.assignment_id, actor, cwd);
+  settleAssignment(acceptedAssignmentId, actor, cwd);
 
   // ── Advance / stop decision. On a `done` outcome we either drive a deterministic stop
   // (reviewer_green / gate → close), continue a symmetric fix cycle (bump the round + retain
@@ -767,7 +779,7 @@ function convergeLockedTurn(
                 event_type: 'run_blocked',
                 text: `reconcileTurn: fix-cycle round ${cur.iteration_count} of loop ${loop.id} was bumped but never dispatched (turn ${turn_id} strand) — re-emitting next_turn to self-heal`,
                 tags: ['loops', 'reconcile', 'turn-owned', 'strand-recovery'],
-                assignment_id: reservation.child_ids.assignment_id,
+                assignment_id: acceptedAssignmentId,
                 run_id: acceptedRunId,
                 status_reason: 'fix_cycle_strand_reemit',
               }, cwd);
@@ -793,7 +805,7 @@ function convergeLockedTurn(
   // Release the coordinator claim now — UNLESS a fix-cycle round retained it. Target the
   // authoritative claim the assignment is bound to, not reservation.claim_id (dec#149 #3).
   if (!retainClaim) {
-    const authoritativeClaimId = loadAssignment(reservation.child_ids.assignment_id, cwd)?.claim_id ?? reservation.claim_id;
+    const authoritativeClaimId = loadAssignment(acceptedAssignmentId, cwd)?.claim_id ?? acceptedExecutor.claim_id;
     releaseCoordinatorClaim(authoritativeClaimId, cwd);
   }
 
@@ -920,7 +932,7 @@ function convergeFailedLockedTurn(
         event_type: 'run_failed',
         text: `Released claim ${claimId} as the BUSINESS convergence of failed turn ${reservation.turn_id}: ${why}`,
         tags: ['loops', 'reconcile', 'claim-release', 'effects-boundary'],
-        assignment_id: reservation.child_ids.assignment_id,
+        assignment_id: run.assignment_id,
         run_id: run.id,
         claim_id: claimId,
         status_reason: 'turn_failure_business_release',
@@ -936,7 +948,7 @@ function convergeFailedLockedTurn(
     return { converged: false, claim_released: false, reason: `loop ${reservation.loop_id} not found — claim retained for the staleness sweep` };
   }
 
-  const authoritativeClaimId = loadAssignment(reservation.child_ids.assignment_id, cwd)?.claim_id ?? reservation.claim_id;
+  const authoritativeClaimId = loadAssignment(run.assignment_id, cwd)?.claim_id ?? run.claim_id ?? reservation.claim_id;
 
   // Terminal loop: the business story is already over — releasing is pure
   // idempotent cleanup, mirroring reconcileTurn's terminal early-return.
