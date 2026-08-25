@@ -518,6 +518,11 @@ The Loop engine is a **control plane**; existing primitives remain the **data pl
 
 A Loop never copies these objects — it links them. Deleting the linked primitive does not break the loop; the reference just becomes dangling, surfaced in diagnostics.
 
+Inline `LoopArtifact.body` values are capped at **4096 UTF-8 bytes**, not 4096
+characters. Larger task and result text remains available through its source
+object or a `ref`; any inline projection is byte-truncated with an explicit
+`…[truncated]` marker. This contract is identical for review and ideation.
+
 ## Per-protocol guides
 
 Each of the five kinds has its own operator-facing guide with the same

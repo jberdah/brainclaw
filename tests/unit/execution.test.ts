@@ -116,6 +116,16 @@ describe('defaultExecutionAdapter', () => {
     );
   });
 
+  it('pins POSIX Codex after the stdin delivery pipe instead of spawning a promptless command', () => {
+    const invoke = buildInvokeCommand('codex', 'review the DGX lane', { platform: 'linux' });
+    assert.ok(invoke);
+    const worktree = '/srv/worktrees/dgx-lane';
+    const pinned = withCodexWorkspaceRoot(invoke, 'codex', worktree, false);
+    assert.match(pinned.bashCommand, /^printf .* \| codex --cd '\/srv\/worktrees\/dgx-lane' "exec" /);
+    assert.equal((pinned.bashCommand.match(/\bcodex\b/g) ?? []).length, 1, 'exactly one Codex process is launched');
+    assert.ok(pinned.bashCommand.includes("printf '%s' 'review the DGX lane' |"), 'stdin prompt delivery is preserved');
+  });
+
   it('uses an environment-attesting bootstrap and exact terminal hashes on POSIX and Windows', () => {
     const hashes = {
       contract_hash: 'a'.repeat(64),

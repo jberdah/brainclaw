@@ -9,7 +9,7 @@ import type { TurnReservation } from './attempt-reservation.js';
  * would make complete_turn throw and crash reconcileTurn. Byte-aware, drops any
  * partial trailing multibyte char.
  */
-function capBody(s: string): string {
+export function capLoopArtifactBody(s: string): string {
   if (Buffer.byteLength(s, 'utf8') <= LOOP_ARTIFACT_BODY_MAX_BYTES) return s;
   const marker = '…[truncated]';
   const room = LOOP_ARTIFACT_BODY_MAX_BYTES - Buffer.byteLength(marker, 'utf8');
@@ -80,7 +80,7 @@ export const reviewReducer: ResultReducer = (input, attempt) => {
       return { artifacts: [], slot_outcome: 'failed', failure_reason: 'review author_response produced no body' };
     }
     return {
-      artifacts: [{ phase, type: 'author_response', body: capBody(response), produced_by: attempt.agent }],
+      artifacts: [{ phase, type: 'author_response', body: capLoopArtifactBody(response), produced_by: attempt.agent }],
       slot_outcome: 'done',
     };
   }
@@ -91,7 +91,7 @@ export const reviewReducer: ResultReducer = (input, attempt) => {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: 'review lane completed without a review_verdict — cannot converge the loop' };
   }
   const summary = (lane.review_summary ?? '').trim();
-  const body = capBody(lane.review_verdict === 'approve'
+  const body = capLoopArtifactBody(lane.review_verdict === 'approve'
     ? `accepted${summary ? `: ${summary}` : ''}`
     : `changes-requested${summary ? `: ${summary}` : ''}`);
   return {
@@ -141,7 +141,7 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
         artifacts: [{
           phase,
           type: artifactType,
-          body: capBody(body),
+          body: capLoopArtifactBody(body),
           produced_by: attempt.agent,
           addresses_critique: uniqueAddresses,
           implementation_verify: lane.implementation_verify,
@@ -149,7 +149,7 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
         slot_outcome: 'done',
       };
     }
-    return { artifacts: [{ phase, type: artifactType, body: capBody(body), produced_by: attempt.agent }], slot_outcome: 'done' };
+    return { artifacts: [{ phase, type: artifactType, body: capLoopArtifactBody(body), produced_by: attempt.agent }], slot_outcome: 'done' };
   }
   if (lane.artifact_type !== 'critique') {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: "ideation critique requires artifact_type 'critique'" };
@@ -159,7 +159,7 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
   }
   return {
     artifacts: critiques.map((c) => ({
-      phase, type: 'critique', body: capBody(c.body), produced_by: attempt.agent,
+      phase, type: 'critique', body: capLoopArtifactBody(c.body), produced_by: attempt.agent,
       ...(c.addresses_critique ? { addresses_critique: c.addresses_critique } : {}),
     })),
     slot_outcome: 'done',
@@ -177,7 +177,7 @@ export const defaultReducer: ResultReducer = (input, attempt) => {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: `lane status is ${lane.status}, not completed` };
   }
   return {
-    artifacts: [{ phase, type: 'lane_result', body: capBody(lane.summary), produced_by: attempt.agent }],
+    artifacts: [{ phase, type: 'lane_result', body: capLoopArtifactBody(lane.summary), produced_by: attempt.agent }],
     slot_outcome: 'done',
   };
 };
@@ -209,7 +209,7 @@ function typedPhaseReducer(
       return { artifacts: [], slot_outcome: 'failed', failure_reason: `${kind} phase '${phase}' produced no artifact body` };
     }
     return {
-      artifacts: [{ phase, type: expectedType, body: capBody(body), produced_by: attempt.agent }],
+      artifacts: [{ phase, type: expectedType, body: capLoopArtifactBody(body), produced_by: attempt.agent }],
       slot_outcome: 'done',
     };
   };

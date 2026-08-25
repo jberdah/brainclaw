@@ -34,6 +34,7 @@ import { validateMcpField } from '../core/input-validation.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
 import { DEFAULT_PROTOCOLS } from '../core/loops/types.js';
+import { capLoopArtifactBody } from '../core/loops/result-reducers.js';
 import { validateLoopProjectResolution, type LoopProjectResolved } from '../core/loops/project-resolution.js';
 import { coordinateNextActions, dispatchNextActions } from '../core/next-actions.js';
 import {
@@ -2063,7 +2064,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       // loop doesn't contain. The task text is already captured on
       // the thread (title + goal).
       if (!presetSelected) {
-        const proposalBody = req.task.slice(0, 4000);
+        const proposalBody = capLoopArtifactBody(req.task);
         const updated = add_artifact(
           {
             id: loop.id,

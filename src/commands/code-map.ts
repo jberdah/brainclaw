@@ -150,6 +150,8 @@ function printStatus(status: CodeStatus, options: CodeMapOptions): void {
   }
   console.log('Code Map status');
   console.log(`  Store:    ${status.store_exists ? 'present' : 'absent'}`);
+  console.log(`  Root:     ${status.resolution.project_root}`);
+  console.log(`  Path:     ${status.resolution.store_path}`);
   console.log(`  ${badgeLine(status.freshness_badge)}`);
   if (status.stats) {
     console.log(`  Files:    ${status.stats.files_indexed}`);

@@ -1091,8 +1091,8 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(messageArtifacts.length >= 1, 'at least one coordinate message queued');
     });
 
-    it('truncates oversized task to fit the LoopArtifact 4 KB body cap', async () => {
-      const oversizedTask = 'x'.repeat(8000);
+    it('truncates oversized multibyte task to fit the LoopArtifact 4 KiB byte cap', async () => {
+      const oversizedTask = 'é'.repeat(8000);
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: oversizedTask,
@@ -1105,9 +1105,10 @@ describe('bclaw_coordinate — side effects', () => {
       const proposal = loop?.artifacts.find((a) => a.type === 'proposal');
       assert.ok(proposal);
       assert.ok(
-        (proposal.body ?? '').length <= 4000,
-        `proposal body must be sliced to ≤4000 chars; got ${proposal.body?.length}`,
+        Buffer.byteLength(proposal.body ?? '', 'utf8') <= 4096,
+        `proposal body must be capped to ≤4096 UTF-8 bytes; got ${Buffer.byteLength(proposal.body ?? '', 'utf8')}`,
       );
+      assert.match(proposal.body ?? '', /…\[truncated\]$/);
     });
 
     // pln#626 Phase 2 (Option B) — multi-agent ideate now SPAWNS one worktree-

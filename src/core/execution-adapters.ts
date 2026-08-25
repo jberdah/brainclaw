@@ -332,10 +332,23 @@ export function withCodexWorkspaceRoot(
     : `'${value.replace(/'/g, `'\\''`)}'`;
   const flags = `--cd ${quote(worktreePath)}`;
   const prefix = invoke.executable;
-  const suffix = invoke.bashCommand.startsWith(`${prefix} `)
-    ? invoke.bashCommand.slice(prefix.length + 1)
-    : invoke.bashCommand;
-  return { ...invoke, args, bashCommand: `${prefix} ${flags} ${suffix}` };
+  // `stdin_pipe` on POSIX is rendered as `printf ... | codex exec ...`.
+  // Prefixing that whole string with `codex --cd` creates TWO Codex commands:
+  // the right-hand one receives no prompt and exits with
+  // "No prompt provided via stdin" (DGX dogfood, pln#692). Insert the flag in
+  // the actual Codex command while preserving any delivery pipeline/prologue.
+  const commandMarkers = [`| ${prefix} `, `&& ${prefix} `, `${prefix} `];
+  let bashCommand = invoke.bashCommand;
+  for (const marker of commandMarkers) {
+    const index = marker === `${prefix} `
+      ? (bashCommand.startsWith(marker) ? 0 : -1)
+      : bashCommand.lastIndexOf(marker);
+    if (index < 0) continue;
+    const commandOffset = marker === `${prefix} ` ? index : index + marker.length - `${prefix} `.length;
+    bashCommand = `${bashCommand.slice(0, commandOffset)}${prefix} ${flags} ${bashCommand.slice(commandOffset + prefix.length + 1)}`;
+    break;
+  }
+  return { ...invoke, args, bashCommand };
 }
 
 export class CliExecutionAdapter implements ExecutionAdapter {
