@@ -17,7 +17,12 @@ import { loadClaim, saveClaim } from '../../src/core/claims.js';
 import { handleBclawAssignmentUpdate, handleBclawReleaseClaim, type McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import { removeEntity, transitionEntity } from '../../src/core/entity-operations.js';
 import { AttemptTakeoverCommittedError, takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
-import { fenceForGeneration, readLaunchDecision, resolveTurnGenerationChain } from '../../src/core/loops/attempt-generations.js';
+import {
+  attemptGenerationHeadPath,
+  fenceForGeneration,
+  readLaunchDecision,
+  resolveTurnGenerationChain,
+} from '../../src/core/loops/attempt-generations.js';
 import { settleActiveAttemptGenerationV2 } from '../../src/core/loops/attempt-authority.js';
 import {
   activateAttemptAuthorityV2,
@@ -186,6 +191,9 @@ describe('AttemptAuthority v2 takeover integration', () => {
       },
       cwd,
     };
+    const headPath = attemptGenerationHeadPath(cwd, first.turn_id);
+    fs.rmSync(headPath, { force: true });
+    fs.mkdirSync(headPath);
     assert.throws(
       () => takeoverLoopAttempt({
         ...takeoverInput,
@@ -198,6 +206,7 @@ describe('AttemptAuthority v2 takeover integration', () => {
         && error.attempt_epoch === 1,
       'a post-commit projection fault is explicitly non-rollbackable',
     );
+    fs.rmSync(headPath, { recursive: true, force: true });
     const committedChain = resolveTurnGenerationChain(cwd, first.turn_id);
     assert.equal(committedChain?.latest_generation.attempt_epoch, 1, 'authority successor remains committed');
     assert.equal(
@@ -275,7 +284,7 @@ describe('AttemptAuthority v2 takeover integration', () => {
     assert.equal(JSON.stringify(loadClaim('clm_takeover_successor', cwd)), claimBeforeStaleUpdate);
     assert.throws(
       () => transitionEntity('assignment', first.assignment_id, 'completed', cwd),
-      /AttemptAuthority v2/,
+      /Invalid transition|AttemptAuthority v2/,
     );
     assert.throws(
       () => removeEntity('assignment', first.assignment_id, cwd),

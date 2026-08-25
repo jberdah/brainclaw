@@ -590,7 +590,14 @@ export function prepareAttemptTakeoverV2(input: PrepareAttemptTakeoverV2Input): 
   if (generationDigest(incumbent.next_generation) !== generationDigest(next)) {
     throw new AttemptGenerationError('fenced', `a different successor already won generation ${current.attempt_epoch}`);
   }
-  rebuildAttemptGenerationHead(input.cwd, current);
+  // The close cell above is the immutable authority boundary. `head.json` is
+  // only a rebuildable read cache, so a projection failure after a winning
+  // close must never escape as a pre-commit takeover failure: callers could
+  // otherwise roll back claims while the successor generation already owns
+  // the turn. Readers repair the cache from immutable cells on replay.
+  try {
+    rebuildAttemptGenerationHead(input.cwd, current);
+  } catch { /* immutable close(epoch) remains authoritative */ }
   return {
     won: published.won,
     rollout,
