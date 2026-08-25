@@ -7,6 +7,43 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.2] — 2026-08-25
+
+The Loop/Dispatch dogfood reliability patch: worker outcomes now converge every
+linked projection, recovery stays generation-fenced, and DGX monorepo state is
+diagnosable from the running surface.
+
+### Changed
+
+- **Loop recovery is explicit and generation-scoped.** Admission and
+  continuation diagnostics now identify the blocking slots and give the exact
+  recovery operation; reroutes create and validate the successor generation
+  before retiring the predecessor.
+- **DGX monorepo diagnostics disclose the resolved runtime.** Code Map and MCP
+  status include the effective project root, store path, project identity, and
+  running/package versions so a child store, root store, or stale server can be
+  distinguished directly.
+
+### Fixed
+
+- **Worker results converge slots, assignments, runs, and claims together.** A
+  valid `LANE-RESULT.json` is harvested during lazy run reads, while malformed,
+  foreign, superseded, or failed evidence follows a conclusive failure path
+  instead of leaving open execution state behind.
+- **Takeover and reroute teardown is transactional.** Faults before launch,
+  post-commit projection failures, terminal-slot reuse, and stale loop-head
+  repair preserve the authoritative generation and terminalize predecessor
+  state with the correct cancelled/rerouted business outcome.
+- **Dispatch liveness catches silent workers.** Expired offers, dead or lagging
+  runs, assignments, and stranded claims converge through legal FSM paths and
+  remain retryable without manual store edits.
+- **Worker prompts preserve their bytes across platforms.** POSIX launch no
+  longer round-trips prompts through a shell interpolation path, matching the
+  existing Windows-safe stdin transport.
+- **Inline Loop artifacts enforce their real byte contract.** Review and
+  ideation projections cap bodies at 4096 UTF-8 bytes and mark truncation
+  consistently.
+
 ## [1.28.1] — 2026-08-24
 
 The continuation-authority patch: transitions between Loop Engine protocols
