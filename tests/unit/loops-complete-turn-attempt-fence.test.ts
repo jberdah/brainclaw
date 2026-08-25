@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { runLoopCommand } from '../../src/commands/loop.js';
 import { fingerprintPublicKeyPem } from '../../src/core/agent-registry.js';
+import { loadAssignment } from '../../src/core/assignments.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
 import {
@@ -147,9 +148,11 @@ describe('complete_turn AttemptAuthority fence', () => {
       next_workspace_path: workspace1,
       cwd,
     });
+    assert.equal(loadAssignment(epoch0.assignment_id, cwd)?.status, 'cancelled',
+      'takeover terminals a predecessor that never advanced beyond created');
 
     const epoch1 = prepareTurnExecution(input);
-    assert.equal(epoch1.kind, 'won');
+    assert.equal(epoch1.kind, 'won', epoch1.kind === 'denied' ? epoch1.reason : 'epoch 1 won');
     if (epoch1.kind !== 'won') return;
     assert.equal(epoch1.attempt_epoch, 1);
     assert.ok(epoch1.execution_contract_ref);

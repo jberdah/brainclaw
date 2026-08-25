@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import { ensureAgentRunProjection, loadAgentRun, transitionAgentRun } from '../agentruns.js';
-import { convergeAssignmentToTerminal, loadAssignment } from '../assignments.js';
+import { convergeAssignmentToTerminal, loadAssignment, transitionAssignment } from '../assignments.js';
 import { createRuntimeEvent } from '../events.js';
 import { nowISO } from '../ids.js';
 import { prepareAttemptTakeoverV2, type PrepareAttemptTakeoverV2Input } from './attempt-authority.js';
@@ -180,12 +180,23 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
   };
   if (takeover.previous_generation.assignment_id !== takeover.next_generation.assignment_id) {
     try {
-      convergeAssignmentToTerminal(
-        takeover.previous_generation.assignment_id,
-        'cancelled',
-        `fenced by ${input.mode ?? 'takeover'} to epoch ${takeover.next_generation.attempt_epoch}`,
-        input.cwd,
-      );
+      const previousAssignmentId = takeover.previous_generation.assignment_id;
+      const previousAssignment = loadAssignment(previousAssignmentId, input.cwd);
+      const statusReason = `fenced by ${input.mode ?? 'takeover'} to epoch ${takeover.next_generation.attempt_epoch}`;
+      // System convergence intentionally covers only file-worker states
+      // (offered/accepted/started). A takeover can win before launch while the
+      // predecessor is still created, or during retry setup; both states have
+      // a legal direct cancellation edge and must be terminal before the stable
+      // claim is rebound to the successor generation.
+      if (previousAssignment?.status === 'created' || previousAssignment?.status === 'retrying') {
+        transitionAssignment(previousAssignmentId, 'cancelled', {
+          actor: input.actor,
+          syncAgentRun: false,
+          status_reason: statusReason,
+        }, input.cwd);
+      } else {
+        convergeAssignmentToTerminal(previousAssignmentId, 'cancelled', statusReason, input.cwd);
+      }
     } catch { /* immutable close cell already fences the old assignment */ }
   }
   const assignment = loadAssignment(takeover.next_generation.assignment_id, input.cwd);
