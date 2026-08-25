@@ -1053,22 +1053,22 @@ describe('bclaw_coordinate — side effects', () => {
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: 'Should we adopt approach A or approach B?',
-        targetAgents: ['codex'],
+        targetAgents: ['codex', 'opencode', 'github-copilot'],
         agent: 'claude-code',
       });
 
       assert.equal(response.status, 'ok');
       const result = response.result as Record<string, unknown>;
       assert.equal(result.mode, 'multi_agent');
-      assert.deepEqual(result.selected_targets, ['codex']);
-      assert.equal(result.dispatched_critics, 1);
+      assert.deepEqual(result.selected_targets, ['codex', 'opencode', 'github-copilot']);
+      assert.equal(result.dispatched_critics, 3);
       assert.equal(result.current_phase, 'critique');
 
       const loopId = result.loop_id as string;
       const loopsModule = await import('../../src/core/loops/index.js');
       const loop = loopsModule.getLoop(loopId, workspace.dir);
       assert.ok(loop);
-      assert.equal(loop.slots.length, 2, 'champion + 1 critic');
+      assert.equal(loop.slots.length, 4, 'champion + 3 critics required by the gate');
       const champion = loop.slots.find((s) => s.role === 'champion');
       const critic = loop.slots.find((s) => s.role === 'critic');
       assert.ok(champion);
@@ -1083,7 +1083,7 @@ describe('bclaw_coordinate — side effects', () => {
       const phaseAdvances = events.filter((e) => e.kind === 'phase_advanced');
       const turnAssigns = events.filter((e) => e.kind === 'turn_assigned');
       assert.equal(phaseAdvances.length, 1, 'one phase_advanced event for proposal → critique');
-      assert.equal(turnAssigns.length, 1, 'one turn_assigned event for the critic slot');
+      assert.equal(turnAssigns.length, 3, 'one turn_assigned event per critic slot');
 
       // Brief content is delivered as a coordinate message — proves
       // buildIdeationBrief was wired.
@@ -1091,8 +1091,8 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(messageArtifacts.length >= 1, 'at least one coordinate message queued');
     });
 
-    it('truncates oversized task to fit the LoopArtifact 4 KB body cap', async () => {
-      const oversizedTask = 'x'.repeat(8000);
+    it('truncates oversized multibyte task to fit the LoopArtifact 4 KiB byte cap', async () => {
+      const oversizedTask = 'é'.repeat(8000);
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: oversizedTask,
@@ -1105,9 +1105,10 @@ describe('bclaw_coordinate — side effects', () => {
       const proposal = loop?.artifacts.find((a) => a.type === 'proposal');
       assert.ok(proposal);
       assert.ok(
-        (proposal.body ?? '').length <= 4000,
-        `proposal body must be sliced to ≤4000 chars; got ${proposal.body?.length}`,
+        Buffer.byteLength(proposal.body ?? '', 'utf8') <= 4096,
+        `proposal body must be capped to ≤4096 UTF-8 bytes; got ${Buffer.byteLength(proposal.body ?? '', 'utf8')}`,
       );
+      assert.match(proposal.body ?? '', /…\[truncated\]$/);
     });
 
     // pln#626 Phase 2 (Option B) — multi-agent ideate now SPAWNS one worktree-
@@ -1119,14 +1120,14 @@ describe('bclaw_coordinate — side effects', () => {
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: 'Approach A or B — spawn wiring check?',
-        targetAgents: ['codex'],
+        targetAgents: ['codex', 'opencode', 'github-copilot'],
         agent: 'claude-code',
         autoExecute: true,
       });
       assert.equal(response.status, 'ok');
       const result = response.result as Record<string, unknown>;
       assert.equal(result.mode, 'multi_agent');
-      assert.equal(result.dispatched_critics, 1);
+      assert.equal(result.dispatched_critics, 3);
       // Spawn chain wired: a claim + an assignment for the critic.
       assert.ok(response.side_effects.some((e) => e.entity === 'claim'), 'a claim must be created for the critic');
       assert.ok(response.artifacts.some((a) => a.type === 'assignment'), 'an assignment must be created for the critic');
@@ -1151,7 +1152,7 @@ describe('bclaw_coordinate — side effects', () => {
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: 'Bind check — does the critic slot carry its assignment?',
-        targetAgents: ['codex'],
+        targetAgents: ['codex', 'opencode', 'github-copilot'],
         agent: 'claude-code',
         autoExecute: true,
       });

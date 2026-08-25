@@ -37,7 +37,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { loadAgentRun, recordExecutionContractAnomaly, transitionAgentRun, type ListAgentRunsFilter, listAgentRuns } from './agentruns.js';
 import { loadClaim, releaseClaim } from './claims.js';
-import { loadAssignment } from './assignments.js';
+import { convergeAssignmentToTerminal, loadAssignment, transitionAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
 import { readContractAck, readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
@@ -46,7 +46,7 @@ import { findReservationByRunId, evidenceMatchesAttempt, launchGrant, revokeLaun
 import type { TurnReservation } from './loops/attempt-reservation.js';
 import { executionContractForGeneration } from './loops/attempt-authority.js';
 import { readLaunchDecision, resolveTurnGenerationChain } from './loops/attempt-generations.js';
-import { reconcileFailedTurn } from './loops/reconcile-turn.js';
+import { reconcileFailedTurn, reconcileLaneResultForRun } from './loops/reconcile-turn.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -89,6 +89,7 @@ const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
 
 export type ReconcileAction =
   | 'no_op'
+  | 'reconciled_turn'
   | 'health_check_unverified'
   | 'inferred_completed'
   | 'inferred_failed'
@@ -173,6 +174,57 @@ export interface ReconcileOptions {
   limit?: number;
   /** Minimum age for selecting dead-pid sweep candidates; failure still uses staleAfterMs. */
   deadPidSweepCandidateAgeMs?: number;
+}
+
+/** Shared business-result bridge for every lazy AgentRun read path. */
+function reconcileOwnedLaneResultAtRead(
+  run: AgentRun,
+  evidence: ReconcileEvidence,
+  cwd: string | undefined,
+  actor: string,
+): { result?: ReconcileResult; withheld_reason?: string } | undefined {
+  if (!evidence.turn_owned) return undefined;
+  const lane = reconcileLaneResultForRun(run, cwd ?? process.cwd(), actor);
+  if (!lane.found) return undefined;
+  if (!lane.valid || !lane.result?.reconciled) {
+    return { withheld_reason: `lane_result_withheld: ${lane.reason}` };
+  }
+  const after = loadAgentRun(run.id, cwd) ?? run;
+  return { result: {
+      run_id: run.id,
+      action: 'reconciled_turn',
+      reason: `lane_result_reconciled: ${lane.reason}`,
+      evidence,
+      previous_status: run.status,
+      current_status: after.status,
+    },
+  };
+}
+
+/** A malformed/foreign business result withholds success, but it must not mask
+ * independent, conclusive failure evidence forever. */
+function settleWithheldLaneFailure(
+  run: AgentRun,
+  evidence: ReconcileEvidence,
+  actor: string,
+  cwd: string | undefined,
+  reason: string,
+): ReconcileResult {
+  try {
+    transitionAgentRun(run.id, 'failed', { actor, status_reason: reason }, cwd);
+    convergeAssignmentFromRun(run, 'failed', evidence, actor, cwd);
+    cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
+    return { run_id: run.id, action: 'inferred_failed', reason, evidence, previous_status: run.status, current_status: 'failed' };
+  } catch (err) {
+    return {
+      run_id: run.id,
+      action: 'no_op',
+      reason: `failure transition rejected: ${err instanceof Error ? err.message : String(err)}`,
+      evidence,
+      previous_status: run.status,
+      current_status: run.status,
+    };
+  }
 }
 
 // ── Process liveness ───────────────────────────────────────────────────────
@@ -412,6 +464,41 @@ function fsActiveWithin(evidence: ReconcileEvidence, windowMs: number): boolean 
   return evidence.fs_activity_age_ms !== undefined && evidence.fs_activity_age_ms < windowMs;
 }
 
+/** Align a non-turn-owned Assignment with conclusive runtime evidence. */
+function convergeAssignmentFromRun(
+  run: AgentRun,
+  outcome: 'completed' | 'failed',
+  evidence: ReconcileEvidence,
+  actor: string,
+  cwd?: string,
+): boolean {
+  if (findReservationByRunId(run.id, cwd)) return false;
+  const assignment = loadAssignment(run.assignment_id, cwd);
+  if (!assignment || ['completed', 'failed', 'blocked', 'timed_out', 'cancelled', 'expired', 'rerouted'].includes(assignment.status)) {
+    return false;
+  }
+  if (outcome === 'completed') {
+    // A released claim alone is not business proof of successful work.
+    if (!evidence.completed_signal && !evidence.has_post_start_commit && !evidence.assignment_completed) return false;
+    return convergeAssignmentToTerminal(
+      assignment.id,
+      'completed',
+      `agent_run ${run.id} completed from authoritative runtime evidence`,
+      cwd,
+    );
+  }
+  try {
+    transitionAssignment(assignment.id, 'failed', {
+      actor,
+      syncAgentRun: false,
+      status_reason: `agent_run ${run.id} failed from liveness reconciliation`,
+    }, cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * trp#433 — when a run is reconciled to `failed` (silent_death / stalled), release
  * its linked claim so dead runs stop leaving active claims (and their worktrees)
@@ -644,12 +731,55 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
 
   const previous_status = run.status;
   const evidence = collectEvidence(run, cwd, { nowMs: options.nowMs });
+  const actor = options.actor ?? 'reconciler';
+
+  // pln#692 P0 — LANE-RESULT is the worker's business outcome, not merely a
+  // process-liveness hint. Reconcile it before the terminal-run short circuit
+  // and before generic sentinel completion so a replay heals every projection
+  // (slot, assignment, run, claim) and malformed/foreign results cannot leave
+  // only the run marked completed.
+  const laneResult = reconcileOwnedLaneResultAtRead(run, evidence, cwd, actor);
+  if (laneResult?.result) return laneResult.result;
 
   // Never touch terminal runs — they already converged.
   if (TERMINAL_STATUSES.has(run.status)) {
     return {
       run_id: runId, action: 'no_op', reason: `run already terminal (${run.status})`,
       evidence, previous_status, current_status: run.status,
+    };
+  }
+
+  if (laneResult?.withheld_reason) {
+    const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+    const heartbeatStale = options.heartbeatStaleMs ?? DEFAULT_HEARTBEAT_STALE_MS;
+    const conclusiveFailure = evidence.failed_signal
+      ? 'wrapper reported non-zero exit'
+      : evidence.heartbeat_exists
+        && evidence.heartbeat_age_ms !== undefined
+        && evidence.heartbeat_age_ms >= heartbeatStale
+        && !fsActiveWithin(evidence, heartbeatStale)
+        ? `heartbeat stalled for ${Math.round(evidence.heartbeat_age_ms / 1000)}s`
+        : evidence.process_alive === false
+          && evidence.age_ms >= stale
+          && !fsActiveWithin(evidence, heartbeatStale)
+          ? 'silent termination past stale window'
+          : undefined;
+    if (conclusiveFailure) {
+      return settleWithheldLaneFailure(
+        run,
+        evidence,
+        actor,
+        cwd,
+        `invalid_lane_result_with_conclusive_failure: ${conclusiveFailure}; ${laneResult.withheld_reason}`,
+      );
+    }
+    return {
+      run_id: run.id,
+      action: 'health_check_unverified',
+      reason: laneResult.withheld_reason,
+      evidence,
+      previous_status: run.status,
+      current_status: run.status,
     };
   }
 
@@ -685,8 +815,6 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
 
   const grace = options.healthCheckGraceMs ?? DEFAULT_HEALTH_CHECK_GRACE_MS;
   const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
-  const actor = options.actor ?? 'reconciler';
-
   // Below grace window: too early to draw any conclusion. Caller should
   // re-poll later.
   if (evidence.age_ms < grace) {
@@ -703,6 +831,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
         actor,
         status_reason: `inferred=true; evidence: ${describeEvidence(evidence)}`,
       }, cwd);
+      convergeAssignmentFromRun(run, 'completed', evidence, actor, cwd);
       return {
         run_id: runId, action: 'inferred_completed',
         reason: `inferred=true; ${describeEvidence(evidence)}`,
@@ -724,6 +853,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
   const failHere = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(runId, 'failed', { actor, status_reason: reason }, cwd);
+      convergeAssignmentFromRun(run, 'failed', evidence, actor, cwd);
       cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: runId, action: 'inferred_failed', reason, evidence, previous_status, current_status: 'failed' };
     } catch (err) {
@@ -932,6 +1062,9 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   }
 
   const evidence = collectEvidence(run, cwd, { nowMs: options.nowMs });
+  const actor = options.actor ?? 'reconciler';
+  const laneResult = reconcileOwnedLaneResultAtRead(run, evidence, cwd, actor);
+  if (laneResult?.result) return laneResult.result;
   if (run.status !== 'running') {
     return {
       run_id: run.id, action: 'no_op', reason: `run status is ${run.status}, not running`,
@@ -939,13 +1072,45 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
     };
   }
 
-  const actor = options.actor ?? 'reconciler';
   const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
   const heartbeatStale = options.heartbeatStaleMs ?? DEFAULT_HEARTBEAT_STALE_MS;
+
+  if (laneResult?.withheld_reason) {
+    const conclusiveFailure = evidence.failed_signal
+      ? 'wrapper reported non-zero exit'
+      : evidence.heartbeat_exists
+        && evidence.heartbeat_age_ms !== undefined
+        && evidence.heartbeat_age_ms >= heartbeatStale
+        && !fsActiveWithin(evidence, heartbeatStale)
+        ? `heartbeat stalled for ${Math.round(evidence.heartbeat_age_ms / 1000)}s`
+        : evidence.process_alive === false
+          && evidence.age_ms >= stale
+          && !fsActiveWithin(evidence, heartbeatStale)
+          ? 'silent termination past stale window'
+          : undefined;
+    if (conclusiveFailure) {
+      return settleWithheldLaneFailure(
+        run,
+        evidence,
+        actor,
+        cwd,
+        `invalid_lane_result_with_conclusive_failure: ${conclusiveFailure}; ${laneResult.withheld_reason}`,
+      );
+    }
+    return {
+      run_id: run.id,
+      action: 'health_check_unverified',
+      reason: laneResult.withheld_reason,
+      evidence,
+      previous_status: run.status,
+      current_status: run.status,
+    };
+  }
 
   const failRun = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(run.id, 'failed', { actor, status_reason: reason }, cwd);
+      convergeAssignmentFromRun(run, 'failed', evidence, actor, cwd);
       cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: run.id, action: 'inferred_failed', reason, evidence, previous_status: run.status, current_status: 'failed' };
     } catch (err) {
@@ -967,6 +1132,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
         actor,
         status_reason: `inferred=true; evidence: ${describeEvidence(evidence)}`,
       }, cwd);
+      convergeAssignmentFromRun(run, 'completed', evidence, actor, cwd);
       return {
         run_id: run.id, action: 'inferred_completed',
         reason: `inferred=true; ${describeEvidence(evidence)}`,

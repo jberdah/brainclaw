@@ -112,13 +112,13 @@ describe('ideate e2e — search-backed memory makes it into the brief (pln#492 s
     const response = await coordinate(workspace, {
       intent: 'ideate',
       task: 'Should we refactor the dispatcher to extract claim handling into a separate module?',
-      targetAgents: ['codex'],
+      targetAgents: ['codex', 'opencode', 'github-copilot'],
       agent: 'claude-code',
     });
 
     assert.equal(response.status, 'ok');
     const result = response.result as Record<string, unknown>;
-    assert.equal(result.dispatched_critics, 1);
+    assert.equal(result.dispatched_critics, 3);
     assert.equal(result.current_phase, 'critique');
 
     // The brief is delivered to the critic via the inbox. Read it back
@@ -147,13 +147,13 @@ describe('ideate e2e — search-backed memory makes it into the brief (pln#492 s
     const response = await coordinate(workspace, {
       intent: 'ideate',
       task: 'Refactor the dispatcher entirely',
-      targetAgents: ['codex'],
+      targetAgents: ['codex', 'opencode', 'github-copilot'],
       agent: 'claude-code',
     });
 
     assert.equal(response.status, 'ok');
     const result = response.result as Record<string, unknown>;
-    assert.equal(result.dispatched_critics, 1);
+    assert.equal(result.dispatched_critics, 3);
 
     // The assembler reports truncation when over budget; the handler
     // surfaces this as a per-slot warning.

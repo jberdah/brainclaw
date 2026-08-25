@@ -47,6 +47,8 @@ brainclaw code-map status
 ```
 Code Map status
   Store:    present
+  Root:     /workspace/apps/api
+  Path:     /workspace/apps/api/.brainclaw/code
   Freshness: fresh
   Files:    142
   Nodes:    1873
@@ -211,6 +213,14 @@ Code Map to **that child** — the same per-project scoping that powers `bclaw_w
 / `bclaw_switch` — so each project gets its own clean map without manual `--cwd`
 juggling. A submodule that is itself an application (under e.g. `apps/`) is indexed
 like any other directory.
+
+Both CLI and MCP status responses disclose the exact resolved project root and
+Code Map store path. The MCP response additionally includes `active_source`, the
+resolved project identity, the running server version, and the package version
+visible on disk. In a monorepo, compare these fields before concluding that an
+index is missing: a root store and a child store are intentionally distinct. If
+the versions differ, restart the MCP server; if the roots differ, select the
+intended project/session (or pass `cascade=true` at the workspace root).
 
 ### Cascading a multi-project workspace (`--cascade`)
 

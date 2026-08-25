@@ -623,7 +623,18 @@ export function findReservationByAssignmentId(assignmentId: string, cwd?: string
   // coexists with a real LANE-RESULT (dispatch commits before spawn). Filtering here makes
   // the turn-owned discriminator explicit — a `prepared`/`aborted` reservation must never
   // route a lane to reconcileTurn (it has no live launch generation to accept evidence for).
-  return listReservations({ decision: 'committed' }, cwd).find((r) => r.child_ids.assignment_id === assignmentId);
+  return listReservations({ decision: 'committed' }, cwd).find((reservation) => {
+    if (reservation.child_ids.assignment_id === assignmentId) return true;
+    try {
+      const root = cwd ?? reservation.store_root;
+      const initial = readInitialGeneration(root, reservation.turn_id);
+      return initial
+        ? listAttemptGenerations(root, initial).some((generation) => generation.assignment_id === assignmentId)
+        : false;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Run-scoping key for runtime evidence; undefined preserves legacy assignment-scoped paths. */

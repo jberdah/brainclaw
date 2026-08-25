@@ -847,7 +847,7 @@ function authorizeCompleteTurnAttempt(
     slot_role: slot.role,
     turn_id: generation.turn_id,
     assignment_id: generation.assignment_id,
-    claim_id: reservation.claim_id ?? slot.claim_id,
+    claim_id: generation.executor?.claim_id ?? slot.claim_id ?? reservation.claim_id,
     run_id: generation.run_id,
     nonce: generation.launch_nonce,
     attempt_epoch: generation.attempt_epoch,

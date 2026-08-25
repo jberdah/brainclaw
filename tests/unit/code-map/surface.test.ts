@@ -260,6 +260,9 @@ describe('MCP code-map tool handlers', () => {
     const sc = out.response.structuredContent as Record<string, unknown>;
     assert.ok(sc.freshness_badge, 'freshness_badge in structured payload');
     assert.equal((sc.freshness_badge as { status: string }).status, 'fresh');
+    assert.equal((sc.resolution as { project_root: string }).project_root, path.resolve(root));
+    assert.equal((sc.resolution as { store_path: string }).store_path, path.join(path.resolve(root), '.brainclaw', 'code'));
+    assert.equal(typeof (sc.mcp_resolution as { server_version: unknown }).server_version, 'string');
   });
 
   it('bclaw_code_find returns ranked matches + freshness_badge', async () => {

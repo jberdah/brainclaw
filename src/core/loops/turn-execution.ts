@@ -40,6 +40,8 @@ export interface TurnExecutionProjectionInput {
   turn_id: string;
   assignment_id: string;
   run_id: string;
+  /** Generation-scoped claim; defaults to the reservation's generation-zero claim. */
+  claim_id?: string;
   agent: string;
   agent_id?: string;
   dispatcher_agent: string;
@@ -64,21 +66,22 @@ export function ensureTurnExecutionProjections(
   input: TurnExecutionProjectionInput,
   cwd?: string,
 ): void {
-  if (reservation.claim_id === '') throw new Error('attempt reservation has no claim');
+  const claimId = input.claim_id ?? reservation.claim_id;
+  if (claimId === '') throw new Error('attempt reservation has no claim');
   ensureAssignmentProjection({
     id: input.assignment_id,
     short_label: input.assignment_id,
-    claim_id: reservation.claim_id,
+    claim_id: claimId,
     agent: input.agent,
     agent_id: input.agent_id,
     dispatcher_agent: input.dispatcher_agent,
     dispatcher_session_id: input.dispatcher_session_id,
     scope: input.scope,
     description: input.description,
-    // Assignment is the stable logical attempt. Its contract projection stays
-    // generation-zero; each physical AgentRun below carries its own contract.
-    execution_contract_ref: reservation.execution_contract_ref,
-    capability_snapshot: reservation.capability_snapshot,
+    // Assignment is generation-scoped. Generation zero preserves the historic
+    // deterministic id; every takeover projects a fresh assignment and contract.
+    execution_contract_ref: input.execution_contract_ref ?? reservation.execution_contract_ref,
+    capability_snapshot: input.capability_snapshot ?? reservation.capability_snapshot,
     tags: input.assignment_tags ?? ['coordinate', 'loop', 'turn-owned'],
   }, cwd);
   input.on_projection?.('assignment');
@@ -87,7 +90,7 @@ export function ensureTurnExecutionProjections(
     id: input.run_id,
     short_label: input.run_id,
     assignment_id: input.assignment_id,
-    claim_id: reservation.claim_id,
+    claim_id: claimId,
     attempt_index: input.attempt_index ?? 1,
     agent: input.agent,
     agent_id: input.agent_id,
@@ -102,7 +105,7 @@ export function ensureTurnExecutionProjections(
   }, cwd);
   input.on_projection?.('run');
 
-  ensureClaimAssignmentBinding(reservation.claim_id, input.assignment_id, cwd, {
+  ensureClaimAssignmentBinding(claimId, input.assignment_id, cwd, {
     worktreePath: input.worktree_path,
   });
   input.on_projection?.('claim_binding');
@@ -114,7 +117,7 @@ export function ensureTurnExecutionProjections(
     input: input.task,
     turn_id: input.turn_id,
     assignment_id: input.assignment_id,
-    claim_id: reservation.claim_id,
+    claim_id: claimId,
   }, cwd);
   input.on_projection?.('slot_binding');
   input.on_projection?.('before_crossing');
@@ -194,7 +197,11 @@ function authorityDenied(
   reason: string,
 ): PrepareTurnExecutionResult {
   const reservation = getReservation(turnId, input.cwd);
-  const ownsAuthority = reservation?.claim_id === input.claim_id;
+  const chain = resolveTurnGenerationChain(input.cwd, turnId);
+  const authorityClaimId = chain?.status === 'active'
+    ? chain.latest_generation.executor?.claim_id ?? reservation?.claim_id
+    : reservation?.claim_id;
+  const ownsAuthority = authorityClaimId === input.claim_id;
   const crossed = reservation?.launch?.status === 'crossed';
   return {
     kind: 'denied',
@@ -247,13 +254,21 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   }, input.cwd);
   const childIds = deriveChildIds(turnId);
   const existingReservation = getReservation(turnId, input.cwd);
+  const v2 = resolveTurnGenerationChain(input.cwd, turnId);
+  const activeExecutor = v2?.status === 'active' && v2.latest_generation.attempt_epoch > 0
+    ? v2.latest_generation.executor
+    : undefined;
   if (slot.agent !== undefined && slot.agent !== input.agent) {
     return preconditionDenied(`slot ${input.slot_id} belongs to agent '${slot.agent}', not '${input.agent}'`);
   }
   if (slot.agent_id !== undefined && slot.agent_id !== input.agent_id) {
     return preconditionDenied(`slot ${input.slot_id} belongs to agent_id '${slot.agent_id}', not '${input.agent_id ?? 'none'}'`);
   }
-  if (slot.claim_id !== undefined && slot.claim_id !== input.claim_id) {
+  if (
+    slot.claim_id !== undefined
+    && slot.claim_id !== input.claim_id
+    && ['assigned', 'working', 'waiting_input'].includes(slot.status)
+  ) {
     return preconditionDenied(`slot ${input.slot_id} is bound to claim ${slot.claim_id}, not ${input.claim_id}`);
   }
   if (
@@ -321,7 +336,8 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   } catch (error) {
     return preconditionDenied(error instanceof Error ? error.message : String(error));
   }
-  const frozenHarnessBinding = existingReservation?.capability_snapshot?.resolved.harness;
+  const frozenHarnessBinding = activeExecutor?.capability_snapshot.resolved.harness
+    ?? existingReservation?.capability_snapshot?.resolved.harness;
   if (frozenHarnessBinding && JSON.stringify(frozenHarnessBinding) !== JSON.stringify(requestedHarnessBinding)) {
     return preconditionDenied(
       `harness binding differs from immutable capability snapshot: frozen `
@@ -329,7 +345,8 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
       + `${requestedHarnessBinding.adapter_id}@${requestedHarnessBinding.adapter_version}`,
     );
   }
-  const capabilitySnapshot = existingReservation?.capability_snapshot
+  const capabilitySnapshot = activeExecutor?.capability_snapshot
+    ?? existingReservation?.capability_snapshot
     ?? resolveCapabilitySnapshot(input.agent, capabilityRequirement, input.agent_id, requestedHarnessBinding);
   if (!capabilitySnapshot.accepted) {
     const reasons = capabilitySnapshot.reasons.map((reason) => reason.code).join(', ');
@@ -377,7 +394,6 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
   const contractRef = contract
     ? (existingReservation?.execution_contract_ref ?? executionContractRef(contract, capabilitySnapshot))
     : undefined;
-  const v2 = resolveTurnGenerationChain(input.cwd, turnId);
   const activeRollout = resolveActiveAttemptRollout(input.cwd);
   const localHome = readLocalAuthorityHome(input.cwd);
   if (activeRollout && (!localHome || !contractRef)) {
@@ -470,10 +486,16 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
     try {
       const generation = v2.latest_generation;
       const generationContract = executionContractForGeneration(reservation, generation);
+      const executor = generation.executor ?? {
+        agent: reservation.agent,
+        agent_id: reservation.agent_id,
+        claim_id: reservation.claim_id,
+        capability_snapshot: reservation.capability_snapshot!,
+      };
       let accepted: AcceptedExecutionContractRef;
       try {
         accepted = input.accepted_execution_contract
-          ?? attestHarnessContractAcceptance(generationContract.ref, reservation.capability_snapshot!, requestedHarnessBinding);
+          ?? attestHarnessContractAcceptance(generationContract.ref, executor.capability_snapshot, requestedHarnessBinding);
       } catch (error) {
         return preconditionDenied(`worker contract acceptance unavailable before crossing: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -487,8 +509,9 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
         turn_id: turnId,
         assignment_id: generation.assignment_id,
         run_id: generation.run_id,
-        agent: input.agent,
-        agent_id: input.agent_id,
+        claim_id: executor.claim_id,
+        agent: executor.agent,
+        agent_id: executor.agent_id,
         dispatcher_agent: input.dispatcher_agent,
         dispatcher_agent_id: input.dispatcher_agent_id,
         dispatcher_session_id: input.dispatcher_session_id,
@@ -500,7 +523,7 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
         run_tags: [...(input.run_tags ?? ['turn-owned', 'loop']), `attempt-generation:${generation.attempt_epoch}`],
         attempt_index: generation.attempt_epoch + 1,
         execution_contract_ref: generationContract.ref,
-        capability_snapshot: reservation.capability_snapshot,
+        capability_snapshot: executor.capability_snapshot,
         on_projection: input.on_projection,
       }, input.cwd);
       const crossing = crossActiveAttemptGenerationV2(
@@ -523,7 +546,7 @@ export function prepareTurnExecution(input: PrepareTurnExecutionInput): PrepareT
         workspace_path: generation.workspace_path,
         contract_status: 'contracted',
         execution_contract_ref: generationContract.ref,
-        capability_snapshot: reservation.capability_snapshot,
+        capability_snapshot: executor.capability_snapshot,
       };
     } catch (error) {
       return authorityDenied(input, turnId, error instanceof Error ? error.message : String(error));

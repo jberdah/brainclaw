@@ -58,6 +58,7 @@ import {
   type AttemptResultEvidenceCell,
   type CloseDecisionCell,
   type GenerationFence,
+  type GenerationExecutor,
 } from './attempt-generations.js';
 import {
   assertAttemptAuthorityV2Writable,
@@ -329,6 +330,7 @@ export function executionContractForGeneration(
     }
     return { contract, ref };
   }
+  const snapshot = generation.executor?.capability_snapshot ?? reservation.capability_snapshot;
   const contract = ExecutionContractSchema.parse({
     ...reservation.execution_contract,
     identity: {
@@ -344,7 +346,7 @@ export function executionContractForGeneration(
       isolation: 'worktree',
     },
   });
-  const ref = executionContractRef(contract, reservation.capability_snapshot);
+  const ref = executionContractRef(contract, snapshot);
   if (ref.hash !== generation.contract_hash) {
     throw new AttemptGenerationError(
       'fenced',
@@ -396,6 +398,12 @@ export function bootstrapAttemptAuthorityV2(input: BootstrapAttemptAuthorityV2In
       workspace_path: workspacePath,
       workspace_digest: attemptWorkspaceDigest(workspacePath, reservation.turn_id, 0),
       launch_nonce: grant.token,
+      executor: {
+        agent: reservation.agent,
+        agent_id: reservation.agent_id,
+        claim_id: reservation.claim_id,
+        capability_snapshot: reservation.capability_snapshot!,
+      },
     });
   if (
     initial.assignment_id !== reservation.child_ids.assignment_id
@@ -436,6 +444,8 @@ export interface PrepareAttemptTakeoverV2Input {
   liveness_evidence: string;
   external_effect_policy: AttemptExternalEffectPolicy;
   next_workspace_path: string;
+  /** Optional replacement executor. Required when a reroute changes agent/claim ownership. */
+  next_executor?: GenerationExecutor;
   mode?: 'takeover' | 'retry';
   cwd: string;
 }
@@ -489,6 +499,7 @@ export function prepareAttemptTakeoverV2(input: PrepareAttemptTakeoverV2Input): 
       && close.cause === requestedCause
       && canonicalWorkspacePath(close.next_generation.workspace_path) === canonicalWorkspacePath(input.next_workspace_path)
       && JSON.stringify(close.next_generation.authority_home) === JSON.stringify(input.authority_home)
+      && (!input.next_executor || JSON.stringify(close.next_generation.executor) === JSON.stringify(input.next_executor))
     ) {
       const generationContract = executionContractForGeneration(reservation, close.next_generation);
       return {
@@ -534,9 +545,10 @@ export function prepareAttemptTakeoverV2(input: PrepareAttemptTakeoverV2Input): 
     contract_hash: '0'.repeat(64),
     workspace_path: nextWorkspacePath,
     workspace_digest: attemptWorkspaceDigest(nextWorkspacePath, input.turn_id, nextEpoch),
+    executor: input.next_executor,
   });
   const baseContract = reservation.execution_contract;
-  const snapshot = reservation.capability_snapshot;
+  const snapshot = input.next_executor?.capability_snapshot ?? reservation.capability_snapshot;
   if (!baseContract || !snapshot) {
     throw new AttemptGenerationError('invalid_transition', `turn ${input.turn_id} lacks a contracted capability snapshot`);
   }
@@ -560,6 +572,7 @@ export function prepareAttemptTakeoverV2(input: PrepareAttemptTakeoverV2Input): 
     contract_hash: nextRef.hash,
     workspace_path: nextWorkspacePath,
     workspace_digest: attemptWorkspaceDigest(nextWorkspacePath, input.turn_id, nextEpoch),
+    executor: input.next_executor,
     launch_nonce: provisional.launch_nonce,
     created_at: provisional.created_at,
   });
@@ -577,7 +590,14 @@ export function prepareAttemptTakeoverV2(input: PrepareAttemptTakeoverV2Input): 
   if (generationDigest(incumbent.next_generation) !== generationDigest(next)) {
     throw new AttemptGenerationError('fenced', `a different successor already won generation ${current.attempt_epoch}`);
   }
-  rebuildAttemptGenerationHead(input.cwd, current);
+  // The close cell above is the immutable authority boundary. `head.json` is
+  // only a rebuildable read cache, so a projection failure after a winning
+  // close must never escape as a pre-commit takeover failure: callers could
+  // otherwise roll back claims while the successor generation already owns
+  // the turn. Readers repair the cache from immutable cells on replay.
+  try {
+    rebuildAttemptGenerationHead(input.cwd, current);
+  } catch { /* immutable close(epoch) remains authoritative */ }
   return {
     won: published.won,
     rollout,

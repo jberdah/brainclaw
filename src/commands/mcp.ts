@@ -65,7 +65,6 @@ import {
 // full historical surface below so external importers are unaffected.
 // ---------------------------------------------------------------------------
 import {
-  SCHEMA_VERSION,
   MCP_PROTOCOL_VERSIONS,
   MCP_SERVER_NOT_INITIALIZED,
   toolResponse,
@@ -423,7 +422,10 @@ export function createInitializeResult(
   const uninitialized = options?.uninitialized === true;
   return {
     protocolVersion,
-    serverInfo: { name: 'brainclaw', version: SCHEMA_VERSION },
+    // MCP serverInfo.version is the running PRODUCT version. SCHEMA_VERSION
+    // belongs to tool envelopes and made stale processes impossible to
+    // distinguish during the DGX 1.28.0→1.28.1 dogfood.
+    serverInfo: { name: 'brainclaw', version: getInstalledBrainclawVersion() },
     // listChanged is only advertised in setup mode, where the catalog flips
     // to the full set once the project memory is initialized.
     capabilities: { tools: { listChanged: uninitialized } },
@@ -1400,10 +1402,21 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const be = new JsonlBackend();
       if (name === 'bclaw_code_status') {
         const status = await be.status({ cwd, cascade: args.cascade === true });
+        const diskVersion = readDiskBrainclawVersion();
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map: ${status.store_exists ? 'store present' : 'no store'} — freshness=${status.freshness_badge.freshness}` }],
-            structuredContent: { ...status, freshness_badge: status.freshness_badge },
+            structuredContent: {
+              ...status,
+              freshness_badge: status.freshness_badge,
+              mcp_resolution: {
+                active_source: scopeInfo.active_source,
+                resolved_project: scopeInfo.resolved_project,
+                server_version: getInstalledBrainclawVersion(),
+                disk_version: diskVersion,
+                restart_required: diskVersion !== '0.0.0' && diskVersion !== getInstalledBrainclawVersion(),
+              },
+            },
           }),
         };
       }
@@ -1814,10 +1827,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               const full = candidateIds
                 .map((id) => loadAssignment(id, targetCwd))
                 .filter((a): a is NonNullable<typeof a> => a !== undefined);
-              sweepAssignmentsAtReadPath(full, targetCwd, {
+              const sweep = sweepAssignmentsAtReadPath(full, targetCwd, {
                 actor: 'bclaw_work-readpath',
                 policy,
               });
+              // The context snapshot was built before the lazy sweep. Reflect
+              // the same-pass mutations so bclaw_work never serves a fossil as
+              // active once it has just expired/timed it out on disk.
+              const parked = new Set([
+                ...sweep.expired.map((item) => item.assignment_id),
+                ...sweep.timed_out.map((item) => item.assignment_id),
+              ]);
+              const advanced = new Map(sweep.implicitly_advanced.map((item) => [item.assignment_id, item.to]));
+              contextResult.open_work!.active_assignments = openAssignments
+                .filter((assignment) => !parked.has(assignment.id))
+                .map((assignment) => {
+                  const status = advanced.get(assignment.id);
+                  return status ? { ...assignment, status } : assignment;
+                });
             }
             const registry = loadServeRegistry(targetCwd);
             const aged = ageStaleWarnings(contextResult.stale_warnings ?? [], targetCwd, { policy, registry });

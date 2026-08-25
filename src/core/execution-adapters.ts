@@ -329,13 +329,20 @@ export function withCodexWorkspaceRoot(
   args.splice(insertAt, 0, '--cd', worktreePath);
   const quote = (value: string): string => isWin32
     ? `"${value.replace(/"/g, '""')}"`
-    : `'${value.replace(/'/g, `'\\''`)}'`;
-  const flags = `--cd ${quote(worktreePath)}`;
-  const prefix = invoke.executable;
-  const suffix = invoke.bashCommand.startsWith(`${prefix} `)
-    ? invoke.bashCommand.slice(prefix.length + 1)
-    : invoke.bashCommand;
-  return { ...invoke, args, bashCommand: `${prefix} ${flags} ${suffix}` };
+    : `"${value.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/"/g, '\\"')}"`;
+  // Re-render from structured argv. bashCommand also contains the model-authored
+  // prompt, so searching it for "| codex" can mistake prompt data for the real
+  // executable boundary and splice --cd inside quoted content.
+  const command = [invoke.executable, ...args.map(quote)].join(' ');
+  const prompt = invoke.promptText ?? '';
+  const escapedPrompt = prompt.replace(/'/g, "'\\''");
+  let bashCommand = command;
+  if (!isWin32 && invoke.promptDelivery === 'stdin_pipe') {
+    bashCommand = `printf '%s' '${escapedPrompt}' | ${command}`;
+  } else if (!isWin32 && invoke.promptDelivery === 'temp_file' && invoke.tempFilePath) {
+    bashCommand = `printf '%s' '${escapedPrompt}' > ${quote(invoke.tempFilePath)} && ${command}`;
+  }
+  return { ...invoke, args, bashCommand };
 }
 
 export class CliExecutionAdapter implements ExecutionAdapter {

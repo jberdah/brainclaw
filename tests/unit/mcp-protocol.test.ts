@@ -15,6 +15,7 @@ import {
   parseMcpLine,
   type McpToolExecutionPayload,
 } from '../../src/commands/mcp.js';
+import { getInstalledBrainclawVersion } from '../../src/core/brainclaw-version.js';
 import { setAgentTrustLevel } from '../../src/core/agent-registry.js';
 import { UNINITIALIZED_PUBLISHED_TOOLS, UNINITIALIZED_TOOL_NAMES } from '../../src/commands/mcp.js';
 import fs from 'node:fs';
@@ -45,7 +46,7 @@ describe('commands/mcp protocol core', () => {
   it('creates initialize payloads for supported protocol versions', () => {
     assert.deepEqual(createInitializeResult('2025-11-25'), {
       protocolVersion: '2025-11-25',
-      serverInfo: { name: 'brainclaw', version: SCHEMA_VERSION },
+      serverInfo: { name: 'brainclaw', version: getInstalledBrainclawVersion() },
       capabilities: { tools: { listChanged: false } },
     });
     assert.equal(createInitializeResult('2024-11-05').protocolVersion, '2024-11-05');

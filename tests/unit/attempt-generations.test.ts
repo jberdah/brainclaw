@@ -159,7 +159,7 @@ describe('AttemptAuthority v2 immutable generation cells', () => {
     }
   });
 
-  it('keeps turn and assignment stable while run, nonce and workspace stay unique across 128 generations', () => {
+  it('keeps the turn stable while assignment, run, nonce and workspace stay unique across 128 generations', () => {
     const cwd = workspace();
     const first = initial('tat_many_generations');
     let current = first;
@@ -194,7 +194,7 @@ describe('AttemptAuthority v2 immutable generation cells', () => {
       contracts.add(current.contract_hash);
     }
 
-    assert.equal(assignments.size, 1);
+    assert.equal(assignments.size, 128);
     assert.equal(turns.size, 1);
     assert.equal(runs.size, 128);
     assert.equal(nonces.size, 128);

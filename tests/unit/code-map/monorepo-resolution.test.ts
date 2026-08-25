@@ -6,6 +6,7 @@ import path from 'node:path';
 import { JsonlBackend } from '../../../src/core/code-map/backend.js';
 import { resolveEffectiveCwd } from '../../../src/core/store-resolution.js';
 import { defaultConfig, saveConfig } from '../../../src/core/config.js';
+import { executeMcpToolCall } from '../../../src/commands/mcp.js';
 
 /**
  * Coupling test (1.10.0 merge): Code Map resolves its project via
@@ -60,6 +61,15 @@ describe('code-map ↔ monorepo resolution (F1 coupling)', () => {
         childFind.matches.some((m) => m.name === 'uniqueChildWidget'),
         'find via the resolved child cwd must surface the child symbol',
       );
+
+      // The real MCP status surface must disclose the same child resolution.
+      // This turns a future "store_exists:false" discrepancy into evidence
+      // (active selector + exact root/store paths), not an ambiguous symptom.
+      const statusOutcome = await executeMcpToolCall({ name: 'bclaw_code_status', args: {}, cwd: child });
+      const status = statusOutcome.response.structuredContent as Record<string, unknown>;
+      assert.equal(status.store_exists, true);
+      assert.equal((status.resolution as { project_root: string }).project_root, path.resolve(child));
+      assert.equal((status.mcp_resolution as { active_source: string }).active_source, 'cwd_child');
 
       // The monorepo ROOT's OWN store has no code map → single-store (traversal:'project')
       // must NOT surface the child symbol. (This is the F1 contract — the anchored child

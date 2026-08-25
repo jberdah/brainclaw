@@ -738,7 +738,8 @@ export function runDispatchHealthCheck(options: DoctorOptions = {}): DispatchHea
       current_status: result.current_status,
     };
     switch (result.action) {
-      case 'inferred_completed': inferred_completed.push(summary); break;
+      case 'inferred_completed':
+      case 'reconciled_turn': inferred_completed.push(summary); break;
       case 'health_check_unverified': health_check_unverified.push(summary); break;
       case 'inferred_failed': inferred_failed.push(summary); break;
       case 'inferred_cancelled': inferred_cancelled.push(summary); break;

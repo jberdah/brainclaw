@@ -21,6 +21,7 @@ import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } f
 import { defaultMemoryReader } from './memory-reader.js';
 import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
 import { loadConfig } from '../config.js';
+import { codeMapDir } from './paths.js';
 import type { FreshnessBadge, FreshnessStatus, Manifest, ParseStatus, Span } from './types.js';
 
 // --- Input / output types (spec §8, §9) ---
@@ -48,6 +49,11 @@ export interface CodeStatusChild {
 
 export interface CodeStatus {
   store_exists: boolean;
+  /** Exact paths used for this answer; lets operators compare CLI and MCP. */
+  resolution: {
+    project_root: string;
+    store_path: string;
+  };
   freshness_badge: FreshnessBadge;
   stats: {
     files_indexed: number;
@@ -348,10 +354,16 @@ export class JsonlBackend implements CodeQueryBackend {
   }
 
   async status(input: CodeStatusInput): Promise<CodeStatus> {
+    const projectRoot = path.resolve(input.cwd ?? process.cwd());
+    const resolution = {
+      project_root: projectRoot,
+      store_path: codeMapDir(projectRoot, input.preferredDirName),
+    };
     const manifest = readManifest(input.cwd, input.preferredDirName);
     const result: CodeStatus = manifest
       ? {
         store_exists: true,
+        resolution,
         freshness_badge: this.withHeadDrift(
           badge(manifest.freshness.status, {
             stale_file_count: manifest.freshness.stale_file_count,
@@ -368,6 +380,7 @@ export class JsonlBackend implements CodeQueryBackend {
       }
       : {
         store_exists: storeExists(input.cwd, input.preferredDirName),
+        resolution,
         freshness_badge: badge('missing_index'),
         stats: null,
       };

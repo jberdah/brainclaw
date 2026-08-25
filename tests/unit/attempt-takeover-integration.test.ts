@@ -16,8 +16,13 @@ import { fingerprintPublicKeyPem } from '../../src/core/agent-registry.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
 import { handleBclawAssignmentUpdate, handleBclawReleaseClaim, type McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import { removeEntity, transitionEntity } from '../../src/core/entity-operations.js';
-import { takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
-import { fenceForGeneration, readLaunchDecision, resolveTurnGenerationChain } from '../../src/core/loops/attempt-generations.js';
+import { AttemptTakeoverCommittedError, takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
+import {
+  attemptGenerationHeadPath,
+  fenceForGeneration,
+  readLaunchDecision,
+  resolveTurnGenerationChain,
+} from '../../src/core/loops/attempt-generations.js';
 import { settleActiveAttemptGenerationV2 } from '../../src/core/loops/attempt-authority.js';
 import {
   activateAttemptAuthorityV2,
@@ -27,6 +32,7 @@ import {
 } from '../../src/core/loops/attempt-rollout.js';
 import { reconcileTurn } from '../../src/core/loops/reconcile-turn.js';
 import { getLoop, openLoop } from '../../src/core/loops/store.js';
+import { evaluateGateCondition } from '../../src/core/loops/gate-policy.js';
 import { prepareTurnExecution, type PrepareTurnExecutionInput } from '../../src/core/loops/turn-execution.js';
 import { ensureRuntimeDirs, getRuntimeSignalPath } from '../../src/core/runtime-signals.js';
 import type { LaneResult } from '../../src/core/schema.js';
@@ -68,7 +74,7 @@ describe('AttemptAuthority v2 takeover integration', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('keeps Assignment stable, fences epoch 0, crosses epoch 1 once and settles only full-fence evidence', async () => {
+  it('rotates Assignment/executor, fences epoch 0, crosses epoch 1 once and settles only full-fence evidence', async () => {
     const home = ensureLocalAuthorityHome(cwd);
     const keys = crypto.generateKeyPairSync('ed25519');
     const publicKeyPem = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -155,6 +161,15 @@ describe('AttemptAuthority v2 takeover integration', () => {
     assert.ok(!(await handleBclawAssignmentUpdate(generationUpdate(first, 'started'), updateCtx)).response.isError);
     assert.equal(loadAssignment(first.assignment_id, cwd)?.status, 'started');
     assert.equal(loadAgentRun(first.run_id, cwd)?.status, 'running');
+    saveClaim({
+      schema_version: 2,
+      id: 'clm_takeover_successor',
+      agent: 'codex',
+      scope,
+      description: 'takeover successor',
+      created_at: new Date().toISOString(),
+      status: 'active',
+    }, cwd);
 
     const takeoverInput = {
       loop_id: loop.id,
@@ -168,10 +183,41 @@ describe('AttemptAuthority v2 takeover integration', () => {
       liveness_evidence: 'no heartbeat for 30m; wrapper exited',
       external_effect_policy: 'idempotent' as const,
       next_workspace_path: workspace1,
+      next_executor: {
+        agent: 'codex',
+        agent_id: 'agt_codex',
+        claim_id: 'clm_takeover_successor',
+        capability_snapshot: first.capability_snapshot!,
+      },
       cwd,
     };
+    const headPath = attemptGenerationHeadPath(cwd, first.turn_id);
+    fs.rmSync(headPath, { force: true });
+    fs.mkdirSync(headPath);
+    assert.throws(
+      () => takeoverLoopAttempt({
+        ...takeoverInput,
+        on_stage: (stage) => {
+          if (stage === 'loop_committed') throw new Error('fault after authoritative takeover commit');
+        },
+      }),
+      (error: unknown) => error instanceof AttemptTakeoverCommittedError
+        && error.assignment_id !== first.assignment_id
+        && error.attempt_epoch === 1,
+      'a post-commit projection fault is explicitly non-rollbackable',
+    );
+    fs.rmSync(headPath, { recursive: true, force: true });
+    const committedChain = resolveTurnGenerationChain(cwd, first.turn_id);
+    assert.equal(committedChain?.latest_generation.attempt_epoch, 1, 'authority successor remains committed');
+    assert.equal(
+      getLoop(loop.id, cwd)?.slots[0]?.assignment_id,
+      committedChain?.latest_generation.assignment_id,
+      'loop slot was committed to the same successor before the injected fault',
+    );
+    assert.equal(loadAgentRun(committedChain!.latest_generation.run_id, cwd), undefined, 'run projection is the repairable missing side effect');
+
     const taken = takeoverLoopAttempt(takeoverInput);
-    assert.equal(taken.assignment_id, first.assignment_id, 'logical Assignment remains stable');
+    assert.notEqual(taken.assignment_id, first.assignment_id, 'each generation owns a distinct Assignment');
     assert.notEqual(taken.run_id, first.run_id, 'physical AgentRun changes');
     assert.equal(taken.attempt_epoch, 1);
     assert.equal(loadAgentRun(first.run_id, cwd)?.status, 'interrupted');
@@ -202,17 +248,22 @@ describe('AttemptAuthority v2 takeover integration', () => {
     assert.equal(stale.reconciled, false);
     assert.match(stale.reason, /does not match|fence|generation/i);
 
-    const second = prepareTurnExecution(input);
-    assert.equal(second.kind, 'won');
+    const second = prepareTurnExecution({
+      ...input,
+      claim_id: 'clm_takeover_successor',
+      worktree_path: workspace1,
+    });
+    assert.equal(second.kind, 'won', second.kind === 'denied' ? second.reason : 'won');
     if (second.kind !== 'won') return;
     assert.equal(second.attempt_epoch, 1);
-    assert.equal(second.assignment_id, first.assignment_id);
+    assert.equal(second.assignment_id, taken.assignment_id);
     assert.equal(second.run_id, taken.run_id);
     assert.equal(prepareTurnExecution(input).kind, 'denied', 'launch(epoch 1) has one winner');
+    transitionAssignment(second.assignment_id, 'offered', { actor: 'coord' }, cwd);
 
     const assignmentBeforeStaleUpdate = JSON.stringify(loadAssignment(second.assignment_id, cwd));
     const runBeforeStaleUpdate = JSON.stringify(loadAgentRun(second.run_id, cwd));
-    const claimBeforeStaleUpdate = JSON.stringify(loadClaim('clm_takeover', cwd));
+    const claimBeforeStaleUpdate = JSON.stringify(loadClaim('clm_takeover_successor', cwd));
     const staleUpdate = await handleBclawAssignmentUpdate({
       name: 'bclaw_assignment_update',
       cwd,
@@ -230,13 +281,13 @@ describe('AttemptAuthority v2 takeover integration', () => {
     assert.equal(staleUpdate.response.isError, true);
     assert.equal(JSON.stringify(loadAssignment(second.assignment_id, cwd)), assignmentBeforeStaleUpdate);
     assert.equal(JSON.stringify(loadAgentRun(second.run_id, cwd)), runBeforeStaleUpdate);
-    assert.equal(JSON.stringify(loadClaim('clm_takeover', cwd)), claimBeforeStaleUpdate);
+    assert.equal(JSON.stringify(loadClaim('clm_takeover_successor', cwd)), claimBeforeStaleUpdate);
     assert.throws(
-      () => transitionEntity('assignment', second.assignment_id, 'completed', cwd),
-      /AttemptAuthority v2/,
+      () => transitionEntity('assignment', first.assignment_id, 'completed', cwd),
+      /Invalid transition|AttemptAuthority v2/,
     );
     assert.throws(
-      () => removeEntity('assignment', second.assignment_id, cwd),
+      () => removeEntity('assignment', first.assignment_id, cwd),
       /AttemptAuthority v2/,
     );
     const releaseCtx = {
@@ -260,6 +311,7 @@ describe('AttemptAuthority v2 takeover integration', () => {
     }, releaseCtx);
     assert.equal(staleRelease.response.isError, true);
     assert.equal(loadClaim('clm_takeover', cwd).status, 'active');
+    assert.equal(loadClaim('clm_takeover_successor', cwd).status, 'active');
     const staleTrustedReleaseCtx = {
       blockCrossProjectExecution: () => undefined,
       resolveMutationIdentity: () => ({
@@ -282,6 +334,7 @@ describe('AttemptAuthority v2 takeover integration', () => {
     }, staleTrustedReleaseCtx);
     assert.equal(staleTrustedOverride.response.isError, true);
     assert.equal(loadClaim('clm_takeover', cwd).status, 'active');
+    assert.equal(loadClaim('clm_takeover_successor', cwd).status, 'active');
     assert.throws(
       () => transitionEntity('claim', 'clm_takeover', 'released', cwd, undefined, {
         override: true,
@@ -301,7 +354,7 @@ describe('AttemptAuthority v2 takeover integration', () => {
     const prematureCompletion = await handleBclawAssignmentUpdate(generationUpdate(second, 'completed'), updateCtx);
     assert.equal(prematureCompletion.response.isError, true);
     assert.equal(loadAssignment(second.assignment_id, cwd)?.status, 'started');
-    assert.equal(loadClaim('clm_takeover', cwd).status, 'active');
+    assert.equal(loadClaim('clm_takeover_successor', cwd).status, 'active');
 
     ensureRuntimeDirs(cwd);
     fs.writeFileSync(getRuntimeSignalPath(cwd, second.assignment_id, 'ack', second.run_id), JSON.stringify({
@@ -355,7 +408,7 @@ describe('AttemptAuthority v2 takeover integration', () => {
     assert.equal(resolveTurnGenerationChain(cwd, second.turn_id)?.status, 'settled');
     assert.equal(loadAgentRun(second.run_id, cwd)?.status, 'completed');
     const finalLoop = getLoop(loop.id, cwd);
-    assert.equal(finalLoop?.status, 'completed', 'sealed approve evidence wins over divergent replay');
+    assert.equal(finalLoop?.status, 'completed', `sealed approve evidence wins over divergent replay: ${JSON.stringify({ settled, gate: finalLoop && evaluateGateCondition(finalLoop, finalLoop.stop_condition, cwd) })}`);
     assert.match(JSON.stringify(finalLoop?.artifacts), /accepted/);
     assert.doesNotMatch(JSON.stringify(finalLoop?.artifacts), /different narrative after settlement crash/);
 

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { loadAgentRun } from '../../src/core/agentruns.js';
 import { fingerprintPublicKeyPem, saveAgentIdentity } from '../../src/core/agent-registry.js';
 import { convergeAssignmentToTerminal, loadAssignment } from '../../src/core/assignments.js';
-import { loadClaim } from '../../src/core/claims.js';
+import { loadClaim, releaseClaim } from '../../src/core/claims.js';
 import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { dispatchLoopTurn, type DispatchLoopTurnResult } from '../../src/core/loop-turn-dispatch.js';
 import {
@@ -246,6 +246,87 @@ describe('generic Loop Engine worker dispatch', () => {
     assert.equal(listReservations({}, cwd).length, reservationsBeforeReplay);
   });
 
+  it('rebinds a terminal slot to a fresh claim on a later iteration', async () => {
+    const cwd = project();
+    roots.push(cwd);
+    const slotId = 'lsl_iterativecritic';
+    const loop = openLoop({
+      kind: 'ideation', title: 'iterative critic', created_by: 'agt_coord',
+      phases: [{ name: 'critique' }, { name: 'revision' }],
+      slots: [{ slot_id: slotId, role: 'critic', agent: 'codex' }],
+      stop_condition: { kind: 'max_iterations', n: 3 },
+    }, cwd);
+    const dispatch = (task: string) => handleBclawLoop({
+      cwd,
+      defaultActor: 'coord',
+      args: {
+        intent: 'turn', loop_id: loop.id, slot_id: slotId,
+        input: task, dispatch: true, auto_execute: false,
+        agent: 'coord', agentId: 'agt_coord',
+      },
+    });
+
+    const firstHandled = await dispatch('critique iteration zero');
+    assert.equal(firstHandled.response.status, 'ok');
+    const first = (firstHandled.response.result as { dispatch: DispatchLoopTurnResult }).dispatch;
+    assert.ok(first.assignment_id && first.claim_id && first.turn_id);
+    assert.equal(convergeAssignmentToTerminal(first.assignment_id, 'completed', 'first critique settled', cwd), true);
+    complete_turn({
+      id: loop.id,
+      slot_id: slotId,
+      outcome: 'done',
+      artifact: { phase: 'critique', type: 'critique', body: 'iteration zero critique' },
+      actor: 'coord',
+    }, cwd);
+    assert.equal(releaseClaim(first.claim_id, cwd, { agent: 'codex' }).status, 'released');
+    advance({ id: loop.id, to_phase: 'revision', force: true, actor: 'coord' }, cwd);
+    const cycled = advance({ id: loop.id, to_phase: 'critique', force: true, actor: 'coord' }, cwd);
+    assert.equal(cycled.loop.iteration_count, 1);
+    assert.equal(cycled.loop.slots.find((slot) => slot.slot_id === slotId)?.status, 'done');
+
+    const secondHandled = await dispatch('critique iteration one');
+    assert.equal(secondHandled.response.status, 'ok', JSON.stringify(secondHandled.response));
+    const second = (secondHandled.response.result as { dispatch: DispatchLoopTurnResult }).dispatch;
+    assert.equal(second.error, undefined);
+    assert.ok(second.claim_id && second.assignment_id && second.turn_id);
+    assert.notEqual(second.claim_id, first.claim_id);
+    assert.notEqual(second.assignment_id, first.assignment_id);
+    assert.notEqual(second.turn_id, first.turn_id);
+    assert.equal(second.turn_id, deriveTurnId(loop.id, slotId, 1));
+    const reboundSlot = getLoop(loop.id, cwd)!.slots.find((slot) => slot.slot_id === slotId)!;
+    assert.equal(reboundSlot.claim_id, second.claim_id);
+    assert.equal(reboundSlot.assignment_id, second.assignment_id);
+    assert.equal(reboundSlot.current_turn_id, second.turn_id);
+  });
+
+  it('releases a fresh claim and removes its worktree when turn admission is denied', async () => {
+    const cwd = project();
+    roots.push(cwd);
+    const loop = openLoop({
+      kind: 'ideation', title: 'denied turn cleanup', created_by: 'agt_coord',
+      phases: [{ name: 'critique' }],
+      slots: [{
+        slot_id: 'lsl_stalebinding', role: 'critic', agent: 'codex',
+        status: 'assigned', claim_id: 'clm_stale_binding', current_turn_id: 'tat_stale_binding',
+      }],
+      stop_condition: { kind: 'max_iterations', n: 1 },
+    }, cwd);
+
+    const denied = await dispatchLoopTurn({
+      loop_id: loop.id,
+      slot_id: 'lsl_stalebinding',
+      task: 'must fail before authority',
+      dispatcher_agent: 'coord',
+      dispatcher_agent_id: 'agt_coord',
+      auto_execute: false,
+      cwd,
+    });
+    assert.match(denied.error ?? '', /bound to claim clm_stale_binding/);
+    assert.ok(denied.claim_id && denied.worktree_path);
+    assert.equal(loadClaim(denied.claim_id, cwd).status, 'released');
+    assert.equal(fs.existsSync(denied.worktree_path), false, 'fresh denied-claim worktree is not leaked');
+  });
+
   it('selects a compatible worker deterministically for an unbound slot', async () => {
     const cwd = project();
     roots.push(cwd);
@@ -276,7 +357,7 @@ describe('generic Loop Engine worker dispatch', () => {
     assert.equal(loadAgentRun(dispatched.run_id!, cwd)?.agent, 'claude-code');
   });
 
-  it('rebinds the stable claim to the successor workspace on takeover redispatch', async () => {
+  it('rebinds the stable claim to the successor generation on takeover redispatch', async () => {
     const cwd = project();
     roots.push(cwd);
     const priorIdentityRoot = process.env.BRAINCLAW_AUTHORITY_IDENTITY_ROOT;
@@ -327,7 +408,8 @@ describe('generic Loop Engine worker dispatch', () => {
       const second = await dispatchLoopTurn(dispatchInput);
       assert.equal(second.error, undefined);
       assert.equal(second.claim_id, first.claim_id, 'logical claim remains stable');
-      assert.equal(second.assignment_id, first.assignment_id, 'logical assignment remains stable');
+      assert.notEqual(second.assignment_id, first.assignment_id, 'assignments remain generation-scoped');
+      assert.equal(loadAssignment(first.assignment_id!, cwd)?.status, 'cancelled', 'the fenced generation is terminal before rebinding');
       assert.equal(second.worktree_path, successor, 'worker launches in the successor generation workspace');
       const rebound = loadClaim(first.claim_id!, cwd);
       assert.equal(rebound.worktree_path, successor, 'claim liveness and GC follow the active physical generation');
