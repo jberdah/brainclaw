@@ -19,6 +19,8 @@ export interface TakeoverLoopAttemptInput extends PrepareAttemptTakeoverV2Input 
   slot_id: string;
   /** Authenticated coordinator id; actor remains the human-readable audit name. */
   actor_id?: string;
+  /** Business projection for the fenced predecessor; authority still records a takeover/retry cell. */
+  predecessor_assignment_terminal?: 'cancelled' | 'rerouted';
   /** Fault-injection/telemetry seam around the authority/projection boundary. */
   on_stage?: (stage: 'authority_committed' | 'loop_committed' | 'run_projected') => void;
 }
@@ -182,13 +184,20 @@ export function takeoverLoopAttempt(input: TakeoverLoopAttemptInput): TakeoverLo
     try {
       const previousAssignmentId = takeover.previous_generation.assignment_id;
       const previousAssignment = loadAssignment(previousAssignmentId, input.cwd);
+      const predecessorTerminal = input.predecessor_assignment_terminal ?? 'cancelled';
       const statusReason = `fenced by ${input.mode ?? 'takeover'} to epoch ${takeover.next_generation.attempt_epoch}`;
       // System convergence intentionally covers only file-worker states
       // (offered/accepted/started). A takeover can win before launch while the
       // predecessor is still created, or during retry setup; both states have
       // a legal direct cancellation edge and must be terminal before the stable
       // claim is rebound to the successor generation.
-      if (previousAssignment?.status === 'created' || previousAssignment?.status === 'retrying') {
+      if (predecessorTerminal === 'rerouted' && previousAssignment && previousAssignment.status !== 'rerouted') {
+        transitionAssignment(previousAssignmentId, 'rerouted', {
+          actor: input.actor,
+          syncAgentRun: false,
+          status_reason: statusReason,
+        }, input.cwd);
+      } else if (previousAssignment?.status === 'created' || previousAssignment?.status === 'retrying') {
         transitionAssignment(previousAssignmentId, 'cancelled', {
           actor: input.actor,
           syncAgentRun: false,

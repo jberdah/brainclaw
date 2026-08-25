@@ -1644,6 +1644,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             cause: `coordinate reroute from claim ${oldClaim.id} to ${successorClaim.claimId}`,
             liveness_evidence: `operator-requested reroute of assignment ${owned.assignment.id}`,
             external_effect_policy: 'none' as const, next_workspace_path: successorClaim.worktreePath,
+            predecessor_assignment_terminal: 'rerouted' as const,
             next_executor: {
               agent: newAgentName, agent_id: newIdentity?.agent_id, claim_id: successorClaim.claimId,
               capability_snapshot: successorSnapshot,
