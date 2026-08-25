@@ -136,6 +136,19 @@ describe('defaultExecutionAdapter', () => {
     assert.ok(pinned.bashCommand.includes(prompt), 'prompt bytes remain unchanged inside the quoted payload');
   });
 
+  it('preserves POSIX Codex prompt bytes while shell-quoting embedded apostrophes', () => {
+    const prompt = "C:\\repo\\lane / \\d+ / it's $HOME `literal`\nfrançais";
+    const invoke = buildInvokeCommand('codex', prompt, { platform: 'linux' });
+    assert.ok(invoke);
+    const pinned = withCodexWorkspaceRoot(invoke, 'codex', '/srv/worktrees/dgx-lane', false);
+    const prefix = "printf '%s' '";
+    const start = pinned.bashCommand.indexOf(prefix) + prefix.length;
+    const end = pinned.bashCommand.indexOf("' | codex", start);
+    assert.ok(start >= prefix.length && end > start);
+    const delivered = pinned.bashCommand.slice(start, end).replace(/'\\''/g, "'");
+    assert.equal(delivered, prompt, 'single-quoted rendering changes no model-authored bytes');
+  });
+
   it('uses an environment-attesting bootstrap and exact terminal hashes on POSIX and Windows', () => {
     const hashes = {
       contract_hash: 'a'.repeat(64),

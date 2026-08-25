@@ -335,7 +335,7 @@ export function withCodexWorkspaceRoot(
   // executable boundary and splice --cd inside quoted content.
   const command = [invoke.executable, ...args.map(quote)].join(' ');
   const prompt = invoke.promptText ?? '';
-  const escapedPrompt = prompt.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+  const escapedPrompt = prompt.replace(/'/g, "'\\''");
   let bashCommand = command;
   if (!isWin32 && invoke.promptDelivery === 'stdin_pipe') {
     bashCommand = `printf '%s' '${escapedPrompt}' | ${command}`;
