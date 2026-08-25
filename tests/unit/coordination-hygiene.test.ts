@@ -346,13 +346,22 @@ describe('loadHygienePolicy — config overrides (finding 1: HygieneConfigSchema
 });
 
 describe('sweepAssignmentsFromList — family TTL from policy (finding 2)', () => {
-  it('does NOT sweep a 20-min offered assignment when the policy family TTL is long (3d)', () => {
+  it('does NOT sweep a 20-min offered assignment when the policy family TTL is one day', () => {
     const offeredAt = new Date(Date.now() - 20 * 60_000).toISOString();
     const a = mkOfferedAssignment(ws, generateId('assignments'), offeredAt);
     const r = sweepAssignmentsFromList([a], ws.dir, { actor: 'test', policy: DEFAULT_HYGIENE_POLICY });
-    assert.equal(r.expired.length, 0, 'not expired under the 3d offered family TTL');
+    assert.equal(r.expired.length, 0, 'not expired under the one-day offered family TTL');
     assert.equal(r.implicitly_advanced.length, 0);
     assert.equal(loadAssignment(a.id, ws.dir)!.status, 'offered', 'stays offered');
+  });
+
+  it('expires a never-accepted offered assignment after one day by default', () => {
+    const offeredAt = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+    const a = mkOfferedAssignment(ws, generateId('assignments'), offeredAt);
+    const r = sweepAssignmentsFromList([a], ws.dir, { actor: 'test', policy: DEFAULT_HYGIENE_POLICY });
+    assert.equal(r.expired.length, 1);
+    assert.equal(loadAssignment(a.id, ws.dir)!.status, 'expired');
+    assert.equal(sweepAssignmentsFromList([loadAssignment(a.id, ws.dir)!], ws.dir, { actor: 'test', policy: DEFAULT_HYGIENE_POLICY }).expired.length, 0);
   });
 
   it('DOES expire a 20-min offered assignment without a policy (embedded 15-min acceptance TTL — convergence sweep unchanged)', () => {

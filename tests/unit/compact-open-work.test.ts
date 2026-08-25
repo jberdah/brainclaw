@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
-import { createAssignment } from '../../src/core/assignments.js';
+import { createAssignment, loadAssignment, saveAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { nowISO } from '../../src/core/ids.js';
 
@@ -77,6 +77,24 @@ function assignmentsOf(response: Record<string, unknown>): Array<Record<string, 
 }
 
 describe('open_work compact — le texte est DIFFÉRÉ, pas perdu', () => {
+  it('ne sert pas comme active une offre expirée par le sweep de ce même appel', async () => {
+    const stale = createAssignment({
+      agent: AGENT, scope: 'src/stale', description: 'stale offer',
+      claim_id: 'clm_compact', dispatcher_agent: AGENT,
+    }, ws.dir);
+    transitionAssignment(stale.id, 'offered', { actor: AGENT }, ws.dir);
+    const persisted = loadAssignment(stale.id, ws.dir)!;
+    const old = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+    persisted.offered_at = old;
+    persisted.last_heartbeat_at = old;
+    persisted.updated_at = old;
+    saveAssignment(persisted, ws.dir);
+
+    const response = await callWork({ intent: 'consult', compact: false });
+    assert.equal(loadAssignment(stale.id, ws.dir)?.status, 'expired');
+    assert.ok(!assignmentsOf(response).some((assignment) => assignment['id'] === stale.id));
+  });
+
   it('tronque la description ET dit comment récupérer le texte entier', async () => {
     const response = await callWork({ intent: 'consult', compact: true });
     const assignments = assignmentsOf(response);

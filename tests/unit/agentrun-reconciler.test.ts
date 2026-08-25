@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createAgentRun, loadAgentRun, transitionAgentRun } from '../../src/core/agentruns.js';
-import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
+import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { saveClaim, loadClaim } from '../../src/core/claims.js';
 import { openLoop, getLoop } from '../../src/core/loops/store.js';
 import {
@@ -353,6 +353,8 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
   });
 
   it('infers completion when a dead pid coincides with a post-start commit', () => {
+    const assignment = makeAssignment();
+    transitionAssignment(assignment.id, 'offered', { actor: 'test', syncAgentRun: false }, ws.dir);
     const repoDir = bootstrapGitWorktree();
     const run = makeRun({ pid: 999_999, worktree_path: repoDir });
     const sleepUntil = Date.now() + 1100; // git commit-time granularity is 1 s
@@ -361,13 +363,18 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir);
     assert.equal(result.action, 'inferred_completed');
     assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'completed');
+    assert.equal(loadAssignment(assignment.id, ws.dir)!.status, 'completed');
+    assert.equal(reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir).action, 'no_op', 'replay is idempotent');
   });
 
   it('infers completion when a dead pid coincides with a released claim', () => {
+    const assignment = makeAssignment();
+    transitionAssignment(assignment.id, 'offered', { actor: 'test', syncAgentRun: false }, ws.dir);
     makeClaim({ status: 'released' });
     const run = makeRun({ pid: 999_999 });
     const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir);
     assert.equal(result.action, 'inferred_completed');
+    assert.equal(loadAssignment(assignment.id, ws.dir)!.status, 'offered', 'claim release alone is not success proof');
   });
 
   it('no_op when the process is alive', () => {
@@ -386,6 +393,8 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     // pln#520 review (codex): the read path routes `running` runs through THIS
     // function, not reconcileAgentRun — so a genuine silent death MUST still
     // converge to `failed` here, just not prematurely.
+    const assignment = makeAssignment();
+    transitionAssignment(assignment.id, 'offered', { actor: 'test', syncAgentRun: false }, ws.dir);
     const run = makeRun({ pid: 999_999 });
     const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
       nowMs: new Date(run.created_at).getTime() + 31 * 60_000, // past 30-min stale
@@ -394,6 +403,7 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     const reloaded = loadAgentRun(run.id, ws.dir)!;
     assert.equal(reloaded.status, 'failed');
     assert.match(reloaded.status_reason ?? '', /silent_termination/);
+    assert.equal(loadAssignment(assignment.id, ws.dir)!.status, 'failed');
   });
 
   it('does NOT fail or release claim when no-heartbeat dead-pid run has fresh fs activity', () => {

@@ -37,7 +37,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { loadAgentRun, recordExecutionContractAnomaly, transitionAgentRun, type ListAgentRunsFilter, listAgentRuns } from './agentruns.js';
 import { loadClaim, releaseClaim } from './claims.js';
-import { loadAssignment } from './assignments.js';
+import { convergeAssignmentToTerminal, loadAssignment, transitionAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
 import { readContractAck, readHeartbeat, readLogTail, signalExists, latestActivityMs, readCompletionSignals } from './runtime-signals.js';
@@ -444,6 +444,41 @@ function fsActiveWithin(evidence: ReconcileEvidence, windowMs: number): boolean 
   return evidence.fs_activity_age_ms !== undefined && evidence.fs_activity_age_ms < windowMs;
 }
 
+/** Align a non-turn-owned Assignment with conclusive runtime evidence. */
+function convergeAssignmentFromRun(
+  run: AgentRun,
+  outcome: 'completed' | 'failed',
+  evidence: ReconcileEvidence,
+  actor: string,
+  cwd?: string,
+): boolean {
+  if (findReservationByRunId(run.id, cwd)) return false;
+  const assignment = loadAssignment(run.assignment_id, cwd);
+  if (!assignment || ['completed', 'failed', 'blocked', 'timed_out', 'cancelled', 'expired', 'rerouted'].includes(assignment.status)) {
+    return false;
+  }
+  if (outcome === 'completed') {
+    // A released claim alone is not business proof of successful work.
+    if (!evidence.completed_signal && !evidence.has_post_start_commit && !evidence.assignment_completed) return false;
+    return convergeAssignmentToTerminal(
+      assignment.id,
+      'completed',
+      `agent_run ${run.id} completed from authoritative runtime evidence`,
+      cwd,
+    );
+  }
+  try {
+    transitionAssignment(assignment.id, 'failed', {
+      actor,
+      syncAgentRun: false,
+      status_reason: `agent_run ${run.id} failed from liveness reconciliation`,
+    }, cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * trp#433 — when a run is reconciled to `failed` (silent_death / stalled), release
  * its linked claim so dead runs stop leaving active claims (and their worktrees)
@@ -742,6 +777,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
         actor,
         status_reason: `inferred=true; evidence: ${describeEvidence(evidence)}`,
       }, cwd);
+      convergeAssignmentFromRun(run, 'completed', evidence, actor, cwd);
       return {
         run_id: runId, action: 'inferred_completed',
         reason: `inferred=true; ${describeEvidence(evidence)}`,
@@ -763,6 +799,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
   const failHere = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(runId, 'failed', { actor, status_reason: reason }, cwd);
+      convergeAssignmentFromRun(run, 'failed', evidence, actor, cwd);
       cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: runId, action: 'inferred_failed', reason, evidence, previous_status, current_status: 'failed' };
     } catch (err) {
@@ -987,6 +1024,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   const failRun = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(run.id, 'failed', { actor, status_reason: reason }, cwd);
+      convergeAssignmentFromRun(run, 'failed', evidence, actor, cwd);
       cascadeReleaseOnFailure(run, actor, cwd, 'failed', reason);
       return { run_id: run.id, action: 'inferred_failed', reason, evidence, previous_status: run.status, current_status: 'failed' };
     } catch (err) {
@@ -1008,6 +1046,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
         actor,
         status_reason: `inferred=true; evidence: ${describeEvidence(evidence)}`,
       }, cwd);
+      convergeAssignmentFromRun(run, 'completed', evidence, actor, cwd);
       return {
         run_id: run.id, action: 'inferred_completed',
         reason: `inferred=true; ${describeEvidence(evidence)}`,

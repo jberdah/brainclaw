@@ -1814,10 +1814,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               const full = candidateIds
                 .map((id) => loadAssignment(id, targetCwd))
                 .filter((a): a is NonNullable<typeof a> => a !== undefined);
-              sweepAssignmentsAtReadPath(full, targetCwd, {
+              const sweep = sweepAssignmentsAtReadPath(full, targetCwd, {
                 actor: 'bclaw_work-readpath',
                 policy,
               });
+              // The context snapshot was built before the lazy sweep. Reflect
+              // the same-pass mutations so bclaw_work never serves a fossil as
+              // active once it has just expired/timed it out on disk.
+              const parked = new Set([
+                ...sweep.expired.map((item) => item.assignment_id),
+                ...sweep.timed_out.map((item) => item.assignment_id),
+              ]);
+              const advanced = new Map(sweep.implicitly_advanced.map((item) => [item.assignment_id, item.to]));
+              contextResult.open_work!.active_assignments = openAssignments
+                .filter((assignment) => !parked.has(assignment.id))
+                .map((assignment) => {
+                  const status = advanced.get(assignment.id);
+                  return status ? { ...assignment, status } : assignment;
+                });
             }
             const registry = loadServeRegistry(targetCwd);
             const aged = ageStaleWarnings(contextResult.stale_warnings ?? [], targetCwd, { policy, registry });

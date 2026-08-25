@@ -46,7 +46,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const DEFAULT_HYGIENE_POLICY: HygienePolicy = {
   disabled: false,
-  assignment_offered_ttl_ms: 3 * DAY_MS,
+  // A never-accepted dispatch should not survive into the next day's dogfood.
+  assignment_offered_ttl_ms: 1 * DAY_MS,
   assignment_accepted_ttl_ms: 1 * DAY_MS,
   assignment_started_ttl_ms: 1 * DAY_MS,
   handoff_closed_ttl_ms: 30 * DAY_MS,
