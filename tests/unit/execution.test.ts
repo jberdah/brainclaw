@@ -105,7 +105,7 @@ describe('defaultExecutionAdapter', () => {
     const pinned = withCodexWorkspaceRoot(invoke, 'codex', worktree, true);
     const execIndex = pinned.args.indexOf('exec');
     assert.deepEqual(pinned.args.slice(execIndex - 2, execIndex), ['--cd', worktree]);
-    assert.match(pinned.bashCommand, /codex --cd "C:\\Users\\worker/);
+    assert.match(pinned.bashCommand, /codex "--cd" "C:\\Users\\worker/);
     assert.doesNotMatch(pinned.bashCommand, /--add-dir/);
     assert.equal(withCodexWorkspaceRoot(invoke, 'claude-code', worktree, true), invoke);
     const nonCodexExecutable = { ...invoke, executable: 'node', bashCommand: 'node -e "process.exit(0)"' };
@@ -121,9 +121,19 @@ describe('defaultExecutionAdapter', () => {
     assert.ok(invoke);
     const worktree = '/srv/worktrees/dgx-lane';
     const pinned = withCodexWorkspaceRoot(invoke, 'codex', worktree, false);
-    assert.match(pinned.bashCommand, /^printf .* \| codex --cd '\/srv\/worktrees\/dgx-lane' "exec" /);
+    assert.match(pinned.bashCommand, /^printf .* \| codex "--cd" "\/srv\/worktrees\/dgx-lane" "exec" /);
     assert.equal((pinned.bashCommand.match(/\bcodex\b/g) ?? []).length, 1, 'exactly one Codex process is launched');
     assert.ok(pinned.bashCommand.includes("printf '%s' 'review the DGX lane' |"), 'stdin prompt delivery is preserved');
+  });
+
+  it('never discovers the Codex executable boundary inside prompt text', () => {
+    const prompt = 'review this literal: | codex exec --danger, then continue';
+    const invoke = buildInvokeCommand('codex', prompt, { platform: 'linux' });
+    assert.ok(invoke);
+    const pinned = withCodexWorkspaceRoot(invoke, 'codex', '/srv/worktrees/dgx-lane', false);
+    assert.equal((pinned.bashCommand.match(/\| codex /g) ?? []).length, 2, 'one literal remains data and one delimiter launches Codex');
+    assert.match(pinned.bashCommand, /\| codex "--cd" "\/srv\/worktrees\/dgx-lane" "exec"/);
+    assert.ok(pinned.bashCommand.includes(prompt), 'prompt bytes remain unchanged inside the quoted payload');
   });
 
   it('uses an environment-attesting bootstrap and exact terminal hashes on POSIX and Windows', () => {

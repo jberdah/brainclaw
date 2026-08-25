@@ -63,7 +63,7 @@ import { prepareTurnExecution } from '../core/loops/turn-execution.js';
 import { findReservationByAssignmentId } from '../core/loops/attempt-reservation.js';
 import { resolveTurnGenerationChain } from '../core/loops/attempt-generations.js';
 import { readLocalAuthorityHome } from '../core/loops/attempt-rollout.js';
-import { takeoverLoopAttempt } from '../core/loops/attempt-takeover.js';
+import { AttemptTakeoverCommittedError, takeoverLoopAttempt } from '../core/loops/attempt-takeover.js';
 import { getLoop as getLoopThread } from '../core/loops/store.js';
 import { removeWorktree } from '../core/worktree.js';
 import type { TurnEcho } from '../core/execution-adapters.js';
@@ -1637,18 +1637,29 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               ? `scope remained owned by ${successorClaim.conflictAgent ?? 'another agent'}`
               : successorClaim.worktreeWarning ?? 'successor worktree is unavailable');
           }
-          const taken = takeoverLoopAttempt({
+          const takeoverInput = {
             loop_id: reservation.loop_id, slot_id: reservation.slot_id, turn_id: reservation.turn_id,
             expected_epoch: generation.attempt_epoch, authority_home: authorityHome,
             actor: senderAgent, actor_id: senderAgentId, writer_id: senderAgentId ?? senderAgent,
             cause: `coordinate reroute from claim ${oldClaim.id} to ${successorClaim.claimId}`,
             liveness_evidence: `operator-requested reroute of assignment ${owned.assignment.id}`,
-            external_effect_policy: 'none', next_workspace_path: successorClaim.worktreePath,
+            external_effect_policy: 'none' as const, next_workspace_path: successorClaim.worktreePath,
             next_executor: {
               agent: newAgentName, agent_id: newIdentity?.agent_id, claim_id: successorClaim.claimId,
               capability_snapshot: successorSnapshot,
             }, cwd: dispatchCwd,
-          });
+          };
+          let taken;
+          try {
+            taken = takeoverLoopAttempt(takeoverInput);
+          } catch (error) {
+            if (!(error instanceof AttemptTakeoverCommittedError)) throw error;
+            // The close(epoch) CAS already won. Never reactivate/release claims
+            // from the predecessor generation; replay the identical transaction
+            // once to repair the loop/run projections before continuing.
+            takeoverCommitted = true;
+            taken = takeoverLoopAttempt(takeoverInput);
+          }
           takeoverCommitted = true;
           const prepared = prepareTurnExecution({
             kind: loop.kind, loop_id: loop.id, slot_id: reservation.slot_id, phase: reservation.phase,
@@ -1724,8 +1735,22 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               releaseClaimIfActive(successorClaim.claimId, dispatchCwd, {
                 agent: senderAgent, agent_id: senderAgentId, session_id: connectionSessionId, override: true,
               });
+              if (successorClaim.worktreePath) {
+                try { removeWorktree(dispatchCwd, successorClaim.worktreePath, { force: true }); }
+                catch (cleanupError) {
+                  warnings.push(`reroute rollback worktree cleanup failed for ${successorClaim.claimId}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+                }
+              }
             }
             saveClaim({ ...oldClaim, status: 'active' as const, released_at: undefined }, dispatchCwd);
+            appendAuditEntry({
+              actor: senderAgent,
+              action: 'rollback',
+              item_id: oldClaim.id,
+              item_type: 'claim',
+              scope: oldClaim.scope,
+              reason: 'reroute aborted before immutable takeover commit; predecessor claim restored',
+            }, dispatchCwd);
           }
           return { response: createToolErrorResponse(
             takeoverCommitted ? 'reroute_successor_incomplete' : 'reroute_transaction_rolled_back',

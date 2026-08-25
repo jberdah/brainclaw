@@ -76,6 +76,21 @@ export interface TurnOwnedLaneEvidence {
   capability_snapshot_hash?: string;
 }
 
+/** Prefer the current run-scoped runtime channel, with assignment-scoped files
+ * retained only as a compatibility fallback for pre-run-keyed dispatches. */
+function readAttemptCompletionSignals(root: string, assignmentId: string, runId: string) {
+  const scoped = readCompletionSignals(root, assignmentId, runId);
+  const legacy = readCompletionSignals(root, assignmentId);
+  return {
+    completed: scoped.completed ?? legacy.completed,
+    failed: scoped.failed ?? legacy.failed,
+  };
+}
+
+function readAttemptContractAck(root: string, assignmentId: string, runId: string) {
+  return readContractAck(root, assignmentId, runId) ?? readContractAck(root, assignmentId);
+}
+
 /**
  * Resolve the authoritative generation coordinates for a worker result.
  *
@@ -95,25 +110,40 @@ export function turnOwnedLaneEvidence(
   const chain = resolveTurnGenerationChain(cwd, reservation.turn_id);
   const generation = chain?.latest_generation;
   const runId = generation?.run_id ?? reservation.child_ids.run_id;
-  const completion = readCompletionSignals(
+  const completion = readAttemptCompletionSignals(
     cwd,
     generation?.assignment_id ?? reservation.child_ids.assignment_id,
-    generation?.run_id,
+    runId,
   ).completed;
-  const nonce = lane.nonce ?? completion?.nonce;
+  const bootstrapAck = readAttemptContractAck(
+    cwd,
+    generation?.assignment_id ?? reservation.child_ids.assignment_id,
+    runId,
+  );
+  // The pre-exec bootstrap ACK is the first durable, coordinator-authored proof
+  // that this exact launch generation crossed into the worker. Real file-fallback
+  // workers commonly write LANE-RESULT before the wrapper can emit its terminal
+  // sentinel, and they do not echo the mechanical turn/run/nonce tuple. In that
+  // window, enrich only from an ACCEPTED run-keyed ACK; reconcileTurn still checks
+  // every coordinate against the active generation, so a rejected/foreign/stale
+  // ACK cannot authorize convergence and an explicit lane value always wins.
+  const acceptedAck = bootstrapAck?.status === 'accepted' ? bootstrapAck : undefined;
+  const nonce = lane.nonce ?? completion?.nonce ?? acceptedAck?.nonce;
   if (!nonce && !reservation.execution_contract_ref) return undefined;
   return {
     reservation,
     nonce,
     run_id: runId,
-    attempt_epoch: lane.attempt_epoch ?? completion?.attempt_epoch ?? generation?.attempt_epoch,
-    workspace_digest: lane.workspace_digest ?? completion?.workspace_digest ?? generation?.workspace_digest,
+    attempt_epoch: lane.attempt_epoch ?? completion?.attempt_epoch ?? acceptedAck?.attempt_epoch ?? generation?.attempt_epoch,
+    workspace_digest: lane.workspace_digest ?? completion?.workspace_digest ?? acceptedAck?.workspace_digest ?? generation?.workspace_digest,
     contract_hash: lane.execution_contract_hash
       ?? completion?.contract_hash
+      ?? acceptedAck?.contract_hash
       ?? generation?.contract_hash
       ?? reservation.execution_contract_ref?.hash,
     capability_snapshot_hash: lane.capability_snapshot_hash
       ?? completion?.capability_snapshot_hash
+      ?? acceptedAck?.capability_snapshot_hash
       ?? reservation.execution_contract_ref?.snapshot_hash,
   };
 }
@@ -338,15 +368,15 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   }
 
   if (activeContractRef) {
-    const completion = readCompletionSignals(
+    const completion = readAttemptCompletionSignals(
       cwd ?? process.cwd(),
       activeAssignmentId,
-      activeGeneration?.run_id,
+      activeRunId,
     ).completed;
-    const bootstrapAck = readContractAck(
+    const bootstrapAck = readAttemptContractAck(
       cwd ?? process.cwd(),
       activeAssignmentId,
-      activeGeneration?.run_id,
+      activeRunId,
     );
     const accepted = {
       contract_hash: lane.execution_contract_hash ?? completion?.contract_hash ?? '',
@@ -420,10 +450,10 @@ export function reconcileTurn(input: ReconcileTurnInput): ReconcileTurnResult {
   // LANE-RESULT then exited non-zero (turn-keyed failed sentinel) is a conflict,
   // not a clean close. ──
   try {
-    const bodies = readCompletionSignals(
+    const bodies = readAttemptCompletionSignals(
       cwd ?? process.cwd(),
       activeAssignmentId,
-      activeGeneration?.run_id,
+      activeRunId,
     );
     const matchedCompleted = bodies.completed?.status === 'completed' && evidenceMatchesAttempt(reservation, {
       assignment_id: activeAssignmentId,
@@ -984,6 +1014,26 @@ function convergeFailedLockedTurn(
       }, cwd);
     } catch (err) {
       return { converged: false, claim_released: false, reason: `complete_turn failed: ${err instanceof Error ? err.message : String(err)} — claim retained, next pass retries` };
+    }
+  }
+
+  // Assignment is a business projection of the same failed turn. Leaving it
+  // offered/started while the run, slot, and claim are terminal recreates the
+  // orphaned-state ambiguity this convergence path exists to remove.
+  const assignment = loadAssignment(run.assignment_id, cwd);
+  if (assignment && !['completed', 'failed', 'blocked', 'timed_out', 'cancelled', 'expired', 'rerouted'].includes(assignment.status)) {
+    try {
+      transitionAssignment(assignment.id, 'failed', {
+        actor,
+        syncAgentRun: false,
+        status_reason: `turn ${reservation.turn_id} failed: ${transportReason}`,
+      }, cwd);
+    } catch (err) {
+      return {
+        converged: false,
+        claim_released: false,
+        reason: `assignment failure projection failed: ${err instanceof Error ? err.message : String(err)} — claim retained, next pass retries`,
+      };
     }
   }
 

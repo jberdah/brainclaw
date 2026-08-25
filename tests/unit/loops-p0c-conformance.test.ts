@@ -288,7 +288,7 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
 
   it('withholds both loop and run convergence on post-crossing contract evidence mismatch', () => {
     const prepared = setupAttempt(cwd, 'review');
-    const ackPath = getRuntimeSignalPath(cwd, prepared.result.assignment_id, 'ack');
+    const ackPath = getRuntimeSignalPath(cwd, prepared.result.assignment_id, 'ack', prepared.result.run_id);
     fs.mkdirSync(path.dirname(ackPath), { recursive: true });
     fs.writeFileSync(ackPath, JSON.stringify({
       status: 'accepted',
@@ -413,7 +413,7 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
     }
   });
 
-  it('turn-owned ideation harvest uses the common reconciler, not the legacy closer', () => {
+  it('turn-owned ideation harvest accepts a keyless worker result from its accepted bootstrap ACK', () => {
     const prepared = setupAttempt(cwd, 'ideation');
     const worktree = path.join(cwd, 'critic-worktree');
     fs.mkdirSync(worktree, { recursive: true });
@@ -429,9 +429,6 @@ describe('P0C — common AttemptAuthority lifecycle across five LoopKinds', () =
     }));
     fs.writeFileSync(getLaneResultPath(worktree), JSON.stringify({
       assignment_id: prepared.result.assignment_id,
-      turn_id: prepared.result.turn_id,
-      run_id: prepared.result.run_id,
-      nonce: prepared.result.nonce,
       status: 'completed',
       summary: 'challenged the proposal',
       body: 'The proposal conflicts with the retained portability constraint.',

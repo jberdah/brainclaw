@@ -16,7 +16,7 @@ import { fingerprintPublicKeyPem } from '../../src/core/agent-registry.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
 import { handleBclawAssignmentUpdate, handleBclawReleaseClaim, type McpWriteClaimsContext } from '../../src/commands/mcp-write-claims.js';
 import { removeEntity, transitionEntity } from '../../src/core/entity-operations.js';
-import { takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
+import { AttemptTakeoverCommittedError, takeoverLoopAttempt } from '../../src/core/loops/attempt-takeover.js';
 import { fenceForGeneration, readLaunchDecision, resolveTurnGenerationChain } from '../../src/core/loops/attempt-generations.js';
 import { settleActiveAttemptGenerationV2 } from '../../src/core/loops/attempt-authority.js';
 import {
@@ -186,6 +186,27 @@ describe('AttemptAuthority v2 takeover integration', () => {
       },
       cwd,
     };
+    assert.throws(
+      () => takeoverLoopAttempt({
+        ...takeoverInput,
+        on_stage: (stage) => {
+          if (stage === 'loop_committed') throw new Error('fault after authoritative takeover commit');
+        },
+      }),
+      (error: unknown) => error instanceof AttemptTakeoverCommittedError
+        && error.assignment_id !== first.assignment_id
+        && error.attempt_epoch === 1,
+      'a post-commit projection fault is explicitly non-rollbackable',
+    );
+    const committedChain = resolveTurnGenerationChain(cwd, first.turn_id);
+    assert.equal(committedChain?.latest_generation.attempt_epoch, 1, 'authority successor remains committed');
+    assert.equal(
+      getLoop(loop.id, cwd)?.slots[0]?.assignment_id,
+      committedChain?.latest_generation.assignment_id,
+      'loop slot was committed to the same successor before the injected fault',
+    );
+    assert.equal(loadAgentRun(committedChain!.latest_generation.run_id, cwd), undefined, 'run projection is the repairable missing side effect');
+
     const taken = takeoverLoopAttempt(takeoverInput);
     assert.notEqual(taken.assignment_id, first.assignment_id, 'each generation owns a distinct Assignment');
     assert.notEqual(taken.run_id, first.run_id, 'physical AgentRun changes');

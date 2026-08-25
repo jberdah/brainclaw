@@ -81,7 +81,7 @@ function openReviewLoop(cwd: string): { loopId: string; version: number } {
  *  wrapper SENTINEL carrying the nonce + a KEYLESS worker LANE-RESULT.json. */
 function seedTurnOwned(
   cwd: string,
-  opts: { verdict?: 'approve' | 'request_changes'; laneNonce?: string; writeSentinel?: boolean } = {},
+  opts: { verdict?: 'approve' | 'request_changes'; laneNonce?: string; writeSentinel?: boolean; sentinelStatus?: 'completed' | 'failed' } = {},
 ): { loopId: string; turnId: string; runId: string; assignmentId: string; wt: string } {
   const { loopId, version } = openReviewLoop(cwd);
   const turnId = deriveTurnId(loopId, 'lsl_r', 0);
@@ -103,7 +103,7 @@ function seedTurnOwned(
   seedClaim(cwd, 'clm_x', loopId);
   seedAssignment(cwd, assignment_id, loopId, wt);
   if (opts.writeSentinel !== false) {
-    writeCompletionSignal(cwd, assignment_id, { turn_id: turnId, run_id, nonce: 'gen-1', status: 'completed', at: 'test' });
+    writeCompletionSignal(cwd, assignment_id, { turn_id: turnId, run_id, nonce: 'gen-1', status: opts.sentinelStatus ?? 'completed', at: 'test' });
   }
   // KEYLESS worker lane (production): assignment_id + verdict only, NO turn_id/run_id/nonce
   // — unless a test explicitly overrides laneNonce to probe read-strict rejection.
@@ -304,6 +304,20 @@ describe('pln#692 P0 — lazy AgentRun reconciliation harvests LANE-RESULT autho
     const loop = getLoop(loopId, cwd)!;
     assert.equal(loop.slots[0]?.status, 'assigned');
     assert.equal(loop.artifacts.length, 0);
+  });
+
+  it('a malformed LANE-RESULT cannot mask an authoritative failed sentinel', () => {
+    const { loopId, runId, assignmentId, wt } = seedTurnOwned(cwd, { verdict: 'approve', sentinelStatus: 'failed' });
+    fs.writeFileSync(getLaneResultPath(wt), '{ malformed', 'utf8');
+
+    const result = reconcileAgentRun(runId, cwd, { healthCheckGraceMs: 0 });
+
+    assert.equal(result.action, 'inferred_failed');
+    assert.match(result.reason, /invalid_lane_result_with_conclusive_failure/);
+    assert.equal(loadAgentRun(runId, cwd)?.status, 'failed');
+    assert.notEqual(loadAssignment(assignmentId, cwd)?.status, 'offered');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released');
+    assert.equal(getLoop(loopId, cwd)?.slots[0]?.status, 'failed');
   });
 
   it('also converges through the canonical dead-PID running read path', () => {

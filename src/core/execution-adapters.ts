@@ -329,24 +329,18 @@ export function withCodexWorkspaceRoot(
   args.splice(insertAt, 0, '--cd', worktreePath);
   const quote = (value: string): string => isWin32
     ? `"${value.replace(/"/g, '""')}"`
-    : `'${value.replace(/'/g, `'\\''`)}'`;
-  const flags = `--cd ${quote(worktreePath)}`;
-  const prefix = invoke.executable;
-  // `stdin_pipe` on POSIX is rendered as `printf ... | codex exec ...`.
-  // Prefixing that whole string with `codex --cd` creates TWO Codex commands:
-  // the right-hand one receives no prompt and exits with
-  // "No prompt provided via stdin" (DGX dogfood, pln#692). Insert the flag in
-  // the actual Codex command while preserving any delivery pipeline/prologue.
-  const commandMarkers = [`| ${prefix} `, `&& ${prefix} `, `${prefix} `];
-  let bashCommand = invoke.bashCommand;
-  for (const marker of commandMarkers) {
-    const index = marker === `${prefix} `
-      ? (bashCommand.startsWith(marker) ? 0 : -1)
-      : bashCommand.lastIndexOf(marker);
-    if (index < 0) continue;
-    const commandOffset = marker === `${prefix} ` ? index : index + marker.length - `${prefix} `.length;
-    bashCommand = `${bashCommand.slice(0, commandOffset)}${prefix} ${flags} ${bashCommand.slice(commandOffset + prefix.length + 1)}`;
-    break;
+    : `"${value.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/"/g, '\\"')}"`;
+  // Re-render from structured argv. bashCommand also contains the model-authored
+  // prompt, so searching it for "| codex" can mistake prompt data for the real
+  // executable boundary and splice --cd inside quoted content.
+  const command = [invoke.executable, ...args.map(quote)].join(' ');
+  const prompt = invoke.promptText ?? '';
+  const escapedPrompt = prompt.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+  let bashCommand = command;
+  if (!isWin32 && invoke.promptDelivery === 'stdin_pipe') {
+    bashCommand = `printf '%s' '${escapedPrompt}' | ${command}`;
+  } else if (!isWin32 && invoke.promptDelivery === 'temp_file' && invoke.tempFilePath) {
+    bashCommand = `printf '%s' '${escapedPrompt}' > ${quote(invoke.tempFilePath)} && ${command}`;
   }
   return { ...invoke, args, bashCommand };
 }
