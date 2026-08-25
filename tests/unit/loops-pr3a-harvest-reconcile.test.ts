@@ -9,9 +9,10 @@ import { openLoop, getLoop, writeThreadFile } from '../../src/core/loops/store.j
 import {
   reserve, commitReservation, armLaunch, consumeLaunchGrant, deriveTurnId, deriveChildIds,
 } from '../../src/core/loops/attempt-reservation.js';
-import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
+import { createAgentRun, loadAgentRun, transitionAgentRun } from '../../src/core/agentruns.js';
+import { reconcileAgentRun, reconcileDeadPidRunningAgentRunAtRead } from '../../src/core/agentrun-reconciler.js';
 import { saveClaim, loadClaim } from '../../src/core/claims.js';
-import { saveAssignment } from '../../src/core/assignments.js';
+import { loadAssignment, saveAssignment } from '../../src/core/assignments.js';
 import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime-signals.js';
 import { listRuntimeEvents } from '../../src/core/events.js';
 import { nowISO } from '../../src/core/ids.js';
@@ -93,13 +94,13 @@ function seedTurnOwned(
   commitReservation(turnId, cwd);
   armLaunch(turnId, { token: 'gen-1', epoch: 1, lease_deadline: FUTURE() }, cwd);
   consumeLaunchGrant(turnId, 'gen-1', 1, cwd);
+  const wt = wtDir();
   createAgentRun({
     id: run_id, short_label: run_id, assignment_id, claim_id: 'clm_x', agent: AGENT,
     transport: 'cli_spawn', scope: `review-loop:${loopId}`, description: 'turn',
-    status: 'created', tags: ['turn-owned', 'review', 'loop'],
+    status: 'created', tags: ['turn-owned', 'review', 'loop'], worktree_path: wt,
   }, cwd);
   seedClaim(cwd, 'clm_x', loopId);
-  const wt = wtDir();
   seedAssignment(cwd, assignment_id, loopId, wt);
   if (opts.writeSentinel !== false) {
     writeCompletionSignal(cwd, assignment_id, { turn_id: turnId, run_id, nonce: 'gen-1', status: 'completed', at: 'test' });
@@ -260,6 +261,62 @@ describe('pln#630 PR3a — harvest → reconcileTurn wiring (integrate path)', (
     const loop = getLoop(loopId, cwd)!;
     assert.equal(loop.iteration_count, 1, 'integrate bumps the fix round');
     assert.equal(integ.next_turns.length, 1, 'integrate emits the fix-cycle re-dispatch turn');
+  });
+});
+
+describe('pln#692 P0 — lazy AgentRun reconciliation harvests LANE-RESULT authoritatively', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = ws(); });
+
+  it('converges the worker artifact and every linked projection without an explicit harvest command', () => {
+    const { loopId, runId, assignmentId } = seedTurnOwned(cwd, { verdict: 'approve' });
+
+    const result = reconcileAgentRun(runId, cwd, { healthCheckGraceMs: 0, actor: 'lazy-reconciler' });
+
+    assert.equal(result.action, 'reconciled_turn');
+    const loop = getLoop(loopId, cwd)!;
+    const verdict = loop.artifacts.find((artifact) => artifact.type === 'verdict');
+    assert.ok(verdict, 'the worker verdict is harvested into the loop');
+    assert.equal(verdict.produced_by, AGENT, 'artifact provenance names the worker, not the harvester');
+    assert.equal(verdict.evidence?.producer.kind, 'slot');
+    assert.equal(verdict.evidence?.producer.id, AGENT);
+    assert.equal(loadAgentRun(runId, cwd)?.status, 'completed');
+    assert.equal(loadAssignment(assignmentId, cwd)?.status, 'completed', 'offered assignment converges through the system FSM');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released');
+    assert.equal(harvestedEvents(cwd, runId).length, 1, 'harvester identity stays on the runtime observation channel');
+
+    const replay = reconcileAgentRun(runId, cwd, { healthCheckGraceMs: 0, actor: 'lazy-reconciler' });
+    assert.equal(replay.action, 'reconciled_turn');
+    assert.equal(getLoop(loopId, cwd)!.artifacts.filter((artifact) => artifact.type === 'verdict').length, 1);
+  });
+
+  it('withholds every projection when LANE-RESULT is malformed even if completion sentinel exists', () => {
+    const { loopId, runId, assignmentId, wt } = seedTurnOwned(cwd, { verdict: 'approve' });
+    fs.writeFileSync(getLaneResultPath(wt), '{ malformed', 'utf8');
+
+    const result = reconcileAgentRun(runId, cwd, { healthCheckGraceMs: 0 });
+
+    assert.equal(result.action, 'health_check_unverified');
+    assert.match(result.reason, /invalid LANE-RESULT/);
+    assert.equal(loadAgentRun(runId, cwd)?.status, 'created');
+    assert.equal(loadAssignment(assignmentId, cwd)?.status, 'offered');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'active');
+    const loop = getLoop(loopId, cwd)!;
+    assert.equal(loop.slots[0]?.status, 'assigned');
+    assert.equal(loop.artifacts.length, 0);
+  });
+
+  it('also converges through the canonical dead-PID running read path', () => {
+    const { loopId, runId, assignmentId } = seedTurnOwned(cwd, { verdict: 'approve' });
+    transitionAgentRun(runId, 'running', { actor: 'test' }, cwd);
+
+    const result = reconcileDeadPidRunningAgentRunAtRead(runId, cwd, { actor: 'read-reconciler' });
+
+    assert.equal(result.action, 'reconciled_turn');
+    assert.equal(loadAgentRun(runId, cwd)?.status, 'completed');
+    assert.equal(loadAssignment(assignmentId, cwd)?.status, 'completed');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released');
+    assert.equal(getLoop(loopId, cwd)!.artifacts.filter((artifact) => artifact.type === 'verdict').length, 1);
   });
 });
 

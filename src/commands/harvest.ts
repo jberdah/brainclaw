@@ -26,12 +26,10 @@ import { commitWorktreeOnBehalf, worktreesBaseDir, resolveGitToplevel } from '..
 import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult, type ReviewLoopNextTurn } from '../core/review-loop-close.js';
 import { closeIdeationLoopFromLaneResult } from '../core/ideation-loop-close.js';
 import { dispatchReviewLoopTurn, turnOwnedLoopEnabled } from '../core/review-loop-turn-dispatch.js';
-import { reconcileTurn, type ReconcileTurnResult } from '../core/loops/reconcile-turn.js';
-import { findReservationByAssignmentId, type TurnReservation } from '../core/loops/attempt-reservation.js';
-import { resolveTurnGenerationChain } from '../core/loops/attempt-generations.js';
+import { reconcileTurnOwnedLane, turnOwnedLaneEvidence, type ReconcileTurnResult, type TurnOwnedLaneEvidence } from '../core/loops/reconcile-turn.js';
+import type { TurnReservation } from '../core/loops/attempt-reservation.js';
 import { getLoop } from '../core/loops/store.js';
 import { phasePolicy } from '../core/loops/kind-policies.js';
-import { readCompletionSignals } from '../core/runtime-signals.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
 import { toWarningDetail } from '../core/warnings.js';
 import type { WarningDetail } from '../core/facade-schema.js';
@@ -68,59 +66,6 @@ import { harvestHarnessObservation } from '../core/harness-adapters/index.js';
  * double-spawn; and a sentinel that lands after a legacy close makes a later reconcile a
  * terminal-loop idempotent no-op.
  */
-interface TurnOwnedLaneEvidence {
-  reservation: TurnReservation;
-  nonce?: string;
-  contract_hash?: string;
-  capability_snapshot_hash?: string;
-}
-
-function turnOwnedLaneEvidence(lane: LaneResult, cwd: string): TurnOwnedLaneEvidence | undefined {
-  const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
-  if (!reservation) return undefined; // legacy lane (no reservation)
-  const chain = resolveTurnGenerationChain(cwd, reservation.turn_id);
-  const completion = readCompletionSignals(
-    cwd,
-    reservation.child_ids.assignment_id,
-    chain?.latest_generation.run_id,
-  ).completed;
-  const nonce = lane.nonce ?? completion?.nonce;
-  if (!nonce && !reservation.execution_contract_ref) return undefined;
-  return {
-    reservation,
-    nonce,
-    contract_hash: lane.execution_contract_hash ?? completion?.contract_hash,
-    capability_snapshot_hash: lane.capability_snapshot_hash ?? completion?.capability_snapshot_hash,
-  };
-}
-
-function reconcileTurnOwnedLane(
-  lane: LaneResult,
-  cwd: string,
-  evidence?: TurnOwnedLaneEvidence,
-): { reservation: TurnReservation; result: ReconcileTurnResult } | undefined {
-  const ev = evidence ?? turnOwnedLaneEvidence(lane, cwd);
-  if (!ev) return undefined; // legacy lane OR no turn-keyed evidence — caller runs the legacy path
-  const { reservation, nonce } = ev;
-  const enrichedLane: LaneResult = {
-    ...lane,
-    turn_id: lane.turn_id ?? reservation.turn_id,
-    run_id: lane.run_id ?? reservation.child_ids.run_id,
-    nonce,
-    execution_contract_hash: lane.execution_contract_hash ?? ev.contract_hash,
-    capability_snapshot_hash: lane.capability_snapshot_hash ?? ev.capability_snapshot_hash,
-  };
-  const loop = getLoop(reservation.loop_id, cwd);
-  const critiques = loop?.kind === 'ideation'
-    && reservation.phase === 'critique'
-    && lane.artifact_type === 'critique'
-    && (lane.body ?? '').trim().length > 0
-    ? [{ body: lane.body!.trim() }]
-    : undefined;
-  const result = reconcileTurn({ turn_id: reservation.turn_id, lane: enrichedLane, cwd, critiques });
-  return { reservation, result };
-}
-
 /**
  * Map a `reconcileTurn` result onto the `ReviewLoopCloseResult` shape harvest records for
  * observability (entry.review_loop / CLI). No keep_claim / next_turn: the request_changes

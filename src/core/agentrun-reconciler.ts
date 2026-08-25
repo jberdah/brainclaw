@@ -46,7 +46,7 @@ import { findReservationByRunId, evidenceMatchesAttempt, launchGrant, revokeLaun
 import type { TurnReservation } from './loops/attempt-reservation.js';
 import { executionContractForGeneration } from './loops/attempt-authority.js';
 import { readLaunchDecision, resolveTurnGenerationChain } from './loops/attempt-generations.js';
-import { reconcileFailedTurn } from './loops/reconcile-turn.js';
+import { reconcileFailedTurn, reconcileLaneResultForRun } from './loops/reconcile-turn.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -89,6 +89,7 @@ const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
 
 export type ReconcileAction =
   | 'no_op'
+  | 'reconciled_turn'
   | 'health_check_unverified'
   | 'inferred_completed'
   | 'inferred_failed'
@@ -173,6 +174,37 @@ export interface ReconcileOptions {
   limit?: number;
   /** Minimum age for selecting dead-pid sweep candidates; failure still uses staleAfterMs. */
   deadPidSweepCandidateAgeMs?: number;
+}
+
+/** Shared business-result bridge for every lazy AgentRun read path. */
+function reconcileOwnedLaneResultAtRead(
+  run: AgentRun,
+  evidence: ReconcileEvidence,
+  cwd: string | undefined,
+  actor: string,
+): ReconcileResult | undefined {
+  if (!evidence.turn_owned) return undefined;
+  const lane = reconcileLaneResultForRun(run, cwd ?? process.cwd(), actor);
+  if (!lane.found) return undefined;
+  if (!lane.valid || !lane.result?.reconciled) {
+    return {
+      run_id: run.id,
+      action: 'health_check_unverified',
+      reason: `lane_result_withheld: ${lane.reason}`,
+      evidence,
+      previous_status: run.status,
+      current_status: run.status,
+    };
+  }
+  const after = loadAgentRun(run.id, cwd) ?? run;
+  return {
+    run_id: run.id,
+    action: 'reconciled_turn',
+    reason: `lane_result_reconciled: ${lane.reason}`,
+    evidence,
+    previous_status: run.status,
+    current_status: after.status,
+  };
 }
 
 // ── Process liveness ───────────────────────────────────────────────────────
@@ -644,6 +676,15 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
 
   const previous_status = run.status;
   const evidence = collectEvidence(run, cwd, { nowMs: options.nowMs });
+  const actor = options.actor ?? 'reconciler';
+
+  // pln#692 P0 — LANE-RESULT is the worker's business outcome, not merely a
+  // process-liveness hint. Reconcile it before the terminal-run short circuit
+  // and before generic sentinel completion so a replay heals every projection
+  // (slot, assignment, run, claim) and malformed/foreign results cannot leave
+  // only the run marked completed.
+  const laneResult = reconcileOwnedLaneResultAtRead(run, evidence, cwd, actor);
+  if (laneResult) return laneResult;
 
   // Never touch terminal runs — they already converged.
   if (TERMINAL_STATUSES.has(run.status)) {
@@ -685,8 +726,6 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
 
   const grace = options.healthCheckGraceMs ?? DEFAULT_HEALTH_CHECK_GRACE_MS;
   const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
-  const actor = options.actor ?? 'reconciler';
-
   // Below grace window: too early to draw any conclusion. Caller should
   // re-poll later.
   if (evidence.age_ms < grace) {
@@ -932,6 +971,9 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   }
 
   const evidence = collectEvidence(run, cwd, { nowMs: options.nowMs });
+  const actor = options.actor ?? 'reconciler';
+  const laneResult = reconcileOwnedLaneResultAtRead(run, evidence, cwd, actor);
+  if (laneResult) return laneResult;
   if (run.status !== 'running') {
     return {
       run_id: run.id, action: 'no_op', reason: `run status is ${run.status}, not running`,
@@ -939,7 +981,6 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
     };
   }
 
-  const actor = options.actor ?? 'reconciler';
   const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
   const heartbeatStale = options.heartbeatStaleMs ?? DEFAULT_HEARTBEAT_STALE_MS;
 
