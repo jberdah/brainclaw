@@ -38,6 +38,8 @@ import {
   artifactEvidenceDigest,
   attachContinuationActionRequired,
   ensureContinuation,
+  deriveWorkerReplyContract,
+  evaluatePhaseAdvanceGate,
   type LoopEvent,
   type LoopThread,
   type ContinuationRecord,
@@ -221,6 +223,7 @@ function errorResponse(
   message: string,
   durationMs: number,
   result: unknown = null,
+  nextActions: NextAction[] = [],
 ): HandleBclawLoopResult {
   return {
     response: {
@@ -232,8 +235,73 @@ function errorResponse(
       warnings: [],
       error: `${code}: ${message}`,
       duration_ms: durationMs,
+      ...(nextActions.length > 0 ? { next_actions: nextActions } : {}),
     },
     summary: `✘ bclaw_loop[${intent}] ${code}: ${message}`,
+  };
+}
+
+function continuationUnavailableDiagnostic(loop: LoopThread, cwd?: string): {
+  result: Record<string, unknown>;
+  next_actions: NextAction[];
+} {
+  const phase = loop.phases.find((candidate) => candidate.name === loop.current_phase);
+  const gate = phase?.advance_gate;
+  const gateOutcome = evaluatePhaseAdvanceGate(loop, gate, cwd);
+  const contract = deriveWorkerReplyContract(loop);
+  const blockers: string[] = [];
+  const probableCauses: string[] = [];
+  const nextActions: NextAction[] = [];
+
+  if (!gateOutcome.advance && gateOutcome.gate_reason) blockers.push(gateOutcome.gate_reason);
+  const assigned = loop.slots.filter((slot) => slot.status === 'assigned' && slot.assignment_id);
+  const open = loop.slots.filter((slot) =>
+    slot.status === 'open'
+    && !(loop.kind === 'ideation' && loop.current_phase === 'critique' && slot.role === 'champion'),
+  );
+  if (assigned.length > 0) {
+    probableCauses.push('one or more dispatched worker results have not converged into gate evidence');
+    for (const slot of assigned) {
+      nextActions.push({
+        tool: 'bclaw_find',
+        args: { entity: 'agent_run', filter: { assignment_id: slot.assignment_id, limit: 10 } },
+        when: `reconcile and inspect the AgentRun projection for slot ${slot.slot_id}`,
+      });
+    }
+  }
+  for (const slot of open) {
+    probableCauses.push(`slot ${slot.slot_id} has not been dispatched`);
+    nextActions.push({
+      tool: 'bclaw_loop',
+      args: { intent: 'turn', loop_id: loop.id, slot_id: slot.slot_id, input: loop.goal ?? loop.title, dispatch: true },
+      when: `dispatch open slot ${slot.slot_id}`,
+    });
+  }
+
+  if (loop.kind === 'ideation') {
+    const draft = [...loop.artifacts].reverse().find((artifact) => artifact.type === 'plan_draft');
+    if (!draft) blockers.push('no attested plan_draft artifact is available for continuation');
+    if ((loop.linked?.plan_ids?.length ?? 0) === 0) blockers.push('the source loop is not linked to a plan');
+    if ((loop.linked?.sequence_ids?.length ?? 0) !== 1) blockers.push('the source loop must link exactly one implementation sequence');
+  } else if (loop.kind === 'implementation') {
+    const handoff = [...loop.artifacts].reverse().find((artifact) => artifact.type === 'handoff' && artifact.ref);
+    if (!handoff) blockers.push('no attested handoff with a reviewable ref is available');
+  }
+
+  return {
+    result: {
+      loop_id: loop.id,
+      phase: loop.current_phase,
+      gate: {
+        expected: contract?.requirements ?? (gate ? [gate] : []),
+        observed: gateOutcome.gate_reason ?? 'gate satisfied or no phase gate',
+        passed: gateOutcome.advance,
+      },
+      blockers: [...new Set(blockers)],
+      probable_causes: [...new Set(probableCauses)],
+      next_actions: nextActions,
+    },
+    next_actions: nextActions,
   };
 }
 
@@ -978,11 +1046,14 @@ export async function handleBclawLoop(options: HandleBclawLoopOptions): Promise<
         const actions = proposedPipelineActions(source, options.cwd);
         const action = actions[req.action_index];
         if (!action) {
+          const diagnostic = continuationUnavailableDiagnostic(source, options.cwd);
           return errorResponse(
             'continue',
             'continuation_unavailable',
-            `no executable continuation action ${req.action_index} for ${source.id}`,
+            `no executable continuation action ${req.action_index} for ${source.id}; inspect gate/blockers and execute the supplied recovery actions`,
             Date.now() - startMs,
+            diagnostic.result,
+            diagnostic.next_actions,
           );
         }
         const sourceArtifactId = (action.args?.linked as { source_artifact_id?: string } | undefined)?.source_artifact_id;

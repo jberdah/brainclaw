@@ -12,6 +12,7 @@
  * @module
  */
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { buildClaimEnvPrefix } from '../core/execution-profile.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
 import {
@@ -32,6 +33,7 @@ import { nowISO } from '../core/ids.js';
 import { validateMcpField } from '../core/input-validation.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
+import { DEFAULT_PROTOCOLS } from '../core/loops/types.js';
 import { validateLoopProjectResolution, type LoopProjectResolved } from '../core/loops/project-resolution.js';
 import { coordinateNextActions, dispatchNextActions } from '../core/next-actions.js';
 import {
@@ -455,6 +457,98 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     );
   }
   const effectiveAutoExecute = isCrossProject ? false : req.autoExecute;
+
+  // pln#692 P0 — an explicit checkout ref is part of admission, not worktree
+  // creation. Validate it before releasing a reroute predecessor (and before
+  // every other worktree-producing mutation). A claim id is not a Git ref.
+  const refCreatesWorktree = ['assign', 'review', 'reroute'].includes(req.intent)
+    || (req.intent === 'ideate' && Array.isArray(req.targetAgents) && req.targetAgents.length > 0 && req.preset !== 'bootstrap');
+  if (req.ref && refCreatesWorktree && !isCrossProject) {
+    const refCheck = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${req.ref}^{commit}`], {
+      cwd: dispatchCwd, encoding: 'utf8', windowsHide: true,
+    });
+    if (refCheck.status !== 0) {
+      return {
+        response: createToolErrorResponse(
+          'invalid_dispatch_ref',
+          `dispatch admission refused before mutation: ref "${req.ref}" does not resolve to a commit`,
+          {
+            ref: req.ref,
+            blocker: 'worktree base must be a valid commit, branch, or tag',
+            next_actions: [{
+              tool: 'bclaw_coordinate',
+              args: { intent: req.intent, task: req.task, scope: req.scope, targetAgents: req.targetAgents },
+              when: 'retry without ref to use HEAD, or supply a Git ref that resolves to a commit',
+            }],
+          },
+        ),
+      };
+    }
+  }
+
+  // pln#692 P0 — admission must prove that a multi-agent ideation request can
+  // satisfy the first worker-produced phase gate BEFORE openLoop (or any
+  // identity/claim/assignment mutation). The default critique phase requires
+  // three distinct critique artifacts, so accepting one executable critic
+  // creates a loop that cannot converge without manual artifact injection.
+  if (req.intent === 'ideate'
+      && req.preset !== 'bootstrap'
+      && Array.isArray(req.targetAgents)
+      && req.targetAgents.length > 0) {
+    const critiquePhase = DEFAULT_PROTOCOLS.ideation.phases.find((phase) => phase.name === 'critique');
+    const gate = critiquePhase?.advance_gate;
+    const requiredCritics = gate?.kind === 'min_artifacts_by_type' ? gate.n : 0;
+    const uniqueTargets = [...new Set(req.targetAgents)];
+    const checks = uniqueTargets.map((agent) => ({
+      agent,
+      check: validateAgentForDispatch(agent, { requireSpawnable: true }),
+    }));
+    const executableTargets = checks.filter(({ check }) => check.valid).map(({ agent }) => agent);
+    const invalidTargets = checks.filter(({ check }) => !check.valid).map(({ agent, check }) => ({
+      agent,
+      code: check.code,
+      reason: check.reason,
+    }));
+    if (requiredCritics > 0 && executableTargets.length < requiredCritics) {
+      const availableTargets = getSpawnableAgents()
+        .map((profile) => profile.name)
+        .filter((agent, index, all) => agent !== senderAgent && all.indexOf(agent) === index)
+        .filter((agent) => validateAgentForDispatch(agent, { requireSpawnable: true }).valid);
+      const recoveryTargets = availableTargets.slice(0, requiredCritics);
+      const nextActions = recoveryTargets.length >= requiredCritics
+        ? [{
+            tool: 'bclaw_coordinate',
+            args: {
+              intent: 'ideate', task: req.task, scope: req.scope,
+              targetAgents: recoveryTargets, autoExecute: effectiveAutoExecute !== false,
+            },
+            when: `retry with at least ${requiredCritics} distinct executable critics`,
+          }]
+        : [{
+            tool: 'bclaw_context',
+            args: { kind: 'execution', includeAgentTooling: true },
+            when: `configure at least ${requiredCritics} spawnable critic identities before retrying`,
+          }];
+      return {
+        response: createToolErrorResponse(
+          'ideate_gate_capacity_unavailable',
+          `ideation admission refused before mutation: critique gate requires ${requiredCritics} distinct executable critic(s), observed ${executableTargets.length}`,
+          {
+            gate: { phase: 'critique', kind: gate?.kind, expected: requiredCritics, observed: executableTargets.length },
+            requested_targets: req.targetAgents,
+            executable_targets: executableTargets,
+            invalid_targets: invalidTargets,
+            blockers: [
+              ...(uniqueTargets.length < req.targetAgents.length ? ['duplicate target identities do not add executable capacity'] : []),
+              ...(invalidTargets.length > 0 ? ['one or more requested targets are not spawnable'] : []),
+              `missing executable critic capacity: ${requiredCritics - executableTargets.length}`,
+            ],
+            next_actions: nextActions,
+          },
+        ),
+      };
+    }
+  }
 
   // pln#521 P1 — project resolution gate. A review loop written into the wrong
   // store is worse than one that never opened: candidate, claim, assignment and
@@ -1459,6 +1553,33 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       return { response: createToolErrorResponse('not_found', `No active claim found for scope: ${req.scope ?? '(any)'}`) };
     }
     const oldClaim = activeClaims[0];
+    const newAgentName = resolvedAgents.find((a) => a !== oldClaim.agent) ?? resolvedAgents[0];
+    if (!newAgentName) {
+      return { response: createToolErrorResponse('reroute_target_unavailable', 'reroute requires a replacement target agent') };
+    }
+    // pln#692 P0 — validate the successor before releasing the predecessor.
+    // Previously an invalid target left the old claim released and the scope
+    // unowned, even though no replacement claim/assignment could be created.
+    const rerouteCheck = validateAgentForDispatch(newAgentName, { requireSpawnable: true });
+    if (!rerouteCheck.valid || !rerouteCheck.profile) {
+      return {
+        response: createToolErrorResponse(
+          'reroute_target_unavailable',
+          `reroute admission refused before mutation: ${newAgentName} is not executable (${rerouteCheck.code}: ${rerouteCheck.reason})`,
+          {
+            released_claim: null,
+            active_claim: oldClaim.id,
+            target: newAgentName,
+            blocker: { code: rerouteCheck.code, reason: rerouteCheck.reason },
+            next_actions: [{
+              tool: 'bclaw_coordinate',
+              args: { intent: 'reroute', task: req.task, scope: oldClaim.scope, targetAgents: getSpawnableAgents().map((agent) => agent.name) },
+              when: 'retry with a validated spawnable target',
+            }],
+          },
+        ),
+      };
+    }
     saveClaim({ ...oldClaim, status: 'released' as const, released_at: nowISO() }, dispatchCwd);
     appendAuditEntry({ actor: oldClaim.agent, action: 'release_claim', item_id: oldClaim.id, item_type: 'claim', scope: oldClaim.scope }, dispatchCwd);
     side_effects.push({ action: 'release', entity: 'claim', id: oldClaim.id });
@@ -1482,20 +1603,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       }
     }
 
-    const newAgentName = resolvedAgents.find((a) => a !== oldClaim.agent) ?? resolvedAgents[0];
     let newClaimId: string | undefined;
     if (newAgentName) {
-      // trp#51: validate target agent before creating a new claim.
-      const check = validateAgentForDispatch(newAgentName, { requireSpawnable: true });
-      if (!check.valid) {
-        pushStructuredWarning(warnings, warningDetails, agentValidationFailedWarning({
-          agent: newAgentName,
-          code: check.code,
-          reason: check.reason,
-        }));
-      }
-      const profile = check.profile;
-      if (check.valid && profile) {
+      const profile = rerouteCheck.profile;
+      if (profile) {
         ensureAgentRegisteredForDispatch(newAgentName, dispatchCwd);
         const rerouteClaimResult = createCoordinatorClaim({
           agent: newAgentName,
