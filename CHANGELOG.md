@@ -7,6 +7,18 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.6] — 2026-08-28
+
+### Fixed
+
+- **Implementation-loop binds preserve lane identity.** Multi-lane binds now
+  require one explicit, unique `slot.lane` per sequence lane and resolve
+  plan/step/scope data by lane instead of silently pairing slots by position.
+- **Implementation-loop inputs fail closed.** Unknown link keys and stop
+  conditions that reference phases outside the opened protocol are rejected;
+  the implementation-loop guide documents the complete open/dry-run/bind
+  contract and the absence of an `update` intent.
+
 ## [1.28.5] — 2026-08-28
 
 ### Fixed
