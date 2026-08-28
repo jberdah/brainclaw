@@ -87,9 +87,34 @@ function deriveBindings(loop: ReturnType<typeof getLoop>, sequenceId: string, cw
       `impl-bind lane/slot mismatch: sequence ${sequenceId} has ${lanes.length} lane(s) (${lanes.join(', ')}) but loop has ${loop.slots.length} slot(s); open one worker slot per lane`,
     );
   }
+  // A positional fallback is unsafe here: callers commonly attach a
+  // perspective to a slot, and silently pairing that perspective with a
+  // different alphabetically-sorted lane can invert the lane's scope policy.
+  // Single-lane sequences retain the historical default-slot convenience;
+  // multi-lane binds must carry an explicit, unique lane on every slot.
+  if (lanes.length > 1) {
+    const slotLanes = loop.slots.map((slot) => slot.lane?.trim() || '');
+    if (slotLanes.some((lane) => !lane)) {
+      throw new Error(
+        `impl-bind requires explicit slot.lane for every lane when binding multiple lanes (${lanes.join(', ')}); positional slot order is rejected to prevent lane permutation`,
+      );
+    }
+    const uniqueSlotLanes = new Set(slotLanes);
+    if (uniqueSlotLanes.size !== slotLanes.length || uniqueSlotLanes.size !== lanes.length) {
+      throw new Error(
+        `impl-bind requires one unique slot.lane per sequence lane; slots=${slotLanes.join(', ')}, lanes=${lanes.join(', ')}`,
+      );
+    }
+    const unknown = slotLanes.filter((lane) => !grouped.has(lane));
+    if (unknown.length > 0) {
+      throw new Error(
+        `impl-bind slot lane(s) not present in sequence ${sequenceId}: ${unknown.join(', ')}; expected ${lanes.join(', ')}`,
+      );
+    }
+  }
   const bindings: Record<string, SlotBinding> = {};
   loop.slots.forEach((slot, index) => {
-    const lane = lanes[index]!;
+    const lane = lanes.length > 1 ? slot.lane!.trim() : (slot.lane?.trim() || lanes[index]!);
     const items = grouped.get(lane)!;
     const scopes = [...new Set(items.map((item) => item.scope_hint?.trim()).filter((value): value is string => Boolean(value)))];
     bindings[slot.slot_id] = {
