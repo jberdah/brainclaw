@@ -13,7 +13,7 @@ code, never blocks `bclaw_work`, and degrades gracefully: if the index is
 missing or stale, every command says so via a freshness badge instead of
 returning silently wrong answers.
 
-The index lives under `.brainclaw/code-map/` (one JSONL shard per file, plus
+The index lives under `.brainclaw/code/` (one JSONL shard per file, plus
 named symbol/import indexes and a manifest). It is safe to delete; a refresh
 rebuilds it.
 
@@ -37,8 +37,10 @@ accepts `--json` for machine-readable output, and prints a `Freshness:` line.
 
 ### `brainclaw code-map status`
 
-Read-only. Reports whether the store exists, the freshness badge, and index
-stats (files indexed, nodes, edges). Never refreshes.
+Read-only. Reports whether the physical store path exists, whether a valid
+index is readable, the freshness badge, and index stats (files indexed, nodes,
+edges). `store_exists`, `index_exists`, and `index_manifest_exists` deliberately
+separate a directory containing job records from a usable index. Never refreshes.
 
 ```bash
 brainclaw code-map status
@@ -47,6 +49,7 @@ brainclaw code-map status
 ```
 Code Map status
   Store:    present
+  Index:    ready
   Root:     /workspace/apps/api
   Path:     /workspace/apps/api/.brainclaw/code
   Freshness: fresh
@@ -55,7 +58,7 @@ Code Map status
   Edges:    2410
 ```
 
-### `brainclaw code-map refresh [--changed | --all]`
+### `brainclaw code-map refresh [--changed | --all | --scope changed|all]`
 
 Rebuilds the index behind a per-project lock. Defaults to `--changed`.
 
@@ -63,6 +66,7 @@ Rebuilds the index behind a per-project lock. Defaults to `--changed`.
 |---|---|
 | `--changed` (default) | Re-parses files whose **content** changed (git status + file-hash diff) **and** any shard whose stored extractor-config / grammar / engine hashes no longer match the current ones (i.e. `stale_extractor` / `stale_grammar`). A config or grammar bump is therefore healed by this cheap path — not only by `--all`. Compaction is limited to git-proven deletes. |
 | `--all` | Enumerates every supported file, re-parses, and performs full orphan compaction (drops shards whose file is gone or now ignored). |
+| `--scope changed\|all` | Uses the same scope spelling as MCP. Existing `--changed` / `--all` flags remain supported. |
 
 If a live writer already holds the project lock, `refresh` **fails fast** with a
 clear status rather than blocking — it never stalls `bclaw_work`.
@@ -70,6 +74,7 @@ clear status rather than blocking — it never stalls `bclaw_work`.
 ```bash
 brainclaw code-map refresh            # changed (cheap, default)
 brainclaw code-map refresh --all      # full rebuild + compaction
+brainclaw code-map refresh --scope changed
 ```
 
 ### `brainclaw code-map find <query>`
@@ -126,11 +131,15 @@ all return a `freshness_badge`:
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `bclaw_code_status` | read | Active-session project store, freshness, index stats; `cascade=true` also follows the latest cascade job. Never refreshes. |
-| `bclaw_code_find` | read | Ranked symbol-index search (`query`, optional `limit`). Never refreshes. |
-| `bclaw_code_brief` | read | Reading brief for a symbol/path (`target`, optional `limit`, files capped at 12). Never refreshes. |
+| `bclaw_code_status` | read | Active-session or explicit `project` store/path/index diagnostics, freshness, stats, and latest refresh job; `cascade=true` also follows the latest cascade job. Never refreshes. |
+| `bclaw_code_find` | read | Ranked symbol-index search (`query`, optional `limit`/`project`). Never refreshes. |
+| `bclaw_code_brief` | read | Reading brief for a symbol/path (`target`, optional `limit`/`project`, files capped at 12). Never refreshes. |
 | `bclaw_code_export` | read | Bounded local subgraph around required `target`; direction/depth/node/edge caps, confidence filtering, and optional Mermaid projection. Never refreshes. |
-| `bclaw_code_refresh` | write | Rebuild the index. `scope` = `"changed"` (default) or `"all"`; MCP `cascade=true` starts a durable background job and returns immediately. |
+| `bclaw_code_refresh` | write | Accept a durable background rebuild and return immediately. `scope` = `"changed"` (default) or `"all"`; optional `project` targets a named/id/path project, and `cascade=true` spans a workspace. |
+
+Every MCP Code Map tool accepts the same optional `project` selector (project
+name, id, or workspace-relative path). It overrides the active session for that
+call without mutating the session.
 
 The read tools never trigger a parse — if `bclaw_code_status` /
 `bclaw_code_find` / `bclaw_code_brief` report `missing_index` or a stale badge,
@@ -186,9 +195,9 @@ reconciliation at the read path:
    file-hash diff vs the stored shards), so a stale index is always *visible*,
    never silently wrong.
 3. `refresh --changed` re-parses only the changed files (incremental); `--all` does
-   a full rebuild + orphan compaction. The one bounded background path is an
-   explicitly requested MCP monorepo cascade, whose durable progress is read
-   through `bclaw_code_status(cascade=true)`.
+   a full rebuild + orphan compaction. MCP refreshes are explicit durable jobs;
+   their progress is read through `bclaw_code_status` (or
+   `bclaw_code_status(cascade=true)` for a workspace cascade).
 4. `bclaw_work` nudges a refresh when the badge is `missing_index` or stale, so an
    agent knows to reconcile before trusting the map.
 
@@ -219,10 +228,12 @@ like any other directory.
 Both CLI and MCP status responses disclose the exact resolved project root and
 Code Map store path. The MCP response additionally includes `active_source`, the
 resolved project identity, the running server version, and the package version
-visible on disk. In a monorepo, compare these fields before concluding that an
-index is missing: a root store and a child store are intentionally distinct. If
-the versions differ, restart the MCP server; if the roots differ, select the
-intended project/session (or pass `cascade=true` at the workspace root).
+visible on disk. `store_exists` describes the physical directory;
+`index_exists` describes a valid readable manifest. In a monorepo, compare
+these fields before concluding that an index is missing: a root store and a
+child store are intentionally distinct. If the versions differ, restart the
+MCP server; if the roots differ, use `project="<name-or-path>"`, select the
+intended session project, or pass `cascade=true` at the workspace root.
 
 ### Cascading a multi-project workspace (`--cascade`)
 
@@ -242,9 +253,10 @@ double-indexing**, even when projects nest inside one another. `--cascade` is
 opt-in; without it, the root refresh keeps its single-tree behaviour (above), and
 single-project repos ignore the flag entirely.
 
-The CLI cascade stays synchronous. MCP `bclaw_code_refresh(cascade=true)` returns
-a durable `job_id` immediately, avoiding the client timeout that a large workspace
-can hit; follow it with `bclaw_code_status(cascade=true)`. Status reports completed
+The CLI cascade stays synchronous. Every MCP refresh returns a durable `job_id`
+immediately, avoiding client timeouts; follow a normal refresh with
+`bclaw_code_status(project=...)`, or a cascade with
+`bclaw_code_status(cascade=true)`. Status reports completed
 and total project counts, the project currently being indexed, and terminal
 outcomes. Successful rows are aggregated; only exceptions are named. A project
 with a valid empty index is labeled `no_eligible_files`, while lock contention and

@@ -379,11 +379,12 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_code_status',
-    description: 'Code Map status for the active session project: store presence, freshness badge, and index stats. Read-only; never refreshes. In a multi-project workspace, cascade=true adds per-child coverage plus progress/terminal diagnostics for the latest durable cascade job.',
+    description: 'Code Map status for the active session or explicit project: physical store-path presence, readable-index presence, exact resolution, freshness, stats, and latest durable refresh job. Read-only; never refreshes. In a multi-project workspace, cascade=true adds per-child coverage plus progress/terminal diagnostics for the latest durable cascade job.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Optional project name, id, or workspace-relative path. Overrides the active session project for this call.' },
         cascade: { type: 'boolean', description: 'Multi-project workspace recap: also report per-child store presence + freshness for every nested project. No-op outside a multi-project workspace.' },
       },
     },
@@ -395,6 +396,7 @@ export const MCP_READ_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Optional project name, id, or workspace-relative path. Overrides the active session project for this call.' },
         query: { type: 'string', description: 'Symbol or token to search for (e.g. "App", "useAuth", "dispatch").' },
         limit: { type: 'number', description: 'Max matches to return.' },
       },
@@ -408,6 +410,7 @@ export const MCP_READ_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Optional project name, id, or workspace-relative path. Overrides the active session project for this call.' },
         target: { type: 'string', description: 'Symbol name or file path to build a reading brief for.' },
         limit: { type: 'number', description: 'Max suggested files (hard-capped at 12 by the spec).' },
       },
@@ -421,6 +424,7 @@ export const MCP_READ_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Optional project name, id, or workspace-relative path. Overrides the active session project for this call.' },
         target: { type: 'string', description: 'Symbol name or source-file path whose impact to inspect.' },
         depth: { type: 'number', description: 'Maximum graph depth. 1 (default) returns direct dependents only; 2+ opts into transitives. Clamped to 4.' },
         limit: { type: 'number', description: 'Maximum rows in each dependent section and in naming suggestions. Clamped to 100.' },
@@ -435,6 +439,7 @@ export const MCP_READ_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Optional project name, id, or workspace-relative path. Overrides the active session project for this call.' },
         target: { type: 'string', description: 'Symbol name or source-file path around which to export a local subgraph.' },
         targetKind: { type: 'string', enum: ['symbol', 'file'], description: 'Optional explicit target kind; otherwise a source path is detected safely.' },
         direction: { type: 'string', enum: ['outgoing', 'incoming', 'both'], description: 'Which edge direction(s) to follow. Default: both.' },
@@ -454,6 +459,7 @@ export const MCP_READ_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Optional project name, id, or workspace-relative path. Overrides the active session project for this call.' },
         path: { type: 'string', description: 'Workspace-relative source file path (for example `src/app/App.tsx`).' },
         limit: { type: 'number', description: 'Maximum symbols to return; clamped to the hard cap of 200.' },
       },
@@ -465,11 +471,12 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_code_refresh',
-    description: 'Rebuild the Code Map index for the active session project. scope="changed" (default) reparses changed files; scope="all" does a full refresh + compaction. In a multi-project workspace, cascade=true starts a durable background job immediately; follow it with bclaw_code_status(cascade=true), which reports progress and terminal per-project diagnostics without an MCP timeout.',
+    description: 'Accept a durable background rebuild of the Code Map index for the active or explicit project and return immediately. scope="changed" (default) reparses changed files; scope="all" does a full refresh + compaction. Follow with bclaw_code_status, which reports progress and terminal diagnostics without an MCP timeout. In a multi-project workspace, cascade=true applies the same contract across nested projects.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Optional project name, id, or workspace-relative path. Overrides the active session project for this call.' },
         scope: { type: 'string', enum: ['changed', 'all'], description: 'changed (default) reparses changed files only; all does a full refresh with orphan compaction.' },
         cascade: { type: 'boolean', description: 'Multi-project cascade: refresh every nested brainclaw project + a child-scoped root store. No-op outside a multi-project workspace.' },
       },

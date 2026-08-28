@@ -8,6 +8,7 @@ import { resolveEffectiveCwd } from '../../../src/core/store-resolution.js';
 import { defaultConfig, saveConfig } from '../../../src/core/config.js';
 import { saveCurrentSession } from '../../../src/core/identity.js';
 import { executeMcpToolCall } from '../../../src/commands/mcp.js';
+import { latestCodeRefreshJob } from '../../../src/core/code-map/refresh-jobs.js';
 
 /**
  * Coupling test (1.10.0 merge): Code Map resolves its project via
@@ -19,7 +20,7 @@ import { executeMcpToolCall } from '../../../src/commands/mcp.js';
  */
 const cleanup: string[] = [];
 afterEach(() => {
-  while (cleanup.length > 0) fs.rmSync(cleanup.pop() as string, { recursive: true, force: true });
+  while (cleanup.length > 0) fs.rmSync(cleanup.pop() as string, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 function makeStore(dir: string, name: string, opts: Record<string, unknown> = {}): void {
@@ -129,5 +130,90 @@ describe('code-map ↔ monorepo resolution (F1 coupling)', () => {
     });
     const find = findOutcome.response.structuredContent as { matches: Array<{ name: string }> };
     assert.ok(find.matches.some((match) => match.name === 'switchedRoute'));
+  });
+
+  it('keeps an MCP bclaw_switch authoritative for the following Code Map call', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cm-real-switch-'));
+    cleanup.push(root);
+    makeStore(root, 'workspace', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    const child = path.join(root, 'apps', 'api');
+    makeStore(child, 'api');
+    fs.mkdirSync(path.join(child, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(child, 'src', 'route.ts'), 'export function switchedRoute() { return 7; }\n');
+    await new JsonlBackend().refresh({ cwd: child, scope: 'all' });
+
+    const sessionId = 'sess_code_map_real_switch';
+    const now = new Date().toISOString();
+    saveCurrentSession({
+      session_id: sessionId,
+      started_at: now,
+      last_seen_at: now,
+      agent: 'codex',
+      agent_id: 'agt_code_map_real_switch',
+      host_id: 'host_code_map_real_switch',
+    }, root);
+    const switched = await executeMcpToolCall({
+      name: 'bclaw_switch', args: { project: 'apps/api' }, cwd: root, connectionSessionId: sessionId,
+    });
+    assert.equal(switched.response.isError, false);
+    assert.equal(
+      (switched.response.structuredContent as { switched: boolean }).switched,
+      true,
+      JSON.stringify(switched.response.structuredContent),
+    );
+    assert.equal(switched.nextConnectionSessionId, sessionId);
+
+    const statusOutcome = await executeMcpToolCall({
+      name: 'bclaw_code_status', args: {}, cwd: root, connectionSessionId: switched.nextConnectionSessionId,
+    });
+    const status = statusOutcome.response.structuredContent as Record<string, unknown>;
+    assert.equal((status.resolution as { project_root: string }).project_root, path.resolve(child));
+    assert.equal((status.mcp_resolution as { active_source: string }).active_source, 'session');
+  });
+
+  it('lets Code Map status explicitly target a child without switching', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cm-explicit-'));
+    cleanup.push(root);
+    makeStore(root, 'workspace', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    const child = path.join(root, 'apps', 'api');
+    makeStore(child, 'api');
+    fs.mkdirSync(path.join(child, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(child, 'src', 'route.ts'), 'export const explicitRoute = 1;\n');
+    await new JsonlBackend().refresh({ cwd: child, scope: 'all' });
+
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_code_status', args: { project: 'apps/api' }, cwd: root,
+    });
+    const status = outcome.response.structuredContent as Record<string, unknown>;
+    assert.equal((status.resolution as { project_root: string }).project_root, path.resolve(child));
+    assert.equal((status.mcp_resolution as { active_source: string }).active_source, 'explicit');
+    assert.equal(status.index_exists, true);
+
+    const refresh = await executeMcpToolCall({
+      name: 'bclaw_code_refresh', args: { project: 'apps/api', scope: 'changed' }, cwd: root,
+    });
+    const accepted = refresh.response.structuredContent as Record<string, unknown>;
+    assert.equal(accepted.accepted, true);
+    assert.equal(accepted.root, path.resolve(child));
+    assert.deepEqual(
+      (accepted.next_actions as Array<{ args: Record<string, unknown> }>)[0]?.args,
+      { project: 'apps/api' },
+    );
+
+    const deadline = Date.now() + 60_000;
+    let job = latestCodeRefreshJob(child);
+    while (job && (job.status === 'queued' || job.status === 'running') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      job = latestCodeRefreshJob(child);
+    }
+    assert.equal(job?.status, 'completed', job?.error ?? 'refresh job did not complete');
+    while (job?.pid && Date.now() < deadline) {
+      try {
+        process.kill(job.pid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } catch {
+        break;
+      }
+    }
   });
 });

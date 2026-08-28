@@ -9,8 +9,9 @@
  * `freshness_badge`, locking the response shape for later sprints.
  */
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
-import { readManifest, readShard, storeExists } from './store.js';
+import { readManifest, readShard } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift, withFreshness } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext, type RelatedMemoryItem } from './query.js';
@@ -21,8 +22,9 @@ import { resolveTraversal, aggregateFind, aggregateBrief, type TraversalMode } f
 import { defaultMemoryReader } from './memory-reader.js';
 import { inspectNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
 import { latestCascadeRefreshJob, summarizeCascadeRefreshJob, type CascadeRefreshJobSummary } from './cascade-jobs.js';
+import { latestCodeRefreshJob, summarizeCodeRefreshJob, type CodeRefreshJobSummary } from './refresh-jobs.js';
 import { loadConfig } from '../config.js';
-import { codeMapDir } from './paths.js';
+import { codeMapDir, manifestPath } from './paths.js';
 import type { FreshnessBadge, FreshnessStatus, Manifest, ParseStatus, Span } from './types.js';
 
 // --- Input / output types (spec §8, §9) ---
@@ -43,14 +45,24 @@ export interface CodeStatusInput extends CodeBackendContext {
 
 export interface CodeStatusChild {
   path: string;
+  /** Physical `.brainclaw/code` directory exists. */
   store_exists: boolean;
+  /** A valid, readable Code Map manifest exists. */
+  index_exists: boolean;
+  /** A manifest file exists even if it is currently unreadable/invalid. */
+  index_manifest_exists: boolean;
   freshness: FreshnessStatus | 'missing_index';
   files_indexed: number | null;
   reason?: 'no_eligible_files';
 }
 
 export interface CodeStatus {
+  /** Physical `.brainclaw/code` directory exists. */
   store_exists: boolean;
+  /** A valid, readable Code Map manifest exists. */
+  index_exists: boolean;
+  /** A manifest file exists even if it is currently unreadable/invalid. */
+  index_manifest_exists: boolean;
   /** Exact paths used for this answer; lets operators compare CLI and MCP. */
   resolution: {
     project_root: string;
@@ -62,6 +74,8 @@ export interface CodeStatus {
     nodes: number;
     edges: number;
   } | null;
+  /** Latest detached single-project MCP refresh, including terminal outcome. */
+  refresh_job?: CodeRefreshJobSummary;
   /** Present only when `cascade` was requested in a multi-project workspace. */
   cascade?: {
     children: CodeStatusChild[];
@@ -328,9 +342,12 @@ function buildCascadeStatus(rootCwd?: string): NonNullable<CodeStatus['cascade']
   const discovery = inspectNestedProjects(root);
   const children: CodeStatusChild[] = discovery.projects.map((abs) => {
     const m = readManifest(abs);
+    const storePath = codeMapDir(abs);
     return {
       path: path.relative(root, abs).replace(/\\/g, '/') || '.',
-      store_exists: m ? true : storeExists(abs),
+      store_exists: fs.existsSync(storePath),
+      index_exists: m !== null,
+      index_manifest_exists: fs.existsSync(manifestPath(abs)),
       freshness: m ? m.freshness.status : 'missing_index',
       files_indexed: m ? m.stats.files_indexed : null,
       ...(m && m.stats.files_indexed === 0 ? { reason: 'no_eligible_files' as const } : {}),
@@ -374,9 +391,13 @@ export class JsonlBackend implements CodeQueryBackend {
       store_path: codeMapDir(projectRoot, input.preferredDirName),
     };
     const manifest = readManifest(input.cwd, input.preferredDirName);
+    const storePathExists = fs.existsSync(resolution.store_path);
+    const manifestFileExists = fs.existsSync(manifestPath(input.cwd, input.preferredDirName));
     const result: CodeStatus = manifest
       ? {
-        store_exists: true,
+        store_exists: storePathExists,
+        index_exists: true,
+        index_manifest_exists: true,
         resolution,
         freshness_badge: this.withHeadDrift(
           badge(manifest.freshness.status, {
@@ -393,7 +414,9 @@ export class JsonlBackend implements CodeQueryBackend {
         },
       }
       : {
-        store_exists: storeExists(input.cwd, input.preferredDirName),
+        store_exists: storePathExists,
+        index_exists: false,
+        index_manifest_exists: manifestFileExists,
         resolution,
         freshness_badge: badge('missing_index'),
         stats: null,
@@ -405,6 +428,8 @@ export class JsonlBackend implements CodeQueryBackend {
     if (input.cascade && isMultiProjectWorkspace(input.cwd)) {
       result.cascade = buildCascadeStatus(input.cwd);
     }
+    const latestRefresh = latestCodeRefreshJob(projectRoot);
+    if (latestRefresh) result.refresh_job = summarizeCodeRefreshJob(latestRefresh);
     return result;
   }
 

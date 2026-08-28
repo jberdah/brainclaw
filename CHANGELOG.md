@@ -7,6 +7,31 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.5] — 2026-08-28
+
+### Fixed
+
+- **Code Map MCP routing is explicit and session-stable.** Every Code Map tool
+  accepts an optional `project` selector, and a successful `bclaw_switch`
+  returns the owning session to the MCP connection so subsequent calls keep
+  targeting the selected project in multi-project workspaces.
+- **Code Map status reports what actually exists.** `store_exists` now describes
+  the physical `.brainclaw/code` path, while `index_exists` and
+  `index_manifest_exists` distinguish a readable index, a missing index, and an
+  invalid manifest. The exact resolved project and store path remain visible.
+- **Single-project MCP refreshes no longer consume the request timeout.** Like
+  cascades, they return a durable job acknowledgement immediately; status
+  exposes queued/running/completed/failed state and the terminal result.
+
+### Changed
+
+- **CLI/MCP refresh scope has a shared spelling.** The CLI keeps `--changed` and
+  `--all` and also accepts `--scope changed|all`, matching the MCP `scope`
+  argument.
+- **Refresh remains explicit.** Session start and reads do not auto-refresh:
+  stale-only guidance plus durable jobs avoids surprise CPU and lock pressure
+  while preserving a non-blocking path back to a fresh index.
+
 ## [1.28.4] — 2026-08-28
 
 ### Changed
