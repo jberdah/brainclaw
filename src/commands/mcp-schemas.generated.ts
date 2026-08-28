@@ -275,6 +275,11 @@ export const generatedSchemas = {
       "agent_id": {
         "type": "string"
       },
+      "perspective": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      },
       "assignment_id": {
         "type": "string"
       },
@@ -318,6 +323,14 @@ export const generatedSchemas = {
       },
       "current_turn_id": {
         "type": "string"
+      },
+      "last_completed_phase": {
+        "type": "string"
+      },
+      "last_completed_iteration": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
       }
     },
     "required": [

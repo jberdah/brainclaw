@@ -10,6 +10,8 @@ guarantees this changelog follows.
 
 ## [1.28.4] — 2026-08-28
 
+- MCP public surface fingerprint: `sha256:42cd662667260792`
+
 **Added — lane-result harvest parity**
 
 - `bclaw_harvest` is a new standard coordination write tool matching the CLI
@@ -473,12 +475,11 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:be86e5571fcd0226`
-  (updated 2026-08-24 for persisted continuation authority: additive
-  `bclaw_loop(intent="continue")` inputs `action_index`, `autonomy_mode`, and
-  `risk`; the intent evaluates an attested Ideation→Implementation action,
-  persists AUTO/REQUIRE_APPROVAL/DENY, and reuses the public open/bind path.)
-  Previous: `sha256:681c47cba85b79c3`
+- MCP public surface fingerprint: `sha256:42cd662667260792`
+  (updated 2026-08-28 for the additive `bclaw_harvest` surface, sequential
+  ideation controls, compact read projections, and loop-slot perspective and
+  completion fields.)
+  Previous: `sha256:be86e5571fcd0226`
   (`LoopSlotInput` gains optional `lane`, `scope_hint`, `plan_ids`, and
   `step_ids` fields so implementation-loop lane scope and provenance survive
   through the public facade. Existing callers remain valid.)
