@@ -854,10 +854,12 @@ const MCP_WRITE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        intent: { type: 'string', enum: ['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate'], description: 'Coordination intent. assign/review/reroute and multi-agent ideate spawn worker processes; consult/summarize do not. "assign" creates a claim per target agent and spawns a worker on the brief. "consult" delivers the brief to the target inbox(es) WITHOUT creating claims and WITHOUT spawning — targets pick it up via their own bclaw_work. "review" creates a review candidate (and, with open_loop, a review loop). "ideate" opens an ideation loop with the task as the proposal seed; with targetAgents it advances to critique and SPAWNS one worktree-isolated critic worker per target (autoExecute honored, pln#626 Phase 2), otherwise it opens the loop for the champion to drive manually. "reroute" releases the current claim and reassigns. "summarize" reads a thread and returns a summary.' },
+        intent: { type: 'string', enum: ['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate'], description: 'Coordination intent. assign/review/reroute and multi-agent ideate spawn worker processes; consult/summarize do not. "assign" creates a claim per target agent and spawns a worker on the brief. "consult" delivers the brief to the target inbox(es) WITHOUT creating claims and WITHOUT spawning — targets pick it up via their own bclaw_work. "review" creates a review candidate (and, with open_loop, a review loop). "ideate" opens an ideation loop with the task as the proposal seed; with targetAgents it advances to critique and, by default, starts one critic at a time. Set ideation_schedule="parallel" for immediate fan-out. "reroute" releases the current claim and reassigns. "summarize" reads a thread and returns a summary.' },
         task: { type: 'string', description: 'Brief or task description delivered to target agents. TRANSPORT NOTE (dec#133): a spawned worker\'s capabilities follow its invoke template, not the mere presence of "sandbox". A sandboxed codex worker (`--sandbox workspace-write`, `approval_policy=never`) CAN reach brainclaw MCP — the server runs out-of-sandbox and every tool call is auto-approved — so MCP lifecycle calls (`bclaw_assignment_update`, `bclaw_send_message`, …) do NOT hang. Its one real limit is that `.git` is read-only: it cannot `git commit`, so it must leave fixes uncommitted in the worktree and the coordinator integrates + commits the diff at harvest (never instruct such a worker to commit). Genuinely MCP-less agents (nanoclaw/nemoclaw/picoclaw/zeroclaw) have no MCP at all: for them, prefer file-based protocols (write findings/reply to a markdown file in the worktree; the coordinator harvests it and lifecycle-closes the assignment). See docs/integrations/<agent>.md for the per-agent capability matrix.' },
         scope: { type: 'string', description: 'File or feature scope. Used as claim scope for assign/reroute; as thread id for summarize if threadId is absent.' },
         targetAgents: { type: 'array', items: { type: 'string' }, description: 'Agent names to target. If omitted, all spawnable agents are used.' },
+        ideation_schedule: { type: 'string', enum: ['sequential', 'parallel'], description: 'For intent=ideate with targetAgents: sequential (default) starts only the first critic; after harvest, drive the next open critic with bclaw_loop turn dispatch=true. parallel starts all critics immediately.' },
+        criticPerspectives: { type: 'array', items: { type: 'string' }, description: 'Optional ideation instructions/lenses aligned positionally with targetAgents. If omitted, Brainclaw assigns distinct evidence, failure-mode, and alternative/trade-off lenses.' },
         constraints: { type: 'object', description: 'Optional structured constraints passed alongside the brief (e.g. deadline, reviewCriteria).' },
         threadId: { type: 'string', description: 'Thread ID for summarize intent.' },
         linked: {
@@ -870,7 +872,7 @@ const MCP_WRITE_TOOLS = [
           },
           additionalProperties: false,
         },
-        autoExecute: { type: 'boolean', description: 'Attempt to spawn target agents after delivery (default: true). Applies to the spawning intents assign/review/reroute AND to multi-agent ideate (with targetAgents, it spawns one worktree-isolated critic worker per target). consult is inbox-only and ignores autoExecute; summarize just reads a thread and ignores it. When false on a spawning intent, returns command_ready_manual with bash commands for the supervisor to run.' },
+        autoExecute: { type: 'boolean', description: 'Attempt to spawn target agents after delivery (default: true). Applies to the spawning intents assign/review/reroute and multi-agent ideate. Sequential ideation starts one critic; parallel ideation starts every critic. consult is inbox-only and ignores autoExecute; summarize just reads a thread and ignores it. When false on a spawning intent, returns command_ready_manual with commands for the supervisor to run.' },
         open_loop: { type: 'boolean', description: 'For intent=review only: also open a review Loop on top of the candidate (author + reviewer slots, advance to `findings`, dispatch turns). Default false — existing review callers are unaffected. See docs/concepts/loop-engine.md §Automation.' },
         review_mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Optional review Loop mode when open_loop=true. `asymmetric` (default) keeps the classical author→reviewer handoff; `symmetric` lets each reviewer turn also apply fixes directly, halving round-trips for spec/doc reviews. Ignored when open_loop is false.' },
         preflight: { type: 'boolean', description: 'pln#533: when open_loop=true, run a trivial validation spawn per reviewer agent BEFORE opening the loop so an environment death (config rejected, auth fail, model mismatch) surfaces instantly with a clear reason instead of a generic loop timeout. Reviewers that fail pre-flight are dropped (with a targeted warning); if all fail, loop creation is skipped. Default true; set false to skip (e.g. you already ran `brainclaw doctor --spawn-check`). Ignored when open_loop is false or BRAINCLAW_NO_SPAWN is set.' },
@@ -1005,6 +1007,24 @@ const MCP_WRITE_TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'bclaw_harvest',
+    description: 'Harvest worker LANE-RESULT.json envelopes into assignment/loop state. This is MCP parity for `brainclaw harvest` and is distinct from candidate-memory harvest. Use assignmentId for one lane or all=true; integrate=true also performs the CLI --integrate lifecycle. Repairable contract errors leave the loop slot replayable and are returned as warnings.',
+    annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assignmentId: { type: 'string', description: 'One Assignment whose lane result should be harvested.' },
+        all: { type: 'boolean', description: 'Scan every managed lane; mutually exclusive with assignmentId.' },
+        worktreePaths: { type: 'array', items: { type: 'string' }, description: 'Optional explicit worktrees to scan.' },
+        dryRun: { type: 'boolean', description: 'Report without writing state.' },
+        integrate: { type: 'boolean', description: 'Also lifecycle/commit-on-behalf like CLI --integrate.' },
+        agent: { type: 'string', description: 'Coordinator agent name.' },
+        agentId: { type: 'string', description: 'Registered coordinator agent id.' },
+      },
+      required: [],
+    },
+  },
   // ── Canonical CRUD verbs (Phase 3 / v1.0 grammar) ──────────────────
   // Promoted to `standard` tier at the v1.0 cut.
   {
@@ -1018,6 +1038,7 @@ const MCP_WRITE_TOOLS = [
         filter: { type: 'object', description: 'Filter keys (ANY entity): status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). ENTITY-SCOPED keys (rejected with a validation_error if used with any other entity): assignment_id, claim_id, message_id — ONLY for entity="agent_run"; scope ("project" default | "global", the latter unions the dispatchable catalog + adds dispatchable/registered) and includeReputation (bool — attaches a public reputation summary per agent) — ONLY for entity="agent". Unknown/mis-scoped keys are rejected loudly.' },
         project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
         budget_tokens: { type: 'number', description: 'Optional token budget for the page payload (~4 chars/token). Tightens the default size cap; pagination metadata (has_more/next_offset) still applies.' },
+        fields: { type: 'array', items: { type: 'string' }, description: 'Optional field projection for each row, e.g. ["id","status","created_at"].' },
       },
       required: ['entity'],
     },

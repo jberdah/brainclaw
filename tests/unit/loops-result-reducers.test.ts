@@ -43,9 +43,9 @@ describe('reviewReducer §6', () => {
     assert.equal(r.artifacts[0]!.body, 'changes-requested: fix X');
     assert.doesNotMatch(r.artifacts[0]!.body!.toLowerCase(), REVIEWER_GREEN_RE);
   });
-  it('completed lane with NO verdict → slot failed (no fake green)', () => {
+  it('completed lane with NO verdict → slot retryable (no fake green)', () => {
     const r = reviewReducer(input({ lane: lane({}) }), attempt);
-    assert.equal(r.slot_outcome, 'failed');
+    assert.equal(r.slot_outcome, 'retryable');
     assert.equal(r.artifacts.length, 0);
     assert.match(r.failure_reason!, /without a review_verdict/i);
   });
@@ -69,9 +69,9 @@ describe('ideationReducer §6', () => {
     assert.ok(r.artifacts.every((a) => a.type === 'critique'));
     assert.deepEqual(r.artifacts[1]!.addresses_critique, ['x']);
   });
-  it('bare summary, no critiques → slot failed, gate stays shut', () => {
+  it('bare summary, no critiques → slot retryable, gate stays shut', () => {
     const r = ideationReducer(input({ phase: 'critique', lane: lane({ artifact_type: 'critique' }), critiques: [] }), attempt);
-    assert.equal(r.slot_outcome, 'failed');
+    assert.equal(r.slot_outcome, 'retryable');
     assert.equal(r.artifacts.length, 0);
     assert.match(r.failure_reason!, /no critiques/i);
   });

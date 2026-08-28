@@ -282,6 +282,12 @@ per-phase memory filters. The shared controls are `open`, `turn`,
 implementation also adds `bind` and `verify`. `request_input` /
 `provide_input` are cross-cutting clarification primitives for any workflow.
 
+Ideation is sequential and conversational by default: critic B sees and
+challenges critic A's contribution, critic C sees both, then the champion
+revises and the ordered participants run another bounded round. The three
+critic slots may all use the same installed agent with distinct persisted
+perspectives; `ideation_schedule="parallel"` is an explicit fan-out option.
+
 Every worker-backed phase, across all five workflows, is launched from one
 immutable [execution contract](docs/concepts/execution-contract.md): exact
 identity, artifact expectations, workspace policy, capability snapshot and

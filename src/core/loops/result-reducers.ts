@@ -39,7 +39,7 @@ export interface NewLoopArtifact {
 
 export interface ReducerResult {
   artifacts: NewLoopArtifact[];
-  slot_outcome: 'done' | 'failed';
+  slot_outcome: 'done' | 'failed' | 'retryable';
   failure_reason?: string;
 }
 
@@ -73,11 +73,11 @@ export const reviewReducer: ResultReducer = (input, attempt) => {
   }
   if (phase === 'author_response') {
     if (lane.artifact_type !== 'author_response') {
-      return { artifacts: [], slot_outcome: 'failed', failure_reason: "review author_response requires artifact_type 'author_response'" };
+      return { artifacts: [], slot_outcome: 'retryable', failure_reason: "review author_response requires artifact_type 'author_response'" };
     }
     const response = (lane.body ?? '').trim();
     if (!response) {
-      return { artifacts: [], slot_outcome: 'failed', failure_reason: 'review author_response produced no body' };
+      return { artifacts: [], slot_outcome: 'retryable', failure_reason: 'review author_response produced no body' };
     }
     return {
       artifacts: [{ phase, type: 'author_response', body: capLoopArtifactBody(response), produced_by: attempt.agent }],
@@ -88,7 +88,7 @@ export const reviewReducer: ResultReducer = (input, attempt) => {
     return { artifacts: [], slot_outcome: 'failed', failure_reason: `review phase '${phase}' has no worker-result contract` };
   }
   if (!lane.review_verdict) {
-    return { artifacts: [], slot_outcome: 'failed', failure_reason: 'review lane completed without a review_verdict — cannot converge the loop' };
+    return { artifacts: [], slot_outcome: 'retryable', failure_reason: 'review lane completed without a review_verdict — cannot converge the loop' };
   }
   const summary = (lane.review_summary ?? '').trim();
   const body = capLoopArtifactBody(lane.review_verdict === 'approve'
@@ -117,23 +117,25 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
       return { artifacts: [], slot_outcome: 'failed', failure_reason: `ideation phase '${phase}' has no result contract` };
     }
     if (lane.artifact_type !== artifactType) {
-      return { artifacts: [], slot_outcome: 'failed', failure_reason: `ideation phase '${phase}' expected artifact_type '${artifactType}', got '${lane.artifact_type}'` };
+      return { artifacts: [], slot_outcome: 'retryable', failure_reason: `ideation phase '${phase}' expected artifact_type '${artifactType}', got '${lane.artifact_type}'` };
     }
     const body = (lane.body ?? lane.summary).trim();
-    if (!body) return { artifacts: [], slot_outcome: 'failed', failure_reason: `ideation ${phase} produced no body` };
+    if (!body) return { artifacts: [], slot_outcome: 'retryable', failure_reason: `ideation ${phase} produced no body` };
     if (artifactType === 'plan_draft') {
       const addresses = [
-        ...(lane.artifacts ?? []).filter((id) => /^art_[0-9a-z]+$/.test(id)),
+        ...(lane.artifacts ?? [])
+          .map((item) => typeof item === 'string' ? item : item.ref)
+          .filter((id) => /^art_[0-9a-z]+$/.test(id)),
         ...(critiques ?? []).flatMap((c) => c.addresses_critique ?? []),
       ];
       const uniqueAddresses = [...new Set(addresses)];
       if (uniqueAddresses.length === 0) {
-        return { artifacts: [], slot_outcome: 'failed', failure_reason: 'ideation synthesis must cite critique artifact ids in lane.artifacts' };
+        return { artifacts: [], slot_outcome: 'retryable', failure_reason: 'ideation synthesis must cite critique artifact ids in lane.artifacts' };
       }
       if (!lane.implementation_verify) {
         return {
           artifacts: [],
-          slot_outcome: 'failed',
+          slot_outcome: 'retryable',
           failure_reason: 'ideation synthesis must declare implementation_verify for deterministic downstream verification',
         };
       }
@@ -152,10 +154,10 @@ export const ideationReducer: ResultReducer = (input, attempt) => {
     return { artifacts: [{ phase, type: artifactType, body: capLoopArtifactBody(body), produced_by: attempt.agent }], slot_outcome: 'done' };
   }
   if (lane.artifact_type !== 'critique') {
-    return { artifacts: [], slot_outcome: 'failed', failure_reason: "ideation critique requires artifact_type 'critique'" };
+    return { artifacts: [], slot_outcome: 'retryable', failure_reason: "ideation critique requires artifact_type 'critique'" };
   }
   if (!critiques || critiques.length === 0) {
-    return { artifacts: [], slot_outcome: 'failed', failure_reason: 'ideation critique lane produced no critiques (bare summary) — gate stays shut' };
+    return { artifacts: [], slot_outcome: 'retryable', failure_reason: 'ideation critique lane produced no critiques (bare summary) — correct the lane result or replay this slot; gate stays shut' };
   }
   return {
     artifacts: critiques.map((c) => ({
@@ -198,7 +200,7 @@ function typedPhaseReducer(
     if (lane.artifact_type !== expectedType) {
       return {
         artifacts: [],
-        slot_outcome: 'failed',
+        slot_outcome: 'retryable',
         failure_reason: `${kind} phase '${phase}' expected artifact_type '${expectedType}', got '${lane.artifact_type}'`,
       };
     }
@@ -206,7 +208,7 @@ function typedPhaseReducer(
     // summary can never masquerade as a gate-driving repro or verify report.
     const body = (lane.body ?? lane.summary).trim();
     if (!body) {
-      return { artifacts: [], slot_outcome: 'failed', failure_reason: `${kind} phase '${phase}' produced no artifact body` };
+      return { artifacts: [], slot_outcome: 'retryable', failure_reason: `${kind} phase '${phase}' produced no artifact body` };
     }
     return {
       artifacts: [{ phase, type: expectedType, body: capLoopArtifactBody(body), produced_by: attempt.agent }],

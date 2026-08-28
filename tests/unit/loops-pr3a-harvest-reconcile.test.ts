@@ -17,6 +17,8 @@ import { ensureRuntimeDirs, writeCompletionSignal } from '../../src/core/runtime
 import { listRuntimeEvents } from '../../src/core/events.js';
 import { nowISO } from '../../src/core/ids.js';
 import type { Assignment, Claim, LaneResult } from '../../src/core/schema.js';
+import { addArtifactWithEvidence, turn } from '../../src/core/loops/verbs.js';
+import { computeNextExpected } from '../../src/core/loops/next-expected.js';
 
 /**
  * pln#630 PR3a — wire the exactly-once `reconcileTurn` into harvest for TURN-OWNED review
@@ -126,6 +128,62 @@ function seedLegacy(cwd: string, verdict: 'approve' | 'request_changes'): { loop
   const lane = { assignment_id: assignmentId, status: 'completed', summary: 'reviewed', review_verdict: verdict, review_summary: 'r' };
   fs.writeFileSync(getLaneResultPath(wt), JSON.stringify(lane));
   return { loopId, wt, assignmentId };
+}
+
+function seedRepairableThirdCritic(cwd: string): { loopId: string; assignmentId: string; wt: string } {
+  const loop = openLoop({
+    kind: 'ideation', title: 'repairable critique', created_by: 'coord',
+    phases: [
+      { name: 'critique', advance_gate: { kind: 'min_artifacts_by_type', type: 'critique', n: 3, scope: 'phase' } },
+      { name: 'revision' },
+    ],
+    stop_condition: { kind: 'max_iterations', n: 3 },
+    slots: [
+      { slot_id: 'lsl_c1', role: 'critic', agent: AGENT, phase: 'critique', status: 'done' },
+      { slot_id: 'lsl_c2', role: 'critic', agent: AGENT, phase: 'critique', status: 'done' },
+      { slot_id: 'lsl_c3', role: 'critic', agent: AGENT, phase: 'critique', status: 'open' },
+    ],
+  }, cwd);
+  for (const [slotId, body] of [['lsl_c1', 'critique one'], ['lsl_c2', 'critique two']] as const) {
+    addArtifactWithEvidence({
+      id: loop.id,
+      actor: AGENT,
+      evidence_context: { channel: 'complete_turn', producer_kind: 'slot', producer_id: AGENT, slot_id: slotId, slot_role: 'critic' },
+      artifact: { phase: 'critique', type: 'critique', body },
+    }, cwd);
+  }
+  const beforeTurn = getLoop(loop.id, cwd)!;
+  const turnId = deriveTurnId(loop.id, 'lsl_c3', 0);
+  const { assignment_id, run_id } = deriveChildIds(turnId);
+  reserve({
+    turn_id: turnId, loop_id: loop.id, slot_id: 'lsl_c3', target_slot_generation: 0,
+    loop_version_at_reserve: beforeTurn.version, agent: AGENT, claim_id: 'clm_x',
+    phase: 'critique', iteration: 0, store_root: cwd, cwd, lease_deadline: FUTURE(),
+    expected_artifacts: [{
+      logical_name: 'critique',
+      worker_path: 'LANE-RESULT.json',
+      loop_artifact_type: 'critique',
+      completion_policy: 'required',
+    }],
+  }, cwd);
+  commitReservation(turnId, cwd);
+  armLaunch(turnId, { token: 'gen-critique', epoch: 1, lease_deadline: FUTURE() }, cwd);
+  consumeLaunchGrant(turnId, 'gen-critique', 1, cwd);
+  const wt = wtDir();
+  seedClaim(cwd, 'clm_x', loop.id);
+  seedAssignment(cwd, assignment_id, loop.id, wt);
+  createAgentRun({
+    id: run_id, short_label: run_id, assignment_id, claim_id: 'clm_x', agent: AGENT,
+    transport: 'cli_spawn', scope: `ideate-loop:${loop.id}`, description: 'critic turn',
+    status: 'created', tags: ['turn-owned', 'ideation', 'loop'], worktree_path: wt,
+  }, cwd);
+  turn({ id: loop.id, slot_id: 'lsl_c3', actor: 'coord', assignment_id, claim_id: 'clm_x', turn_id: turnId }, cwd);
+  writeCompletionSignal(cwd, assignment_id, { turn_id: turnId, run_id, nonce: 'gen-critique', status: 'completed', at: 'test' });
+  fs.writeFileSync(getLaneResultPath(wt), JSON.stringify({
+    assignment_id, status: 'completed', summary: 'third critique', body: 'critique three',
+    artifacts: [{ type: 'file', ref: 'CRITIQUE.md', description: 'worker output' }],
+  }));
+  return { loopId: loop.id, assignmentId: assignment_id, wt };
 }
 
 const harvestedEvents = (cwd: string, runId: string) =>
@@ -346,6 +404,31 @@ describe('pln#692 P0 — lazy AgentRun reconciliation harvests LANE-RESULT autho
 describe('pln#644 — report path (harvestLaneResults) converges or warns, never silently stalls', () => {
   let cwd: string;
   beforeEach(() => { cwd = ws(); });
+
+  it('2/3 + repairable third result stays replayable, then corrected harvest advances with strict evidence', () => {
+    const { loopId, assignmentId, wt } = seedRepairableThirdCritic(cwd);
+    const first = harvestLaneResults({ assignmentId, worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const afterMalformed = getLoop(loopId, cwd)!;
+    assert.equal(afterMalformed.current_phase, 'critique');
+    assert.equal(afterMalformed.slots.find((slot) => slot.slot_id === 'lsl_c3')?.status, 'assigned');
+    assert.equal(loadAssignment(assignmentId, cwd)?.status, 'offered');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'active');
+    assert.match(first.warnings.map((warning) => warning.message).join('\n'), /repairable worker result|artifact_type='critique'/);
+
+    const next = computeNextExpected(afterMalformed);
+    assert.equal(next?.action, 'complete_turn');
+    assert.notEqual(next?.role, 'champion');
+
+    const repaired = JSON.parse(fs.readFileSync(getLaneResultPath(wt), 'utf8')) as Record<string, unknown>;
+    repaired.artifact_type = 'critique';
+    fs.writeFileSync(getLaneResultPath(wt), JSON.stringify(repaired));
+    harvestLaneResults({ assignmentId, worktreePaths: [wt], cwd, agent: 'coordinator' });
+    const converged = getLoop(loopId, cwd)!;
+    assert.equal(converged.current_phase, 'revision');
+    assert.equal(converged.artifacts.filter((artifact) => artifact.type === 'critique').length, 3);
+    assert.equal(loadAssignment(assignmentId, cwd)?.status, 'completed');
+    assert.equal(loadClaim('clm_x', cwd)?.status, 'released');
+  });
 
   it('counterfactual (2026-08-02 scenario) — keyless APPROVE lane + wrapper sentinel: plain report harvest CONVERGES the turn', () => {
     delete process.env.BRAINCLAW_TURN_OWNED_REVIEW; // shipped default: turn-owned ON

@@ -47,7 +47,7 @@ Every tool has one of three tiers in its `annotations.tier` field:
 - **standard** — Day-to-day coordination tools: plans, claims, messaging, sequences, dispatch, review, memory. Returned by default alongside facades.
 - **advanced** — Specialized governance, audit, registry, and power tools.
 
-By default, `tools/list` returns **facade + standard** tools (49 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
+By default, `tools/list` returns **facade + standard** tools (50 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
 
 Published tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 
@@ -101,6 +101,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_assignment_update` | coordination | Report assignment lifecycle status; v2 logical Assignments require the full generation fence and accept only accepted/started/progress before settlement |
 | `bclaw_assignment_action` | coordination | Resolve or reject a pending ActionRequired item |
 | `bclaw_harvest_candidates` | coordination | Harvest sandboxed worktree candidate files into the main project store |
+| `bclaw_harvest` | coordination | Harvest or integrate worker `LANE-RESULT.json` files, reconcile loop turns, and return the exact continuation |
 | `bclaw_find` | memory | List canonical entities with filters |
 | `bclaw_get` | memory | Fetch a canonical entity by id or short label |
 | `bclaw_create` | memory | Create a canonical entity |
@@ -403,11 +404,20 @@ bclaw_dispatch({ intent: 'review', openLoop: true, reviewMode: 'symmetric' })
 // synthesis are worker phases available through trusted turn(dispatch:true).
 bclaw_coordinate({ intent: 'ideate', task: 'Should we extract the dispatcher into a separate package?' })
 
-// Multi-agent ideation: critic gets a context-filtered, BM25-ranked brief auto-dispatched
+// Multi-instance ideation is sequential and multi-turn by default: each critic
+// sees the earlier contributions in its round. Repeated identities are valid.
 bclaw_coordinate({
   intent: 'ideate',
   task: 'Should we adopt approach A or approach B?',
-  targetAgents: ['codex'],
+  targetAgents: ['codex', 'codex', 'codex'],
+  criticPerspectives: ['assumptions/evidence', 'failure modes/recovery', 'alternatives/trade-offs'],
+})
+
+// Opt into independent immediate fan-out only when latency matters more than
+// cross-challenge and cost.
+bclaw_coordinate({
+  intent: 'ideate', task: 'Collect independent first impressions',
+  targetAgents: ['codex', 'codex', 'codex'], ideation_schedule: 'parallel',
 })
 
 // Open a direct implementation loop. The caller owns subsequent bind/turn

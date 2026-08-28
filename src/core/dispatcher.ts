@@ -37,7 +37,7 @@ import { buildClaimEnvPrefix } from './execution-profile.js';
 import { getActiveSequence, listSequences } from './sequence.js';
 import { loadState, persistState } from './state.js';
 import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
-import { sanitizeBranchComponent, isBranchMergedByContent, probeLocalBranch, isGitRepo } from './worktree.js';
+import { sanitizeBranchComponent, isBranchMergedByContent, probeLocalBranch, isGitRepo, detectWorkspaceNodeModules } from './worktree.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment } from './messaging.js';
 import { memoryDir } from './io.js';
@@ -507,7 +507,7 @@ export interface AttemptFenceBrief {
   workspace_digest: string;
 }
 
-export function laneResultShape(assignmentId?: string, contractRef?: ExecutionContractRef, fence?: AttemptFenceBrief): string {
+export function laneResultShape(assignmentId?: string, contractRef?: ExecutionContractRef, fence?: AttemptFenceBrief, artifactType?: string): string {
   const asgn = assignmentId ?? '<assignment_id>';
   const generation = fence
     ? `,"turn_id":"${fence.turn_id}","run_id":"${fence.run_id}","nonce":"${fence.nonce}","attempt_epoch":${fence.attempt_epoch},"workspace_digest":"${fence.workspace_digest}"`
@@ -515,11 +515,12 @@ export function laneResultShape(assignmentId?: string, contractRef?: ExecutionCo
   const contract = contractRef
     ? `,"execution_contract_hash":"${contractRef.hash}","capability_snapshot_hash":"${contractRef.snapshot_hash}"`
     : '';
-  return `{"assignment_id":"${asgn}"${generation}${contract},"status":"completed|blocked|failed","summary":"<one line>","body":"<your full output — the reasoning, not just a label>","files_changed":["..."],"artifacts":["..."]}`;
+  const artifact = artifactType ? `,"artifact_type":"${artifactType}"` : '';
+  return `{"assignment_id":"${asgn}"${generation}${contract},"status":"completed|blocked|failed","summary":"<one line>"${artifact},"body":"<your full output — the reasoning, not just a label>","files_changed":["..."],"artifacts":["<ref>",{"type":"file|commit|artifact","ref":"<path-or-id>","description":"<optional>"}]}`;
 }
 
-export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: string; executionContractRef?: ExecutionContractRef; attemptFence?: AttemptFenceBrief }): string {
-  const laneResult = `write LANE-RESULT.json at the worktree ROOT: ${laneResultShape(opts.assignmentId, opts.executionContractRef, opts.attemptFence)}`;
+export function buildTransportSection(opts: { hasMcp: boolean; assignmentId?: string; executionContractRef?: ExecutionContractRef; attemptFence?: AttemptFenceBrief; artifactType?: string }): string {
+  const laneResult = `write the terminal envelope at the worktree ROOT with the exact filename LANE-RESULT.json: ${laneResultShape(opts.assignmentId, opts.executionContractRef, opts.attemptFence, opts.artifactType)}. The filename is protocol-significant: do not translate it, replace the hyphen, add a suffix, or place it in a subdirectory. The artifacts array accepts either string refs or {type,ref,description} objects; for a loop turn, artifact_type is required exactly as shown`;
   const acceptance = opts.executionContractRef
     ? [
       `Execution contract: ${opts.executionContractRef.hash}`,
@@ -584,6 +585,8 @@ export function buildProtocolSection(options?: {
   worktreePath?: string;
   assignmentId?: string;
   attemptFence?: AttemptFenceBrief;
+  /** Required loop artifact type, rendered directly into LANE-RESULT.json. */
+  artifactType?: string;
 }): string {
   const parts: string[] = [];
 
@@ -597,8 +600,8 @@ export function buildProtocolSection(options?: {
   if (options?.worktreePath) {
     parts.push(`Worktree: ${options.worktreePath}`);
     // pln#523 / trp_37b05a15: tell the worker how dependencies are provisioned so
-    // it does not stall trying to (re)install them. The authoritative record is
-    // the worktree's `.brainclaw-worktree.json` → `deps_mode` (absent ⇒ `link`).
+    // it does not stall trying to (re)install them. The sidecar records intent,
+    // but the brief only claims availability after checking the worktree itself.
     //   - link (default): node_modules (incl. monorepo per-package) is
     //     junction-linked from the main repo — build/typecheck directly; do NOT
     //     `npm install`. An out-of-root symlink, so `next dev`/Turbopack rejects
@@ -606,25 +609,32 @@ export function buildProtocolSection(options?: {
     //   - install/copy: node_modules is a REAL in-root directory — everything,
     //     including a dev server, works directly; no reinstall needed.
     //   - none: no deps provisioned — run the project's install first.
-    let depsMode = 'link';
+    let depsMode: string | undefined;
     let depsProvisioned: boolean | undefined;
+    let recordedPaths: string[] = [];
     try {
       const sidecar = JSON.parse(
         fs.readFileSync(path.join(options.worktreePath, '.brainclaw-worktree.json'), 'utf-8'),
-      ) as { deps_mode?: string; deps_provisioned?: boolean };
-      if (sidecar.deps_mode) depsMode = sidecar.deps_mode;
+      ) as { deps_mode?: string; deps_provisioned?: boolean; deps_paths?: string[] };
+      depsMode = sidecar.deps_mode;
       depsProvisioned = sidecar.deps_provisioned;
-    } catch { /* sidecar absent/unreadable — assume the default `link` */ }
-    if ((depsMode === 'install' || depsMode === 'copy') && depsProvisioned === false) {
-      // Codex review P1: provisioning was ATTEMPTED but FAILED (best-effort, non-fatal).
-      // Do not claim node_modules is usable — tell the worker to install it.
-      parts.push(`Dependencies: in-root provisioning was attempted (deps_mode=${depsMode}) but FAILED — node_modules may be missing or incomplete. Run the project's install (npm/pnpm/yarn/bun) in the worktree before building; see .brainclaw-worktree.json symlink_warnings for the failure.`);
-    } else if (depsMode === 'install' || depsMode === 'copy') {
-      parts.push(`Dependencies: node_modules is a real in-root directory (deps_mode=${depsMode}) — build, typecheck, and dev server all work directly; do NOT reinstall. If anything is missing, see .brainclaw-worktree.json symlink_warnings.`);
+      recordedPaths = Array.isArray(sidecar.deps_paths) ? sidecar.deps_paths : [];
+    } catch { /* sidecar absent/unreadable — do not infer provisioning */ }
+    const detectedPaths = detectWorkspaceNodeModules(options.worktreePath)
+      .filter((relativePath) => fs.existsSync(path.join(options.worktreePath!, relativePath)));
+    const verifiedPaths = [...new Set([...recordedPaths, ...detectedPaths])]
+      .filter((relativePath) => fs.existsSync(path.join(options.worktreePath!, relativePath)));
+    if (verifiedPaths.length > 0 && (depsMode === 'install' || depsMode === 'copy')) {
+      parts.push(`Dependencies: verified in-root node_modules at ${verifiedPaths.join(', ')} (deps_mode=${depsMode}). Use the repository's local scripts/binaries; do NOT reinstall.`);
+    } else if (verifiedPaths.length > 0 && depsMode === 'link') {
+      parts.push(`Dependencies: verified node_modules at ${verifiedPaths.join(', ')} (deps_mode=link). Use the repository's local scripts/binaries; do NOT reinstall. These may be out-of-root links, so next dev/Turbopack can require deps_mode=install.`);
     } else if (depsMode === 'none') {
-      parts.push('Dependencies: none were provisioned (deps_mode=none) — run the project\'s install (npm/pnpm/yarn/bun) in the worktree before building.');
+      parts.push('Dependencies: none were provisioned (deps_mode=none). Do not invoke npx or any network-backed install unless the task explicitly authorizes it; report local validation as blocked when required tools are unavailable.');
     } else {
-      parts.push('Dependencies: node_modules is linked from the main repo (incl. monorepo per-package). Build/typecheck directly; if deps are missing, do NOT npm install here — see .brainclaw-worktree.json symlink_warnings and validate centrally. (Out-of-root symlink: next dev/Turbopack needs deps_mode=install.)');
+      const attempted = depsProvisioned === false && depsMode
+        ? ` Provisioning was attempted with deps_mode=${depsMode} but did not produce a usable node_modules tree.`
+        : '';
+      parts.push(`Dependencies: no node_modules directory was verified in this worktree.${attempted} Do not invoke npx or any network-backed install unless the task explicitly authorizes it; report local validation as blocked when required tools are unavailable. See .brainclaw-worktree.json symlink_warnings when present.`);
     }
   }
   parts.push('');
@@ -913,6 +923,8 @@ export interface DispatchBriefOptions {
   executionContractRef?: ExecutionContractRef;
   /** AttemptAuthority v2 generation fields required on worker mutations/evidence. */
   attemptFence?: AttemptFenceBrief;
+  /** Required loop artifact type, rendered directly into LANE-RESULT.json. */
+  artifactType?: string;
 }
 
 /** Character budget for the inlined context envelope — bounded by design
@@ -954,8 +966,8 @@ export function buildContextEnvelopeSection(cwd?: string): string {
   const clip = (text: string): string =>
     text.length > CONTEXT_ENVELOPE_ITEM_MAX_CHARS ? `${text.slice(0, CONTEXT_ENVELOPE_ITEM_MAX_CHARS - 1)}…` : text;
 
-  const constraints = newestFirst(state.active_constraints ?? []);
-  const traps = newestFirst(state.known_traps ?? []).slice(0, CONTEXT_ENVELOPE_TOP_K);
+  const constraints = newestFirst((state.active_constraints ?? []).filter((item) => item.status === 'active'));
+  const traps = newestFirst((state.known_traps ?? []).filter((item) => item.status === 'active')).slice(0, CONTEXT_ENVELOPE_TOP_K);
   const decisions = newestFirst(state.recent_decisions ?? []).slice(0, CONTEXT_ENVELOPE_TOP_K);
   if (constraints.length === 0 && traps.length === 0 && decisions.length === 0) return '';
 
@@ -1022,6 +1034,7 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
       worktreePath: options.worktreePath,
       assignmentId: options.assignmentId,
       attemptFence: options.attemptFence,
+      artifactType: options.artifactType,
     }));
   }
 

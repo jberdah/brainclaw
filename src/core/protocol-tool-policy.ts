@@ -70,6 +70,7 @@ export const MCP_HEADLESS_AUTO_TOOL_NAMES: string[] = [
   'bclaw_assignment_update',
   'bclaw_assignment_action',
   'bclaw_harvest_candidates',
+  'bclaw_harvest',
   'bclaw_find',
   'bclaw_get',
 ];

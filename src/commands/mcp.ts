@@ -122,6 +122,7 @@ import {
   handleBclawDeleteMemory,
   handleBclawUpdateMemory,
   handleBclawHarvestCandidates,
+  handleBclawHarvestLane,
   type McpWriteMemoryContext,
 } from './mcp-write-memory.js';
 // Admin / provisioning write handlers extracted in pln#622 PR4.
@@ -2097,6 +2098,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       return handleBclawHarvestCandidates(payload, writeMemoryCtx);
     }
 
+    if (name === 'bclaw_harvest') {
+      return await handleBclawHarvestLane(payload);
+    }
+
     // ── Canonical CRUD verbs (Phase 3 slice 3b) ──────────────────────
     //
     // Thin wrappers around src/core/entity-operations.ts. Behind
@@ -2210,6 +2215,16 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           };
         }
         const result = listEntities(entity, targetCwd, filter);
+        const requestedFields = Array.isArray(args.fields)
+          ? args.fields.filter((field): field is string => typeof field === 'string' && field.length > 0)
+          : [];
+        if (requestedFields.length > 0) {
+          result.items = result.items.map((item) => {
+            if (!item || typeof item !== 'object') return item;
+            const row = item as Record<string, unknown>;
+            return Object.fromEntries(requestedFields.filter((field) => row[field] !== undefined).map((field) => [field, row[field]]));
+          });
+        }
         // pln#491 — bound the payload (count is already capped by applyPaging;
         // this caps SIZE) so a verbose result set never overflows the MCP token
         // cap and silently pushes the agent to the CLI (trp#449). Advertises
@@ -2225,7 +2240,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           { tool: 'bclaw_get', args: { entity, id: '<id from items>', ...(args.project ? { project: args.project } : {}), ...(args.budget_tokens ? { budget_tokens: args.budget_tokens } : {}) }, when: 'to read one item in full' },
         ];
         if (bounded.has_more) {
-          nextActions.push({ tool: 'bclaw_find', args: { entity, filter: { ...filter, offset: bounded.next_offset }, ...(args.project ? { project: args.project } : {}), ...(args.budget_tokens ? { budget_tokens: args.budget_tokens } : {}) }, when: 'to fetch the next page' });
+          nextActions.push({ tool: 'bclaw_find', args: { entity, filter: { ...filter, offset: bounded.next_offset }, ...(requestedFields.length ? { fields: requestedFields } : {}), ...(args.project ? { project: args.project } : {}), ...(args.budget_tokens ? { budget_tokens: args.budget_tokens } : {}) }, when: 'to fetch the next page' });
         }
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.

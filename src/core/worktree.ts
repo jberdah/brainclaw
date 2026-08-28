@@ -1096,11 +1096,9 @@ export function createWorktree(
   // the dispatch brief can tell the worker the truth. A failed install/copy is
   // best-effort (non-fatal) but the worker must then install itself — the brief
   // must NOT claim "node_modules is real, do not reinstall" over a failure.
-  let depsProvisioned: boolean | undefined;
   if (provisionDeps) {
     const provisionWarnings = provisionWorktreeDeps(depsMode, mainWorktreePath, targetPath, nodeModulesPaths);
     symlinkWarnings.push(...provisionWarnings);
-    depsProvisioned = provisionWarnings.length === 0;
   } else if (depsMode === 'link') {
     // trp_37b05a15 (field report, Next.js 16 / Turbopack) — the node_modules link
     // brainclaw provisions is an out-of-worktree-root symlink to the main repo.
@@ -1120,6 +1118,16 @@ export function createWorktree(
       logger.warn(`[worktree] ${msg}`);
     }
   }
+
+  // Record observed availability, not only the requested provisioning mode.
+  // This is deliberately evaluated after link/install/copy so dispatch briefs
+  // cannot claim a main-repo dependency tree that never existed.
+  const depsPaths = [...new Set([
+    ...requested.filter(isNodeModulesPath),
+    ...detectWorkspaceNodeModules(targetPath),
+  ])]
+    .filter((relativePath) => fs.existsSync(path.join(targetPath, relativePath)));
+  const depsProvisioned = depsMode === 'none' ? false : depsPaths.length > 0;
 
   // NOTE: .brainclaw/ is intentionally NOT symlinked.
   // Symlinking .brainclaw/ causes hooks and session_start to trigger on the
@@ -1166,11 +1174,11 @@ export function createWorktree(
     // trp_37b05a15: how JS deps were provisioned (link junction / real install /
     // copy / none) — non-default modes are recorded so a worker/supervisor knows
     // whether node_modules is an out-of-root link (dev-server caveat) or in-root.
-    // `deps_provisioned` (install/copy only) records whether the in-root
-    // provisioning actually succeeded — false means best-effort failed and the
-    // worker must install itself (Codex review P1).
-    ...(depsMode !== 'link' ? { deps_mode: depsMode } : {}),
-    ...(depsProvisioned !== undefined ? { deps_provisioned: depsProvisioned } : {}),
+    // `deps_provisioned` and `deps_paths` record observed availability. They are
+    // emitted for link mode too: requested capacity is not executable capacity.
+    deps_mode: depsMode,
+    deps_provisioned: depsProvisioned,
+    deps_paths: depsPaths,
     // pln#523: surface any shared-path link failures (e.g. node_modules junction
     // that could not be created) so the worker / supervisor can see why a build
     // might fail, instead of an invisible degradation.

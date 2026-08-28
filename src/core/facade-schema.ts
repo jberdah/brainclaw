@@ -41,6 +41,16 @@ export const CoordinateRequestSchema = z.object({
   task: z.string(),
   scope: z.string().optional(),
   targetAgents: z.array(z.string()).optional(),
+  /**
+   * Ideation critic scheduling. The default is deliberately sequential: the
+   * loop still requires every critic artifact, but only the first open critic
+   * is dispatched initially and the driver takes the next real turn after
+   * harvest. Parallel fan-out remains available as an explicit throughput
+   * trade-off.
+   */
+  ideation_schedule: z.enum(['sequential', 'parallel']).optional().default('sequential'),
+  /** Optional per-slot lenses, positionally aligned with targetAgents. */
+  criticPerspectives: z.array(z.string().min(1).max(1000)).optional(),
   constraints: z.record(z.string(), z.unknown()).optional(),
   threadId: z.string().optional(),
   /** Optional pipeline provenance persisted when open_loop creates a loop. */

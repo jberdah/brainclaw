@@ -302,6 +302,14 @@ function dispatchReadTool(
       unseenEventCount = unseenEvents.length;
     }
 
+    const actionableNotificationTypes = new Set(['action', 'assignment', 'claim', 'plan', 'handoff', 'candidate', 'loop']);
+    const actionableNotifications = notifications
+      ? Object.fromEntries(Object.entries(notifications).filter(([key]) => actionableNotificationTypes.has(key.split(':').at(-1) ?? '')))
+      : undefined;
+    const actionableCount = actionableNotifications
+      ? Object.values(actionableNotifications).reduce((sum, count) => sum + count, 0)
+      : 0;
+
     return {
       content: [{ type: 'text', text: enrichedContent || 'No relevant memory found.' }],
       structuredContent: {
@@ -316,7 +324,14 @@ function dispatchReadTool(
           name: tool.name,
           type: tool.type,
         })),
-        ...(notifications ? { pending_notifications: notifications, unseen_event_count: unseenEventCount } : {}),
+        ...(notifications ? {
+          pending_notifications: {
+            actionable_count: actionableCount,
+            by_type: actionableNotifications ?? {},
+            telemetry_events_omitted: Math.max(0, (unseenEventCount ?? 0) - actionableCount),
+          },
+          unseen_event_count: unseenEventCount,
+        } : {}),
       },
     };
   }

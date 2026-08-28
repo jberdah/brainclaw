@@ -520,7 +520,7 @@ describe('P0C — exhaustive phase-aware reducers', () => {
       phase: 'reproduce',
       lane: { assignment_id: attempt.child_ids.assignment_id, status: 'completed', summary: 'I reproduced it' },
     }, attempt);
-    assert.equal(reduced.slot_outcome, 'failed');
+    assert.equal(reduced.slot_outcome, 'retryable');
     assert.equal(reduced.artifacts.length, 0);
     assert.match(reduced.failure_reason ?? '', /artifact_type 'repro'/);
   });

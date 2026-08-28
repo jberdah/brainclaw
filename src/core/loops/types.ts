@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 export const LOOP_ARTIFACT_BODY_MAX_BYTES = 4096;
+/** Ideation proposals are caller-authored task contracts, not worker summaries. */
+export const LOOP_PROPOSAL_BODY_MAX_BYTES = 32 * 1024;
 
 export const LOOP_KINDS = ['review', 'ideation', 'implementation', 'research', 'debug'] as const;
 export type LoopKind = (typeof LOOP_KINDS)[number];
@@ -159,6 +161,8 @@ export type LoopVerifyConfig = z.infer<typeof LoopVerifyConfigSchema>;
 
 export const LoopProtocolConfigSchema = z.object({
   review_mode: z.enum(REVIEW_MODES).optional(),
+  /** Whether ideation participants take ordered turns or fan out together. */
+  ideation_schedule: z.enum(['sequential', 'parallel']).optional(),
   iteration: LoopIterationSchema.optional(),
   /** pln#632 — engine-run verify command (opener-provided; makes command_green real). */
   verify: LoopVerifyConfigSchema.optional(),
@@ -191,6 +195,8 @@ export const LoopSlotSchema = z.object({
   role: z.string().min(1),
   agent: z.string().optional(),
   agent_id: z.string().optional(),
+  /** Stable point of view/instruction for this participant across rounds. */
+  perspective: z.string().min(1).max(1000).optional(),
   assignment_id: z.string().optional(),
   claim_id: z.string().optional(),
   phase: z.string().optional(),
@@ -209,6 +215,9 @@ export const LoopSlotSchema = z.object({
    * reusable slot. Additive; wired onto the dispatch path in a later PR.
    */
   current_turn_id: z.string().optional(),
+  /** Last successful contribution, used to rotate reusable slots each round. */
+  last_completed_phase: z.string().optional(),
+  last_completed_iteration: z.number().int().nonnegative().optional(),
 });
 export type LoopSlot = z.infer<typeof LoopSlotSchema>;
 
@@ -571,10 +580,13 @@ export const LoopArtifactSchema = z
     evidence: EvidenceEnvelopeSchema.optional(),
   })
   .superRefine((artifact, ctx) => {
-    if (artifact.body !== undefined && Buffer.byteLength(artifact.body, 'utf8') > LOOP_ARTIFACT_BODY_MAX_BYTES) {
+    const bodyLimit = artifact.type === 'proposal'
+      ? LOOP_PROPOSAL_BODY_MAX_BYTES
+      : LOOP_ARTIFACT_BODY_MAX_BYTES;
+    if (artifact.body !== undefined && Buffer.byteLength(artifact.body, 'utf8') > bodyLimit) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `LoopArtifact.body must be ≤ ${LOOP_ARTIFACT_BODY_MAX_BYTES} bytes; use a ref for larger content`,
+        message: `LoopArtifact.body must be ≤ ${bodyLimit} bytes; use a ref for larger content`,
         path: ['body'],
       });
     }

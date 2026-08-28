@@ -545,6 +545,7 @@ export async function dispatchReviewLoopTurn(
         attempt_epoch: turnEcho.attempt_epoch,
         workspace_digest: turnEcho.workspace_digest,
       } : undefined,
+      artifactType: phase === 'author_response' ? 'author_response' : 'verdict',
       cwd, // pln#638 PR-6b — the context envelope reads the store
     });
 

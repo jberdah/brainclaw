@@ -18,6 +18,7 @@
  * about future iterations or auto-close.
  */
 import type { LoopPhase, LoopSlot, LoopThread } from './types.js';
+import { evaluatePhaseAdvanceGate } from './verbs.js';
 
 export interface NextExpectedHint {
   action: 'turn' | 'complete_turn' | 'provide_input' | 'advance' | 'close';
@@ -29,6 +30,20 @@ export interface NextExpectedHint {
   from_phase?: string;
   to_phase?: string;
   blocking_on: string[];
+}
+
+/** Participants eligible to speak in the current phase. Ideation reuses the
+ * same durable slots across rounds: critics converse during critique, while
+ * the champion revises and synthesizes. Other protocols retain their legacy
+ * phase binding semantics. */
+function eligiblePhaseSlots(loop: LoopThread): LoopSlot[] {
+  if (loop.kind === 'ideation') {
+    if (loop.current_phase === 'critique') return loop.slots.filter((slot) => slot.role === 'critic');
+    if (loop.current_phase === 'proposal' || loop.current_phase === 'revision' || loop.current_phase === 'synthesis') {
+      return loop.slots.filter((slot) => slot.role === 'champion');
+    }
+  }
+  return loop.slots.filter((slot) => (slot.phase ?? loop.current_phase) === loop.current_phase);
 }
 
 export function computeNextExpected(loop: LoopThread): NextExpectedHint | null {
@@ -54,9 +69,7 @@ export function computeNextExpected(loop: LoopThread): NextExpectedHint | null {
     return null;
   }
 
-  const currentPhaseSlots: LoopSlot[] = loop.slots.filter(
-    (s) => (s.phase ?? loop.current_phase) === loop.current_phase,
-  );
+  const currentPhaseSlots = eligiblePhaseSlots(loop);
 
   const openSlots = currentPhaseSlots.filter((s) => s.status === 'open');
   if (openSlots.length > 0) {
@@ -83,6 +96,52 @@ export function computeNextExpected(loop: LoopThread): NextExpectedHint | null {
       role: assignedOrWorking[0].role,
       blocking_on: assignedOrWorking.map((s) => s.slot_id),
     };
+  }
+
+  // A completed ideation slot is reusable in the next phase/iteration. Pick
+  // the first participant that has not yet contributed to THIS round. This is
+  // what turns critique A → critique B → critique C → champion revision
+  // into an actual conversation instead of replaying slot A forever.
+  if (loop.kind === 'ideation') {
+    const awaitingRound = currentPhaseSlots.find((slot) =>
+      slot.status === 'done'
+      && (
+        slot.last_completed_phase !== loop.current_phase
+        || slot.last_completed_iteration !== loop.iteration_count
+      ),
+    );
+    if (awaitingRound) {
+      return {
+        action: 'turn',
+        intent: 'bclaw_loop.turn',
+        reason: 'next sequential participant in the current ideation round',
+        phase: loop.current_phase,
+        slot_id: awaitingRound.slot_id,
+        role: awaitingRound.role,
+        blocking_on: [awaitingRound.slot_id],
+      };
+    }
+  }
+
+  const currentPhase = loop.phases.find((phase) => phase.name === loop.current_phase);
+  const gate = evaluatePhaseAdvanceGate(loop, currentPhase?.advance_gate);
+  if (!gate.advance) {
+    // A failed/malformed worker result must lead back to a real evidence-bearing
+    // turn. Under strict evidence policy, add_artifact is audit-only and cannot
+    // satisfy the gate, so never suggest the champion/advance path here.
+    const replayable = currentPhaseSlots.filter((slot) => slot.status === 'failed');
+    const target = replayable[0] ?? currentPhaseSlots[0];
+    if (target) {
+      return {
+        action: 'turn',
+        intent: 'bclaw_loop.turn',
+        reason: `phase_gate_unmet: ${gate.gate_reason ?? 'required evidence is missing'}; replay a real slot turn (manual add_artifact does not count under strict evidence)`,
+        phase: loop.current_phase,
+        slot_id: target.slot_id,
+        role: target.role,
+        blocking_on: replayable.length > 0 ? replayable.map((slot) => slot.slot_id) : [target.slot_id],
+      };
+    }
   }
 
   const phaseNames: string[] = loop.phases.map((p: LoopPhase) => p.name);

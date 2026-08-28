@@ -7,6 +7,51 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.4] — 2026-08-28
+
+### Changed
+
+- **Ideation is an ordered conversation by default.** Critics now take
+  sequential, multi-turn rounds: each slot keeps a distinct perspective, sees
+  critiques already produced in the current round, challenges them, and is
+  reused after the champion's revision. Immediate fan-out remains available
+  through `ideation_schedule='parallel'`.
+- **Ideation capacity is instance-based, not identity-based.** The default
+  three-critique gate now accepts repeated spawnable targets such as
+  `['codex', 'codex', 'codex']`; every occurrence receives an isolated slot,
+  claim, worktree, assignment, and turn authority.
+- **Critique briefs require current-worktree evidence.** Project memory is
+  presented as an investigation lead rather than proof. Implementation
+  findings must cite a concrete path plus a line, symbol, assertion, or test
+  result, while unverified memory-backed concerns remain questions.
+- **Misnamed worker results recover safely.** Briefs state that
+  `LANE-RESULT.json` is an exact protocol filename. If a spawned agent still
+  renames it, status and harvest can recover one root-level, schema-valid JSON
+  result bound to the expected assignment; multiple candidates are refused as
+  ambiguous rather than guessed.
+- **Worker result repair is non-terminal.** A malformed but repairable result
+  leaves its slot, assignment, claim, and attempt available for corrected
+  re-harvest. Strict gates still require a real turn; manual artifact injection
+  cannot counterfeit completion.
+- **Memory-backed claims disclose lifecycle and verification.** Resolved traps
+  and inactive constraints no longer enter search/dispatch bundles. Decisions,
+  constraints, and traps may carry a replayable command/query, expectation,
+  observed outcome, verification date, and staleness window.
+- **Read surfaces are compact and current-first.** `bclaw_find` supports field
+  projection, projects a single oversized row instead of exceeding the budget,
+  sorts newest-first, and reports declared versus currently executable agents.
+  Work context summarizes actionable notifications instead of returning the
+  full telemetry histogram.
+
+### Added
+
+- **Lane-result harvest has MCP parity.** `bclaw_harvest` mirrors the documented
+  CLI report/integrate path, accepts both string and structured artifact refs,
+  and returns exact loop continuations after reconciliation.
+- **Dispatch progress uses durable signals.** Status reports canonical terminal
+  sentinels and treats stale explicit progress as stalled even when unrelated
+  filesystem activity or a live wrapper PID would otherwise look healthy.
+
 ## [1.28.3] — 2026-08-26
 
 The DGX monorepo reliability patch: Code Map cascades become durable and

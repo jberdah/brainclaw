@@ -130,6 +130,7 @@ function buildSlot(partial: Partial<LoopSlot> & { role: string }): LoopSlot {
     role: partial.role,
     agent: partial.agent,
     agent_id: partial.agent_id,
+    perspective: partial.perspective,
     assignment_id: partial.assignment_id,
     claim_id: partial.claim_id,
     phase: partial.phase,
@@ -138,6 +139,9 @@ function buildSlot(partial: Partial<LoopSlot> & { role: string }): LoopSlot {
     plan_ids: partial.plan_ids,
     step_ids: partial.step_ids,
     status: partial.status ?? 'open',
+    current_turn_id: partial.current_turn_id,
+    last_completed_phase: partial.last_completed_phase,
+    last_completed_iteration: partial.last_completed_iteration,
   };
 }
 

@@ -166,6 +166,7 @@ describe('worker reply contract — prose and action share one source', () => {
     assert.match(prose, /NON-EMPTY/i, 'an empty artifact no longer counts toward a gate — the worker must know');
     assert.match(prose, /4096 bytes/, 'the inline body cap must be stated');
     assert.match(prose, /"artifact_type":"critique"/, 'the LANE-RESULT fallback must pre-fill the exact type');
+    assert.match(prose, /filename exactly as `LANE-RESULT\.json`/, 'the protocol-significant filename must be explicit');
     assert.match(prose, /FROZEN for loop version 7/, 'the dispatch version must travel');
     assert.match(prose, /do not re-target a newer phase/, 'late-return guidance mirrors pln#639 BUG-2 attribution');
   });

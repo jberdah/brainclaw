@@ -12,6 +12,7 @@
  * @module
  */
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { buildClaimEnvPrefix } from '../core/execution-profile.js';
@@ -34,8 +35,7 @@ import { nowISO } from '../core/ids.js';
 import { validateMcpField } from '../core/input-validation.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
-import { DEFAULT_PROTOCOLS } from '../core/loops/types.js';
-import { capLoopArtifactBody } from '../core/loops/result-reducers.js';
+import { DEFAULT_PROTOCOLS, LOOP_PROPOSAL_BODY_MAX_BYTES } from '../core/loops/types.js';
 import { validateLoopProjectResolution, type LoopProjectResolved } from '../core/loops/project-resolution.js';
 import { coordinateNextActions, dispatchNextActions } from '../core/next-actions.js';
 import {
@@ -361,6 +361,33 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   }
   const req = parseResult.data;
 
+  // A proposal is the caller's task contract. Silently replacing its tail with
+  // memory changed the questions workers answered during DGX dogfooding. Keep
+  // the whole task or reject before mutation; never truncate it in-band.
+  if (req.intent === 'ideate') {
+    const taskBytes = Buffer.byteLength(req.task, 'utf8');
+    if (taskBytes > LOOP_PROPOSAL_BODY_MAX_BYTES) {
+      return {
+        response: createToolErrorResponse(
+          'ideate_task_too_large',
+          `ideation task is ${taskBytes} bytes; the lossless limit is ${LOOP_PROPOSAL_BODY_MAX_BYTES} bytes. Shorten it or attach a referenced artifact before retrying; no loop was created.`,
+          { task_bytes: taskBytes, task_limit_bytes: LOOP_PROPOSAL_BODY_MAX_BYTES, task_truncated: false },
+        ),
+      };
+    }
+    if (req.criticPerspectives) {
+      const targetCount = req.targetAgents?.length ?? 0;
+      if (targetCount === 0 || req.criticPerspectives.length !== targetCount) {
+        return {
+          response: createToolErrorResponse(
+            'ideate_perspective_count_mismatch',
+            `criticPerspectives must contain exactly one instruction per targetAgents entry (targets=${targetCount}, perspectives=${req.criticPerspectives.length}); no loop was created.`,
+          ),
+        };
+      }
+    }
+  }
+
   // pln#511 step 2 — preset selector validation. Presets are kind-
   // specific in v1: only intent='ideate' carries them. Unknown names
   // are rejected up-front against the registry so the handler never
@@ -507,8 +534,9 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   // pln#692 P0 — admission must prove that a multi-agent ideation request can
   // satisfy the first worker-produced phase gate BEFORE openLoop (or any
   // identity/claim/assignment mutation). The default critique phase requires
-  // three distinct critique artifacts, so accepting one executable critic
-  // creates a loop that cannot converge without manual artifact injection.
+  // three distinct critique artifacts. Capacity is therefore counted per
+  // requested critic INSTANCE, not per unique agent identity: each occurrence
+  // becomes an isolated slot with its own claim, worktree and turn authority.
   if (req.intent === 'ideate'
       && req.preset !== 'bootstrap'
       && Array.isArray(req.targetAgents)
@@ -516,23 +544,27 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     const critiquePhase = DEFAULT_PROTOCOLS.ideation.phases.find((phase) => phase.name === 'critique');
     const gate = critiquePhase?.advance_gate;
     const requiredCritics = gate?.kind === 'min_artifacts_by_type' ? gate.n : 0;
-    const uniqueTargets = [...new Set(req.targetAgents)];
-    const checks = uniqueTargets.map((agent) => ({
+    const checks = req.targetAgents.map((agent, instanceIndex) => ({
       agent,
+      instanceIndex,
       check: validateAgentForDispatch(agent, { requireSpawnable: true }),
     }));
     const executableTargets = checks.filter(({ check }) => check.valid).map(({ agent }) => agent);
-    const invalidTargets = checks.filter(({ check }) => !check.valid).map(({ agent, check }) => ({
+    const invalidTargets = checks.filter(({ check }) => !check.valid).map(({ agent, instanceIndex, check }) => ({
       agent,
+      instance_index: instanceIndex,
       code: check.code,
       reason: check.reason,
     }));
     if (requiredCritics > 0 && executableTargets.length < requiredCritics) {
       const availableTargets = getSpawnableAgents()
         .map((profile) => profile.name)
-        .filter((agent, index, all) => agent !== senderAgent && all.indexOf(agent) === index)
+        .filter((agent, index, all) => all.indexOf(agent) === index)
         .filter((agent) => validateAgentForDispatch(agent, { requireSpawnable: true }).valid);
-      const recoveryTargets = availableTargets.slice(0, requiredCritics);
+      const recoveryAgent = executableTargets[0] ?? availableTargets[0];
+      const recoveryTargets = recoveryAgent
+        ? Array.from({ length: requiredCritics }, () => recoveryAgent)
+        : [];
       const nextActions = recoveryTargets.length >= requiredCritics
         ? [{
             tool: 'bclaw_coordinate',
@@ -540,24 +572,23 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               intent: 'ideate', task: req.task, scope: req.scope,
               targetAgents: recoveryTargets, autoExecute: effectiveAutoExecute !== false,
             },
-            when: `retry with at least ${requiredCritics} distinct executable critics`,
+            when: `retry with at least ${requiredCritics} executable critic instances`,
           }]
         : [{
             tool: 'bclaw_context',
             args: { kind: 'execution', includeAgentTooling: true },
-            when: `configure at least ${requiredCritics} spawnable critic identities before retrying`,
+            when: 'configure at least one spawnable critic identity before retrying',
           }];
       return {
         response: createToolErrorResponse(
           'ideate_gate_capacity_unavailable',
-          `ideation admission refused before mutation: critique gate requires ${requiredCritics} distinct executable critic(s), observed ${executableTargets.length}`,
+          `ideation admission refused before mutation: critique gate requires ${requiredCritics} executable critic instance(s), observed ${executableTargets.length}`,
           {
             gate: { phase: 'critique', kind: gate?.kind, expected: requiredCritics, observed: executableTargets.length },
             requested_targets: req.targetAgents,
             executable_targets: executableTargets,
             invalid_targets: invalidTargets,
             blockers: [
-              ...(uniqueTargets.length < req.targetAgents.length ? ['duplicate target identities do not add executable capacity'] : []),
               ...(invalidTargets.length > 0 ? ['one or more requested targets are not spawnable'] : []),
               `missing executable critic capacity: ${requiredCritics - executableTargets.length}`,
             ],
@@ -844,6 +875,19 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     execution_reason?: string;
     failure_kind?: string;
     pid?: number;
+    command_file?: string;
+    command_bytes?: number;
+  };
+  const compactDeliveryEntry = (entry: CoordinateDeliveryEntry): CoordinateDeliveryEntry => {
+    if (!entry.command || entry.command.length <= 2048) return entry;
+    const dir = path.join(dispatchCwd, '.brainclaw', 'coordination', 'runtime', 'manual-commands');
+    fs.mkdirSync(dir, { recursive: true });
+    const ext = entry.shell === 'cmd' ? 'cmd' : 'sh';
+    const ref = entry.assignment_id ?? entry.message_id;
+    const commandFile = path.join(dir, `${ref}.${ext}`);
+    fs.writeFileSync(commandFile, entry.command, { encoding: 'utf8', mode: 0o600 });
+    const { command, ...rest } = entry;
+    return { ...rest, command_file: commandFile, command_bytes: Buffer.byteLength(command, 'utf8') };
   };
   const toMessageSummary = (deliveryPlan: CoordinateDeliveryEntry[]) => deliveryPlan.map((entry) => ({
     agent: entry.agent,
@@ -2043,7 +2087,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       && req.targetAgents.length > 0
       && req.preset !== 'bootstrap',
     );
-    const slots: Array<{ role: string; agent: string; agent_id?: string }> = [
+    const slots: Array<{ role: string; agent: string; agent_id?: string; perspective?: string }> = [
       {
         role: 'champion',
         agent: senderAgent,
@@ -2051,11 +2095,19 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       },
     ];
     if (explicitTargets) {
-      for (const agent of req.targetAgents!) {
+      const defaultPerspectives = [
+        'Challenge assumptions and verify the proposal against concrete evidence.',
+        'Focus on failure modes, operational risks, and recovery paths; challenge earlier contributions explicitly.',
+        'Develop competing alternatives and compare their costs and trade-offs; resolve or sharpen earlier disagreements.',
+      ];
+      for (const [index, agent] of req.targetAgents!.entries()) {
         const criticIdentity = findAgentIdentityByName(agent, dispatchCwd) ?? ensureAgentRegisteredForDispatch(agent, dispatchCwd);
         slots.push({
           role: 'critic',
           agent,
+          perspective: req.criticPerspectives?.[index]
+            ?? defaultPerspectives[index]
+            ?? `Challenge the conversation from an independent perspective ${index + 1}; avoid repeating prior contributions.`,
           ...(criticIdentity?.agent_id ? { agent_id: criticIdentity.agent_id } : {}),
         });
       }
@@ -2084,7 +2136,12 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
                 stop_condition: presetSelected.stop_condition,
                 protocol: presetSelected.protocol,
               }
-            : {}),
+            : {
+                protocol: {
+                  iteration: DEFAULT_PROTOCOLS.ideation.iteration,
+                  ideation_schedule: req.ideation_schedule,
+                },
+              }),
         },
         dispatchCwd,
       );
@@ -2101,7 +2158,6 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       // loop doesn't contain. The task text is already captured on
       // the thread (title + goal).
       if (!presetSelected) {
-        const proposalBody = capLoopArtifactBody(req.task);
         const updated = add_artifact(
           {
             id: loop.id,
@@ -2109,7 +2165,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             artifact: {
               phase: 'proposal',
               type: 'proposal',
-              body: proposalBody,
+              body: req.task,
               produced_by: creatorActor,
             },
           },
@@ -2133,8 +2189,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     }
     } // end else (non-bootstrap open path)
 
-    // pln#492 phase 2.d.2 — multi-agent dispatch. Skipped in single-
-    // agent mode (the champion drives manually).
+    // Multi-agent ideation keeps artifact capacity separate from execution
+    // concurrency. All requested critic slots are durable, but sequential is
+    // the default scheduling policy: only the first open slot is dispatched
+    // now, and the next one is taken after this result is harvested. Explicit
+    // parallel mode retains the historical immediate fan-out.
     //
     // pln#511 step 2 — initial phase comes from the actual loop's
     // first phase, not a hardcoded 'proposal'. Presets like bootstrap
@@ -2193,7 +2252,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
         }
         dispatchedPhase = advancedLoop.current_phase;
 
-        const criticSlots = advancedLoop.slots.filter((s) => s.role === 'critic');
+        const allCriticSlots = advancedLoop.slots.filter((s) => s.role === 'critic');
+        const criticSlots = req.ideation_schedule === 'parallel'
+          ? allCriticSlots
+          : allCriticSlots.slice(0, 1);
         for (const slot of criticSlots) {
           if (!slot.agent) continue;
           // pln#626 Phase 2 — validate the target BEFORE any claim/worktree churn
@@ -2212,7 +2274,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
           const briefResult = buildIdeationBrief({
             thread: advancedLoop,
             slotRole: slot.role,
+            slotPerspective: slot.perspective,
             memoryProvider: provider,
+            seedText: req.task,
+            scopeHints: req.scope ? [req.scope] : [],
           });
 
           // pln#626 Phase 2 (Option B) — spawn the critic as a worktree-isolated
@@ -2226,7 +2291,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
           const criticScope = `ideate-loop:${loopId}:${slot.slot_id}`;
           const criticDescription =
             `Ideation critic turn for loop ${loopId} slot ${slot.slot_id} (phase ${advancedLoop.current_phase}). `
-            + `Critique the proposal and reply with your critique — do not edit code. ${req.task}`;
+            + `Critique proposal artifact ${proposalArtifactId} and reply with evidence — do not edit code.`;
           try {
             const claimResult = createCoordinatorClaim({
               agent: slot.agent,
@@ -2439,9 +2504,15 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       proposal_artifact_id: proposalArtifactId,
       selected_targets: explicitTargets ? req.targetAgents! : [],
       mode: explicitTargets ? 'multi_agent' : 'single_agent',
+      ...(explicitTargets ? {
+        ideation_schedule: req.ideation_schedule,
+        pending_critics: Math.max(0, req.targetAgents!.length - dispatchedCritics),
+      } : {}),
       dispatched_critics: dispatchedCritics,
       current_phase: dispatchedPhase,
-      delivery_plan: preparedCritics.map((p) => p.entry),
+      task_bytes: Buffer.byteLength(req.task, 'utf8'),
+      task_truncated: false,
+      delivery_plan: preparedCritics.map((p) => compactDeliveryEntry(p.entry)),
       ...(ideateExecStatus
         ? { execution_status: ideateExecStatus }
         : explicitTargets

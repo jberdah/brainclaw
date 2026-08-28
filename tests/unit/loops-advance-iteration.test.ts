@@ -7,6 +7,9 @@ import path from 'node:path';
 import {
   advance,
   complete_turn,
+  computeNextExpected,
+  buildIdeationBrief,
+  getLoop,
   listLoopEvents,
   openLoop,
   turn,
@@ -280,5 +283,70 @@ describe('advance() — exit_cycle via no_new_critique_artifacts (pln#492 phase 
       () => advance({ id: loop.id, actor: 'agt_test' }, cwd),
       /phase_advance_blocked/,
     );
+  });
+});
+
+describe('ideation sequential conversation across reusable slots', () => {
+  let cwd: string;
+  before(() => { cwd = makeWorkspace(); });
+  after(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  it('rotates A → B → C, exposes same-round critiques, then starts a new round after revision', () => {
+    const loop = openLoop({
+      kind: 'ideation',
+      title: 'sequential multi-turn ideation',
+      created_by: 'agt_champion',
+      slots: [
+        { role: 'champion', agent: 'codex', agent_id: 'agt_champion' },
+        { role: 'critic', agent: 'codex', agent_id: 'agt_a', perspective: 'challenge assumptions' },
+        { role: 'critic', agent: 'codex', agent_id: 'agt_b', perspective: 'challenge failure modes' },
+        { role: 'critic', agent: 'codex', agent_id: 'agt_c', perspective: 'challenge alternatives' },
+      ],
+    }, cwd);
+    advance({ id: loop.id, actor: 'agt_champion' }, cwd);
+    const critics = loop.slots.filter((slot) => slot.role === 'critic');
+
+    for (let index = 0; index < critics.length; index++) {
+      const expected = computeNextExpected(getLoop(loop.id, cwd)!);
+      assert.equal(expected?.slot_id, critics[index]!.slot_id, `turn ${index + 1} rotates to the next critic`);
+      turn({ id: loop.id, slot_id: critics[index]!.slot_id, actor: 'agt_champion' }, cwd);
+      complete_turn({
+        id: loop.id,
+        slot_id: critics[index]!.slot_id,
+        actor: critics[index]!.agent_id!,
+        caller_agent_id: critics[index]!.agent_id!,
+        artifact: { phase: 'critique', type: 'critique', body: `critique ${index + 1}` },
+      }, cwd);
+
+      if (index === 0) {
+        const current = getLoop(loop.id, cwd)!;
+        const nextBrief = buildIdeationBrief({
+          thread: current,
+          slotRole: 'critic',
+          slotPerspective: critics[1]!.perspective,
+          memoryProvider: { fetch: () => [] },
+        });
+        assert.match(nextBrief.text, /critique_history \(conversation so far\)/);
+        assert.match(nextBrief.text, /critique 1/);
+        assert.match(nextBrief.text, /perspective: challenge failure modes/);
+      }
+    }
+
+    advance({ id: loop.id, actor: 'agt_champion' }, cwd); // critique → revision
+    let current = getLoop(loop.id, cwd)!;
+    assert.equal(computeNextExpected(current)?.role, 'champion');
+    const champion = current.slots.find((slot) => slot.role === 'champion')!;
+    turn({ id: loop.id, slot_id: champion.slot_id, actor: 'agt_champion' }, cwd);
+    complete_turn({
+      id: loop.id,
+      slot_id: champion.slot_id,
+      actor: 'agt_champion',
+      caller_agent_id: 'agt_champion',
+      artifact: { phase: 'revision', type: 'revision', body: 'revision after the three challenges' },
+    }, cwd);
+    advance({ id: loop.id, actor: 'agt_champion' }, cwd); // revision → critique round 2
+    current = getLoop(loop.id, cwd)!;
+    assert.equal(current.iteration_count, 1);
+    assert.equal(computeNextExpected(current)?.slot_id, critics[0]!.slot_id, 'round 2 restarts the ordered conversation at A');
   });
 });

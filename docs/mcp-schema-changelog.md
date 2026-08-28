@@ -8,6 +8,43 @@ guarantees this changelog follows.
 
 ---
 
+## [1.28.4] — 2026-08-28
+
+- MCP public surface fingerprint: `sha256:42cd662667260792`
+
+**Added — lane-result harvest parity**
+
+- `bclaw_harvest` is a new standard coordination write tool matching the CLI
+  lane-result path. It accepts one `assignmentId` or `all=true`, optional
+  `worktreePaths`, `dryRun`, and `integrate`; successful report harvests return
+  reconciled `continuations` and executable `next_actions`.
+
+**Changed — ideation is instance-based and sequential by default**
+
+- `bclaw_coordinate(intent="ideate")` accepts repeated `targetAgents`, an
+  optional positionally aligned `criticPerspectives` array, and
+  `ideation_schedule: "sequential" | "parallel"` (default sequential).
+- The result adds `ideation_schedule` and `pending_critics`. Sequential briefs
+  include critiques already produced in the same round, so participants
+  challenge one another before champion revision and the next bounded round.
+
+**Changed — compact, actionable read projections**
+
+- `bclaw_find` accepts optional `fields`; one item larger than `budget_tokens`
+  is projected to identity/status fields and reports
+  `oversized_item_projected` rather than overrunning the response budget.
+- Agent rows add `declared_spawnable`, `executable_now`, `availability_code`,
+  and `availability_reason`.
+- Work context's `pending_notifications` is now a compact summary containing
+  `actionable_count`, `by_type`, and `telemetry_events_omitted`; the raw event
+  count remains available as `unseen_event_count`.
+- `bclaw_dispatch_status` adds canonical `terminal_signal` evidence and may
+  diagnose stale explicit progress as `stalled` despite a live wrapper PID or
+  unrelated filesystem activity.
+
+All changes are additive except the intentionally compacted
+`pending_notifications` value shape.
+
 ## [1.28.3] — 2026-08-26
 
 **Changed — durable Code Map cascade execution**
@@ -438,12 +475,11 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:be86e5571fcd0226`
-  (updated 2026-08-24 for persisted continuation authority: additive
-  `bclaw_loop(intent="continue")` inputs `action_index`, `autonomy_mode`, and
-  `risk`; the intent evaluates an attested Ideation→Implementation action,
-  persists AUTO/REQUIRE_APPROVAL/DENY, and reuses the public open/bind path.)
-  Previous: `sha256:681c47cba85b79c3`
+- MCP public surface fingerprint: `sha256:42cd662667260792`
+  (updated 2026-08-28 for the additive `bclaw_harvest` surface, sequential
+  ideation controls, compact read projections, and loop-slot perspective and
+  completion fields.)
+  Previous: `sha256:be86e5571fcd0226`
   (`LoopSlotInput` gains optional `lane`, `scope_hint`, `plan_ids`, and
   `step_ids` fields so implementation-loop lane scope and provenance survive
   through the public facade. Existing callers remain valid.)

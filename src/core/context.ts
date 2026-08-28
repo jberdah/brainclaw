@@ -49,6 +49,17 @@ export interface ContextOptions {
   cwd?: string;
 }
 
+function verificationStatus(item: { verification?: { outcome: 'pass' | 'fail'; verified_at: string; max_age_days?: number } }): string | undefined {
+  const verification = item.verification;
+  if (!verification) return undefined;
+  if (verification.outcome === 'fail') return 'verification:fail';
+  if (verification.max_age_days !== undefined) {
+    const ageMs = Date.now() - new Date(verification.verified_at).getTime();
+    if (Number.isFinite(ageMs) && ageMs > verification.max_age_days * 86_400_000) return 'verification:stale';
+  }
+  return 'verification:pass';
+}
+
 export interface ContextItem {
   id: string;
   section: 'plan' | 'constraint' | 'decision' | 'trap' | 'handoff' | 'candidate' | 'runtime' | 'cross_project';
@@ -248,7 +259,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       related_paths: c.related_paths,
       score: 0,
       reasons: [],
-      extra: c.status,
+      extra: [c.status, verificationStatus(c)].filter(Boolean).join(', '),
       plan_id: c.plan_id,
       provenance: {
         actor: c.author,
@@ -279,7 +290,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       related_paths: d.related_paths,
       score: 0,
       reasons: [],
-      extra: d.related_paths?.join(', '),
+      extra: [d.related_paths?.join(', '), verificationStatus(d)].filter(Boolean).join(', ') || undefined,
       plan_id: d.plan_id,
       provenance: {
         actor: d.author,
@@ -310,7 +321,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       related_paths: t.related_paths,
       score: 0,
       reasons: [],
-      extra: `${t.severity}, visibility:${t.visibility ?? 'shared'}`,
+      extra: [`${t.severity}, visibility:${t.visibility ?? 'shared'}, status:${t.status}`, verificationStatus(t)].filter(Boolean).join(', '),
       plan_id: t.plan_id,
       provenance: {
         actor: t.author,
