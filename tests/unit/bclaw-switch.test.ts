@@ -22,6 +22,7 @@ interface ToolEnvelope {
   isError: boolean;
   structuredContent?: Record<string, unknown>;
   errorKind?: string;
+  nextConnectionSessionId?: string;
 }
 
 async function callTool(
@@ -39,6 +40,7 @@ async function callTool(
     isError: outcome.response.isError === true,
     structuredContent: structured,
     errorKind: errorBlock?.kind,
+    nextConnectionSessionId: outcome.nextConnectionSessionId ?? undefined,
   };
 }
 
@@ -104,6 +106,8 @@ describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
     assert.equal(r.structuredContent?.switched, true);
     assert.match(r.structuredContent?.path as string, /bclaw-switch-target-/);
     assert.equal(r.structuredContent?.scope, 'session');
+    assert.equal(r.nextConnectionSessionId, r.structuredContent?.session_id);
+    assert.match(r.nextConnectionSessionId ?? '', /^sess_/);
     assert.match(loadCurrentSession(workspace.dir)?.active_project?.path ?? '', /bclaw-switch-target-/);
   });
 

@@ -14,6 +14,8 @@ interface CodeMapOptions {
   json?: boolean;
   all?: boolean;
   changed?: boolean;
+  /** Cross-surface refresh selector; equivalent to MCP scope. */
+  scope?: string;
   limit?: number;
   /** Maximum graph depth for impact (1 = direct only; transitives require 2+). */
   depth?: number;
@@ -63,7 +65,10 @@ export async function runCodeMap(
   }
 
   if (normalized === 'refresh') {
-    const scope: 'all' | 'changed' = options.all ? 'all' : 'changed';
+    if (options.scope && options.scope !== 'all' && options.scope !== 'changed') {
+      throw new Error('code-map refresh --scope must be "changed" or "all".');
+    }
+    const scope: 'all' | 'changed' = options.scope === 'all' || options.all ? 'all' : 'changed';
     const result = await be.refresh({ scope, cwd, cascade: options.cascade });
     printRefresh(result, options);
     return;
@@ -150,6 +155,7 @@ function printStatus(status: CodeStatus, options: CodeMapOptions): void {
   }
   console.log('Code Map status');
   console.log(`  Store:    ${status.store_exists ? 'present' : 'absent'}`);
+  console.log(`  Index:    ${status.index_exists ? 'ready' : status.index_manifest_exists ? 'invalid manifest' : 'not built'}`);
   console.log(`  Root:     ${status.resolution.project_root}`);
   console.log(`  Path:     ${status.resolution.store_path}`);
   console.log(`  ${badgeLine(status.freshness_badge)}`);

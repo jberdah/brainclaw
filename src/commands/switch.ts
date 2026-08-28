@@ -41,6 +41,8 @@ export interface SwitchProjectResult {
   name?: string;
   scope: 'session' | 'global';
   workspace_root: string;
+  /** Session that owns the switch, so an MCP connection can retain it. */
+  session_id?: string;
 }
 
 /**
@@ -110,7 +112,14 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
       ...session,
       active_project: { path: resolved, name: projectName, switched_at: now },
     }, cwd);
-    return { switched: true, path: resolved, name: projectName, scope: 'session', workspace_root: wsRoot };
+    return {
+      switched: true,
+      path: resolved,
+      name: projectName,
+      scope: 'session',
+      workspace_root: wsRoot,
+      session_id: session.session_id,
+    };
   }
 
   if (sessionOnly) {

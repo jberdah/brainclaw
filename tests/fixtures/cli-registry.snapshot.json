@@ -1686,6 +1686,16 @@
         "variadic": false
       },
       {
+        "flags": "--scope <scope>",
+        "long": "--scope",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
         "flags": "--target-kind <kind>",
         "long": "--target-kind",
         "mandatory": false,

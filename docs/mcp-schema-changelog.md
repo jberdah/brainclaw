@@ -8,6 +8,25 @@ guarantees this changelog follows.
 
 ---
 
+## [1.28.5] — 2026-08-28
+
+- MCP public surface fingerprint: `sha256:f410416669e7fc9a`
+
+**Changed — Code Map project targeting and durable refresh**
+
+- Every `bclaw_code_*` input schema gains the same optional `project` selector
+  (name, id, or workspace-relative path). It overrides the active session for
+  one call without mutating it.
+- `bclaw_code_refresh` now acknowledges every refresh as a durable job, not
+  only multi-project cascades. Its `scope: "changed" | "all"` contract is
+  unchanged and no new field is required.
+- `bclaw_code_status` keeps its input compatibility while its result separates
+  physical path presence (`store_exists`) from a readable index
+  (`index_exists`, `index_manifest_exists`) and exposes the latest single-project
+  refresh job.
+
+All input changes are additive; no tool was added, removed, or renamed.
+
 ## [1.28.4] — 2026-08-28
 
 - MCP public surface fingerprint: `sha256:42cd662667260792`
@@ -475,8 +494,10 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:42cd662667260792`
-  (updated 2026-08-28 for the additive `bclaw_harvest` surface, sequential
+- MCP public surface fingerprint: `sha256:f410416669e7fc9a`
+  (updated 2026-08-28 for optional `project` targeting on every Code Map MCP
+  tool. Previous: `sha256:42cd662667260792`, updated for the additive
+  `bclaw_harvest` surface, sequential
   ideation controls, compact read projections, and loop-slot perspective and
   completion fields.)
   Previous: `sha256:be86e5571fcd0226`

@@ -1402,19 +1402,32 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const { JsonlBackend } = await import('../core/code-map/backend.js');
       const be = new JsonlBackend();
       // Session-scoped project selection is authoritative for Code Map too.
-      const codeCwd = scopeInfo.cwd;
+      // An explicit project selector wins, matching the canonical read grammar.
+      let codeCwd = scopeInfo.cwd;
+      let codeScope = scopeInfo;
+      if (typeof args.project === 'string' && args.project.trim()) {
+        codeCwd = resolveProjectCwd(args.project.trim(), codeCwd);
+        codeScope = {
+          cwd: codeCwd,
+          active_source: 'explicit' as const,
+          resolved_project: projectInfoForCwd(codeCwd),
+        };
+      }
       if (name === 'bclaw_code_status') {
         const status = await be.status({ cwd: codeCwd, cascade: args.cascade === true });
         const diskVersion = readDiskBrainclawVersion();
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map: ${status.store_exists ? 'store present' : 'no store'} — freshness=${status.freshness_badge.freshness}` }],
+            content: [{
+              type: 'text',
+              text: `Code Map: path=${status.store_exists ? 'present' : 'absent'}, index=${status.index_exists ? 'ready' : status.index_manifest_exists ? 'invalid' : 'missing'} — freshness=${status.freshness_badge.freshness}`,
+            }],
             structuredContent: {
               ...status,
               freshness_badge: status.freshness_badge,
               mcp_resolution: {
-                active_source: scopeInfo.active_source,
-                resolved_project: scopeInfo.resolved_project,
+                active_source: codeScope.active_source,
+                resolved_project: codeScope.resolved_project,
                 server_version: getInstalledBrainclawVersion(),
                 disk_version: diskVersion,
                 restart_required: diskVersion !== '0.0.0' && diskVersion !== getInstalledBrainclawVersion(),
@@ -1441,12 +1454,27 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             };
           }
         }
-        const result = await be.refresh({ scope, cwd: codeCwd, cascade: args.cascade === true });
-        const cascadeNote = result.cascade ? ` cascade=${result.cascade.children_refreshed} child(ren)+root` : '';
+        const { startCodeRefreshJob, summarizeCodeRefreshJob } = await import('../core/code-map/refresh-jobs.js');
+        const job = startCodeRefreshJob(codeCwd, scope);
+        const accepted = job.status !== 'failed' && job.scope === scope;
+        const acknowledgement = accepted
+          ? `Code Map refresh accepted: job=${job.job_id}, scope=${job.scope}, project=${codeCwd}.`
+          : job.status === 'failed'
+            ? `Code Map refresh failed to start: job=${job.job_id}, project=${codeCwd}, error=${job.error ?? 'unknown'}.`
+            : `Code Map refresh not queued: active job=${job.job_id} has scope=${job.scope}; requested scope=${scope}.`;
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map refresh [${result.scope}]: ran=${result.ran} freshness=${result.freshness_badge.freshness}${cascadeNote}${result.lock_status ? ` (${result.lock_status})` : ''}` }],
-            structuredContent: { ...result, freshness_badge: result.freshness_badge },
+            content: [{ type: 'text', text: `${acknowledgement} Follow with bclaw_code_status${typeof args.project === 'string' ? `(project=${JSON.stringify(args.project)})` : ''}.` }],
+            structuredContent: {
+              accepted,
+              requested_scope: scope,
+              ...summarizeCodeRefreshJob(job),
+              next_actions: [{
+                tool: 'bclaw_code_status',
+                args: typeof args.project === 'string' ? { project: args.project } : {},
+                when: 'follow refresh progress and terminal outcome',
+              }],
+            },
           }),
         };
       }
@@ -1533,8 +1561,18 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (MCP_READ_TOOLS.some((tool) => tool.name === name) || LEGACY_READ_TOOL_HANDLERS.has(name)) {
+      const response = appendLegacyMcpToolWarning(
+        toolResponse(handleMcpReadToolCall(name, args, { cwd, connectionSessionId, effectiveScope: scopeInfo })),
+        name,
+      );
+      const switchedSessionId = name === 'bclaw_switch'
+        ? (response.structuredContent as { session_id?: unknown } | undefined)?.session_id
+        : undefined;
       return {
-        response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd, connectionSessionId, effectiveScope: scopeInfo })), name),
+        response,
+        ...(typeof switchedSessionId === 'string' && switchedSessionId
+          ? { nextConnectionSessionId: switchedSessionId }
+          : {}),
       };
     }
 

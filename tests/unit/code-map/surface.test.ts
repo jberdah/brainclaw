@@ -12,6 +12,7 @@ import { codeMapWorkSection, codeMapRefreshNextActions, WORK_SECTION_MAX_WAIT_MS
 import type { CodeMapWorkSection } from '../../../src/core/code-map/work-section.js';
 import { readManifest, writeManifest } from '../../../src/core/code-map/store.js';
 import { codeMapDir, lockPath } from '../../../src/core/code-map/paths.js';
+import { latestCodeRefreshJob } from '../../../src/core/code-map/refresh-jobs.js';
 
 const cleanupDirs: string[] = [];
 
@@ -42,7 +43,7 @@ function writeSrc(root: string, rel: string, content: string): void {
 
 afterEach(() => {
   while (cleanupDirs.length > 0) {
-    fs.rmSync(cleanupDirs.pop() as string, { recursive: true, force: true });
+    fs.rmSync(cleanupDirs.pop() as string, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -124,6 +125,13 @@ describe('runCodeMap CLI surface', () => {
     assert.equal(parsed.scope, 'all');
     assert.ok(parsed.freshness_badge, 'freshness_badge present');
     assert.equal(typeof parsed.freshness_badge.status, 'string');
+  });
+
+  it('refresh accepts the MCP-compatible scope selector', async () => {
+    const root = tmpProject();
+    fixture(root);
+    const jsonOut = await captureCli(() => runCodeMap('refresh', [], { cwd: root, scope: 'all', json: true }));
+    assert.equal(JSON.parse(jsonOut).scope, 'all');
   });
 
   it('find prints ranked matches with a badge (text + json)', async () => {
@@ -265,6 +273,17 @@ describe('MCP code-map tool handlers', () => {
     assert.equal(typeof (sc.mcp_resolution as { server_version: unknown }).server_version, 'string');
   });
 
+  it('distinguishes a physical store path from a readable index', async () => {
+    const root = tmpProject();
+    fs.mkdirSync(path.join(root, '.brainclaw', 'code', 'refresh-jobs'), { recursive: true });
+
+    const out = await executeMcpToolCall({ name: 'bclaw_code_status', args: {}, cwd: root });
+    const sc = out.response.structuredContent as Record<string, unknown>;
+    assert.equal(sc.store_exists, true);
+    assert.equal(sc.index_exists, false);
+    assert.equal(sc.index_manifest_exists, false);
+  });
+
   it('bclaw_code_find returns ranked matches + freshness_badge', async () => {
     const root = tmpProject();
     fixture(root);
@@ -327,7 +346,7 @@ describe('MCP code-map tool handlers', () => {
     assert.equal(invalid.response.isError, true);
   });
 
-  it('bclaw_code_refresh returns a result with freshness_badge', async () => {
+  it('bclaw_code_refresh acknowledges a durable job immediately', async () => {
     const root = tmpProject();
     fixture(root);
 
@@ -335,7 +354,25 @@ describe('MCP code-map tool handlers', () => {
     assert.equal(out.response.isError, false);
     const sc = out.response.structuredContent as Record<string, unknown>;
     assert.equal(sc.scope, 'all');
-    assert.ok(sc.freshness_badge, 'freshness_badge present');
+    assert.equal(sc.accepted, true);
+    assert.match(sc.job_id as string, /^cmj_/);
+    assert.ok(['queued', 'running', 'completed'].includes(sc.status as string));
+
+    const deadline = Date.now() + 60_000;
+    let terminal = latestCodeRefreshJob(root);
+    while (terminal && (terminal.status === 'queued' || terminal.status === 'running') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      terminal = latestCodeRefreshJob(root);
+    }
+    assert.equal(terminal?.status, 'completed', terminal?.error ?? 'refresh job did not complete');
+    while (terminal?.pid && Date.now() < deadline) {
+      try {
+        process.kill(terminal.pid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } catch {
+        break;
+      }
+    }
   });
 });
 

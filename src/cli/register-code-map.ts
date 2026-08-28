@@ -9,6 +9,7 @@ export function registerCodeMapCommands(program: Command): void {
     .option('--json', 'Output as JSON')
     .option('--all', 'For refresh: enumerate all supported files (full refresh)')
     .option('--changed', 'For refresh: only changed files (default)')
+    .option('--scope <scope>', 'For refresh: changed or all (same selector as MCP)')
     .option('--cascade', 'For refresh/status in a multi-project workspace: cascade across every nested project (each gets its own store; the root store is scoped to files no child owns)')
     .option('--limit <n>', 'Max results for find/brief/impact/outline', (v) => parseInt(v, 10))
     .option('--depth <n>', 'For impact/export: maximum graph depth (export is hard-capped at 4)', (v) => parseInt(v, 10))
