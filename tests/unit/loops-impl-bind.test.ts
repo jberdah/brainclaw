@@ -201,12 +201,58 @@ describe('pln#632 runImplBind', () => {
 
     const matched = openLoop({
       kind: 'implementation', title: 'lanes', created_by: 'coord',
-      slots: [{ role: 'implementer' }, { role: 'implementer' }],
+      slots: [{ role: 'implementer', lane: 'api' }, { role: 'implementer', lane: 'ui' }],
       linked: { sequence_ids: ['seq_lanes'], plan_ids: ['pln_a', 'pln_b'] },
     }, cwd);
     await runImplBind({ loop_id: matched.id, dispatcherAgent: 'coord' }, cwd);
     const bound = getLoop(matched.id, cwd)!;
     assert.deepEqual(bound.slots.map((slot) => [slot.lane, slot.scope_hint]), [['api', 'src/api'], ['ui', 'src/ui']]);
+  });
+
+  it('rejects positional multi-lane slots instead of silently permuting lane policies', async () => {
+    persistState({
+      version: 1, write_version: 1, active_constraints: [], recent_decisions: [], known_traps: [], open_handoffs: [],
+      plan_items: [makePlan({ id: 'pln_a', text: 'A' }), makePlan({ id: 'pln_b', text: 'B' })],
+    }, cwd);
+    saveSequence(makeSequence('seq_unordered_lanes', [
+      { planId: 'pln_a', rank: 1, lane: 'correctifs', scope_hint: 'schema.prisma', hard_after: [], soft_after: [] },
+      { planId: 'pln_b', rank: 2, lane: 'documentaire', scope_hint: 'docs/', hard_after: [], soft_after: [] },
+    ]), cwd);
+    const loop = openLoop({
+      kind: 'implementation', title: 'unsafe positional lanes', created_by: 'coord',
+      slots: [
+        { role: 'implementer', perspective: 'only lane allowed to touch schema.prisma' },
+        { role: 'implementer', perspective: 'documentation only' },
+      ],
+      linked: { sequence_ids: ['seq_unordered_lanes'], plan_ids: ['pln_a', 'pln_b'] },
+    }, cwd);
+    await assert.rejects(
+      () => runImplBind({ loop_id: loop.id, dispatcherAgent: 'coord', dryRun: true }, cwd),
+      /explicit slot\.lane.*positional slot order is rejected/,
+    );
+  });
+
+  it('rejects a stop condition that names no phase in the opened protocol', () => {
+    assert.throws(
+      () => openLoop({
+        kind: 'implementation', title: 'bad stop phase', created_by: 'coord',
+        stop_condition: { kind: 'phase_reached', phase: 'verdict' },
+      }, cwd),
+      /stop_condition references unknown phase "verdict"/,
+    );
+  });
+
+  it('rejects the singular linked.sequence typo at the facade instead of dropping it', async () => {
+    const handled = await handleBclawLoop({
+      args: {
+        intent: 'open', kind: 'implementation', title: 'bad link key', allow_orphan: true,
+        linked: { sequence: 'seq_ib1', plan_ids: ['pln_ib1'] },
+        agent: 'coord',
+      },
+      cwd,
+    });
+    assert.equal(handled.response.status, 'error');
+    assert.match(handled.response.error ?? '', /Unrecognized key|unrecognized key|sequence/);
   });
 
   it('rejects a non-implementation loop (review loops dispatch via coordinate)', async () => {

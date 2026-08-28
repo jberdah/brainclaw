@@ -47,7 +47,7 @@ export const LoopLinksSchema = z.object({
   source_artifact_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   /** Durable, deterministic identity of the policy decision that created this loop. */
   continuation_key: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-});
+}).strict();
 export type LoopLinks = z.infer<typeof LoopLinksSchema>;
 
 /**

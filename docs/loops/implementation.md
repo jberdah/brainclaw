@@ -20,9 +20,11 @@ a worker. `execute ↔ verify` iterates until the verify command is green or
 the cycle cap is hit.
 
 Binding validates the complete graph: every sequence item must reference a
-linked, existing plan (and an existing step when `stepId` is present). Explicit
-sequence lanes are paired deterministically with worker slots, one slot per
-lane. Each slot then carries its lane, plan/step ids, and `scope_hint`.
+linked, existing plan (and an existing step when `stepId` is present). A
+multi-lane sequence requires exactly one explicitly named worker slot per lane;
+positional slots are rejected because sorting lanes could otherwise attach a
+perspective or scope policy to the wrong lane. Each slot then carries its lane,
+plan/step ids, and `scope_hint`.
 
 ## Default protocol
 
@@ -46,9 +48,13 @@ participating slot must produce its expected artifact before advance fires.
 ## Entry points
 
 - **Direct open (typical).**
-  `bclaw_loop(intent='open', kind='implementation', slots=[…], linked={plan_ids:[…], sequence_ids:[…]}, allow_orphan=true)`
-  followed by `bind`. `allow_orphan=true` acknowledges that the caller will
-  drive worker turns.
+  `bclaw_loop(intent='open', kind='implementation', slots=[{role:'implementer', lane:'api'}, …], linked={plan_ids:[…], sequence_ids:[…]}, allow_orphan=true)`
+  followed by a dry-run `bind`, then the real `bind`. `allow_orphan=true`
+  acknowledges that the caller will drive worker turns. For multiple lanes,
+  every slot must name its lane; the bind response must still be checked for
+  lane/perspective alignment. The `linked` key is exactly
+  `{sequence_ids:[…], plan_ids:[…]}`; unknown keys are rejected by the open
+  envelope, and a dry-run is the safe way to validate the complete contract.
 - **Via bind.** `bclaw_loop(intent='bind', loop_id=…)` validates the linked
   sequence and advances `bind → execute`. Historical launch options
   (`lanes`, `auto_execute`, `model`, `max_assignments`) remain accepted
@@ -58,6 +64,11 @@ participating slot must produce its expected artifact before advance fires.
   worker launch path and uses the common AttemptAuthority fence. Independent
   slots may be dispatched concurrently. Without `dispatch=true`, `turn` is
   state-only and never starts a process.
+
+An implementation loop has no `update` intent. If opening or binding fails,
+cancel the invalid open loop and reopen it with corrected links/slots. The
+default phases are `bind`, `execute`, `verify`, and `handoff_ready`; a custom
+`stop_condition` must reference only phases present in the loop.
 
 ## Advance gates
 

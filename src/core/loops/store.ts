@@ -124,6 +124,19 @@ function resolveProtocol(kind: LoopKind, mode: ReviewMode | undefined): LoopProt
   return iteration ? { iteration } : undefined;
 }
 
+function collectStopConditionPhases(condition: StopCondition): string[] {
+  switch (condition.kind) {
+    case 'phase_reached':
+    case 'artifact_produced':
+      return [condition.phase];
+    case 'any':
+    case 'all':
+      return condition.conditions.flatMap(collectStopConditionPhases);
+    default:
+      return [];
+  }
+}
+
 function buildSlot(partial: Partial<LoopSlot> & { role: string }): LoopSlot {
   return {
     slot_id: partial.slot_id ?? generateSlotId(),
@@ -207,6 +220,12 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
   if (phaseNames.size !== phases.length) {
     throw new Error('openLoop: phase names must be unique');
   }
+  const stopCondition = input.stop_condition ?? protocolDefaults.stop_condition;
+  const referencedPhases = collectStopConditionPhases(stopCondition);
+  const invalidPhase = referencedPhases.find((phase) => !phaseNames.has(phase));
+  if (invalidPhase) {
+    throw new Error(`openLoop: stop_condition references unknown phase "${invalidPhase}"; expected one of ${[...phaseNames].join(', ')}`);
+  }
 
   const now = nowISO();
   const id = generateLoopId();
@@ -242,7 +261,7 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
     // questions; the request_input handler (step 2) appends/removes ids.
     open_questions: [],
     linked: input.linked,
-    stop_condition: input.stop_condition ?? protocolDefaults.stop_condition,
+    stop_condition: stopCondition,
     evidence_policy: evidencePolicyForNewLoop(),
     created_at: now,
     updated_at: now,
