@@ -629,6 +629,14 @@ function convergeLockedTurn(
     // ── §6 reducer: validated result → loop artifacts + slot outcome. ──
     const reducerInput: ReducerInput = { lane, phase: reservation.phase, critiques: input.critiques };
     const reduced = reducerForKind(loop.kind)(reducerInput, reservation);
+    if (reduced.slot_outcome === 'retryable') {
+      return {
+        reconciled: false,
+        reason: `repairable worker result: ${reduced.failure_reason ?? 'result does not satisfy the phase artifact contract'}; slot remains assigned and may be re-harvested or replayed`,
+        artifacts_added: 0,
+        loop_status: loop.status,
+      };
+    }
     artifacts_added = reduced.artifacts.length;
     slot_outcome = reduced.slot_outcome;
 

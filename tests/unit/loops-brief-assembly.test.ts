@@ -99,6 +99,19 @@ describe('buildIdeationBrief — header & proposal seed (pln#492 phase 2.d.1)', 
     const result = buildIdeationBrief({ thread, slotRole: 'critic', memoryProvider: provider });
     assert.match(result.text, /no proposal seed found/);
   });
+
+  it('requires critique findings to verify memory against concrete worktree evidence', () => {
+    const thread = makeThread({ current_phase: 'critique' });
+    const provider = new FakeMemoryProvider({
+      traps: [makeMemoryItem('traps', 'trp_stale', 'A historical failure that may now be fixed')],
+    });
+    const result = buildIdeationBrief({ thread, slotRole: 'critic', memoryProvider: provider });
+
+    assert.match(result.text, /investigation leads, never as proof/);
+    assert.match(result.text, /Verify every finding .* against the worktree/);
+    assert.match(result.text, /file path plus a line, symbol, assertion, or test\/command result/);
+    assert.match(result.text, /unverified question instead of reporting it as a finding/);
+  });
 });
 
 describe('buildIdeationBrief — context_filter honoured (pln#492 phase 2.d.1)', () => {
@@ -238,17 +251,17 @@ describe('buildIdeationBrief — prior loop artifacts (pln#492 phase 2.d.1)', ()
     const provider = new FakeMemoryProvider({});
     const result = buildIdeationBrief({ thread, slotRole: 'critic', memoryProvider: provider });
     assert.match(result.text, /## prior loop artifacts/);
-    assert.match(result.text, /### critique_history \(prior iterations\)/);
+    assert.match(result.text, /### critique_history \(conversation so far\)/);
     assert.match(result.text, /\[art_crit_iter0\]/);
     assert.match(result.text, /scope creep/);
   });
 
-  it('does NOT include the current iteration\'s critique artifacts (only prior)', () => {
+  it('includes the current iteration\'s earlier critiques so the next participant can challenge them', () => {
     const currentCritique: LoopArtifact = {
       artifact_id: 'art_crit_now',
       phase: 'critique',
       type: 'critique',
-      body: 'Should not appear: same iteration as the brief',
+      body: 'Must appear: earlier contribution in the same round',
       produced_at: '2026-05-06T12:00:00.000Z',
       iteration: 1,
     };
@@ -259,10 +272,8 @@ describe('buildIdeationBrief — prior loop artifacts (pln#492 phase 2.d.1)', ()
     });
     const provider = new FakeMemoryProvider({});
     const result = buildIdeationBrief({ thread, slotRole: 'critic', memoryProvider: provider });
-    assert.ok(
-      !result.text.includes('art_crit_now'),
-      'current iteration critique must not be in prior artifacts',
-    );
+    assert.match(result.text, /art_crit_now/);
+    assert.match(result.text, /earlier contribution in the same round/);
   });
 
   it('iteration = 0: no prior loop artifacts block (nothing to include)', () => {

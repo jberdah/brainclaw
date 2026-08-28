@@ -1049,7 +1049,7 @@ describe('bclaw_coordinate — side effects', () => {
       );
     });
 
-    it('multi-agent mode (explicit targetAgents): advances to critique and dispatches a turn per critic with a context-filtered brief', async () => {
+    it('multi-agent ideation schedules critics sequentially by default', async () => {
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: 'Should we adopt approach A or approach B?',
@@ -1061,7 +1061,9 @@ describe('bclaw_coordinate — side effects', () => {
       const result = response.result as Record<string, unknown>;
       assert.equal(result.mode, 'multi_agent');
       assert.deepEqual(result.selected_targets, ['codex', 'opencode', 'github-copilot']);
-      assert.equal(result.dispatched_critics, 3);
+      assert.equal(result.ideation_schedule, 'sequential');
+      assert.equal(result.dispatched_critics, 1);
+      assert.equal(result.pending_critics, 2);
       assert.equal(result.current_phase, 'critique');
 
       const loopId = result.loop_id as string;
@@ -1069,11 +1071,14 @@ describe('bclaw_coordinate — side effects', () => {
       const loop = loopsModule.getLoop(loopId, workspace.dir);
       assert.ok(loop);
       assert.equal(loop.slots.length, 4, 'champion + 3 critics required by the gate');
+      assert.equal(loop.protocol?.ideation_schedule, 'sequential');
       const champion = loop.slots.find((s) => s.role === 'champion');
       const critic = loop.slots.find((s) => s.role === 'critic');
       assert.ok(champion);
       assert.ok(critic);
       assert.equal(critic.agent, 'codex');
+      const perspectives = loop.slots.filter((slot) => slot.role === 'critic').map((slot) => slot.perspective);
+      assert.equal(new Set(perspectives).size, 3, 'each critic slot receives a distinct default lens');
 
       // pln#492 phase 2.d.2 — the loop has advanced and the critic slot has been assigned.
       assert.equal(loop.current_phase, 'critique', 'multi-agent mode advances proposal → critique');
@@ -1083,7 +1088,8 @@ describe('bclaw_coordinate — side effects', () => {
       const phaseAdvances = events.filter((e) => e.kind === 'phase_advanced');
       const turnAssigns = events.filter((e) => e.kind === 'turn_assigned');
       assert.equal(phaseAdvances.length, 1, 'one phase_advanced event for proposal → critique');
-      assert.equal(turnAssigns.length, 3, 'one turn_assigned event per critic slot');
+      assert.equal(turnAssigns.length, 1, 'default scheduling starts one critic turn');
+      assert.equal(loop.slots.filter((slot) => slot.role === 'critic' && slot.status === 'open').length, 2);
 
       // Brief content is delivered as a coordinate message — proves
       // buildIdeationBrief was wired.
@@ -1091,24 +1097,64 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(messageArtifacts.length >= 1, 'at least one coordinate message queued');
     });
 
-    it('truncates oversized multibyte task to fit the LoopArtifact 4 KiB byte cap', async () => {
-      const oversizedTask = 'é'.repeat(8000);
+    it('rejects mismatched critic perspectives before creating loop state', async () => {
+      const loopsModule = await import('../../src/core/loops/index.js');
+      const before = loopsModule.listLoops({}, workspace.dir).length;
+      const outcome = await executeMcpToolCall({
+        name: 'bclaw_coordinate',
+        args: {
+          intent: 'ideate', task: 'perspective count validation',
+          targetAgents: ['codex', 'codex', 'codex'],
+          criticPerspectives: ['only one'], agent: 'claude-code',
+        },
+        cwd: workspace.dir,
+      });
+      assert.equal(outcome.response.isError, true);
+      assert.equal(
+        (outcome.response.structuredContent as { error: { kind: string } }).error.kind,
+        'ideate_perspective_count_mismatch',
+      );
+      assert.equal(loopsModule.listLoops({}, workspace.dir).length, before);
+    });
+
+    it('preserves an ideation task beyond 4 KiB without substituting memory for its tail', async () => {
+      const oversizedTask = `${'é'.repeat(3000)}\nCE QUE JE VOUS DEMANDE\nLE DÉBIT HUMAIN\nNE COMMITE RIEN\nOUTPUT: REVIEW-REQUESTED.md`;
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: oversizedTask,
+        targetAgents: ['codex', 'opencode', 'github-copilot'],
+        ideation_schedule: 'parallel',
         agent: 'claude-code',
       });
       assert.equal(response.status, 'ok');
-      const loopId = (response.result as Record<string, unknown>).loop_id as string;
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.task_truncated, false);
+      assert.equal(result.task_bytes, Buffer.byteLength(oversizedTask, 'utf8'));
+      const loopId = result.loop_id as string;
       const loopsModule = await import('../../src/core/loops/index.js');
       const loop = loopsModule.getLoop(loopId, workspace.dir);
       const proposal = loop?.artifacts.find((a) => a.type === 'proposal');
       assert.ok(proposal);
-      assert.ok(
-        Buffer.byteLength(proposal.body ?? '', 'utf8') <= 4096,
-        `proposal body must be capped to ≤4096 UTF-8 bytes; got ${Buffer.byteLength(proposal.body ?? '', 'utf8')}`,
-      );
-      assert.match(proposal.body ?? '', /…\[truncated\]$/);
+      assert.equal(proposal.body, oversizedTask);
+      const deliveredBriefs = ['codex', 'opencode', 'github-copilot']
+        .flatMap((agent) => readInbox({ agent }, workspace.dir).messages.map((message) => message.text))
+        .join('\n');
+      assert.match(deliveredBriefs, /CE QUE JE VOUS DEMANDE/);
+      assert.match(deliveredBriefs, /LE DÉBIT HUMAIN/);
+      assert.match(deliveredBriefs, /NE COMMITE RIEN/);
+      assert.match(deliveredBriefs, /REVIEW-REQUESTED\.md/);
+    });
+
+    it('rejects a task above the lossless proposal limit before creating a loop', async () => {
+      const before = (await import('../../src/core/loops/index.js')).listLoops({}, workspace.dir).length;
+      const outcome = await executeMcpToolCall({
+        name: 'bclaw_coordinate',
+        args: { intent: 'ideate', task: 'x'.repeat(32 * 1024 + 1), agent: 'claude-code' },
+        cwd: workspace.dir,
+      });
+      assert.equal(outcome.response.isError, true);
+      assert.equal((outcome.response.structuredContent as { error: { kind: string } }).error.kind, 'ideate_task_too_large');
+      assert.equal((await import('../../src/core/loops/index.js')).listLoops({}, workspace.dir).length, before);
     });
 
     // pln#626 Phase 2 (Option B) — multi-agent ideate now SPAWNS one worktree-
@@ -1121,6 +1167,7 @@ describe('bclaw_coordinate — side effects', () => {
         intent: 'ideate',
         task: 'Approach A or B — spawn wiring check?',
         targetAgents: ['codex', 'opencode', 'github-copilot'],
+        ideation_schedule: 'parallel',
         agent: 'claude-code',
         autoExecute: true,
       });

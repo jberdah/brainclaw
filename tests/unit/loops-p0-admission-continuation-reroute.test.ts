@@ -69,6 +69,27 @@ describe('pln#692 P0 — admission, continuation diagnostics, reroute preflight'
     assert.equal(listAssignments(workspace.dir).length, 0);
   });
 
+  it('admits three isolated critic instances backed by the same agent identity', async () => {
+    const outcome = await call(workspace, 'bclaw_coordinate', {
+      intent: 'ideate',
+      task: 'Pressure-test a proposal using three independent Codex critics',
+      targetAgents: ['codex', 'codex', 'codex'],
+      ideation_schedule: 'parallel',
+      autoExecute: true,
+    });
+
+    assert.notEqual(outcome.response.isError, true);
+    const loops = listLoops({}, workspace.dir);
+    assert.equal(loops.length, 1);
+    const criticSlots = loops[0]!.slots.filter((slot) => slot.role === 'critic');
+    assert.equal(criticSlots.length, 3);
+    assert.ok(criticSlots.every((slot) => slot.agent === 'codex'));
+    assert.equal(new Set(criticSlots.map((slot) => slot.slot_id)).size, 3, 'each instance owns a distinct slot');
+    assert.equal(new Set(criticSlots.map((slot) => slot.assignment_id)).size, 3, 'each instance owns a distinct assignment');
+    assert.equal(listClaims(workspace.dir).length, 3, 'each instance owns a distinct claim/worktree');
+    assert.equal(listAssignments(workspace.dir).length, 3);
+  });
+
   it('explains a blocked 0/3 continuation and returns executable recovery actions without mutation', async () => {
     const loop = openLoop({
       kind: 'ideation',

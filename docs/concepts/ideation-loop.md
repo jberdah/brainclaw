@@ -49,7 +49,7 @@ proposal → critique ↔ revision → synthesis
 | Phase | Purpose | What the slot produces |
 |---|---|---|
 | `proposal` | Seed: the original idea / decision under consideration | A `proposal` artifact (the task text from the caller) |
-| `critique` | Adversarial review against project memory | One or more `critique` artifacts citing real memory ids |
+| `critique` | Adversarial review seeded by project memory and verified against the current worktree | One or more `critique` artifacts citing repository evidence and any memory ids used as leads |
 | `revision` | Champion's response to the critique batch | A `revision` artifact addressing the points raised |
 | `synthesis` | Final plan_draft folding the cycle's outputs | A `plan_draft` artifact with `addresses_critique:[ids]` |
 
@@ -171,6 +171,10 @@ goal: …
 ## what to produce
 - Phase "critique" expects you to act in role "critic".
 - Emit findings as LoopArtifacts via bclaw_loop intent='complete_turn'…
+- Treat memory as an investigation lead, not current-code proof.
+- Verify implementation findings against the worktree and cite a path plus a
+  line, symbol, assertion, or test/command result. Unverified concerns remain
+  questions, not findings.
 - Cite the memory ids you relied on so the synthesis can audit coverage.
 ```
 
@@ -222,26 +226,43 @@ filter, gate, iteration accounting) but want to drive each turn
 yourself — useful for one-shot consultations or when you don't have
 a separate critic agent on hand.
 
-### Multi-agent mode
+### Multi-instance, multi-turn mode
 
 ```
 bclaw_coordinate(intent='ideate',
                  task='Should we adopt approach A or approach B?',
-                 targetAgents=['codex'])
+                 targetAgents=['codex', 'codex', 'codex'],
+                 criticPerspectives=[
+                   'challenge assumptions and demand evidence',
+                   'focus on failure modes and recovery',
+                   'develop alternatives and compare trade-offs'
+                 ])
 ```
 
 - Opens a loop with `champion` slot (caller) + one `critic` slot per
-  target agent.
+  requested target instance. Repeated identities are intentional: a user with
+  only one installed agent can request three isolated Codex, Claude, or other
+  critic instances. Each occurrence gets its own slot, claim, worktree,
+  assignment, and turn authority; the three-artifact gate does not require
+  three different agent families.
 - Stores `task` as a `proposal` artifact.
 - Advances proposal → critique.
-- For each critic slot: assembles the brief via `buildIdeationBrief`
-  honouring the critique phase's context_filter, calls
-  `bclaw_loop(intent='turn')` to flip the slot to `assigned`, and
-  queues a coordinate message with the brief as body and
-  `{intent: 'ideate', loop_id, slot_id, phase, iteration,
-  proposal_artifact_id}` payload.
+- Persists a distinct `perspective` on every critic slot. When
+  `criticPerspectives` is omitted, Brainclaw supplies complementary evidence,
+  failure-mode, and alternatives/trade-off lenses.
+- Uses `ideation_schedule='sequential'` by default. Only critic A starts
+  initially. After its result is harvested, `continuations` and `next_actions`
+  name critic B's real `turn(dispatch=true)`; B's brief includes A's critique
+  from the current round. C then sees A+B. The champion revises after the gate,
+  and the ordered conversation starts again in the next iteration.
+- `ideation_schedule='parallel'` is an explicit latency/quality trade-off that
+  starts every critic immediately. It is useful when independent first
+  impressions matter more than cross-challenge and token cost.
+- `brainclaw harvest <assignment>` and MCP `bclaw_harvest` both surface the
+  loop continuation. Workers may also finish through `complete_turn` directly.
 - Returns `{loop_id, …, mode: 'multi_agent',
-  dispatched_critics: N, current_phase: 'critique'}`.
+  ideation_schedule, dispatched_critics, pending_critics,
+  current_phase: 'critique'}`.
 
 When the critique phase brief is truncated for any slot, a per-slot
 warning surfaces. When dispatch fails (e.g. an agent is unknown), the
@@ -299,9 +320,9 @@ which critiques were honoured vs ignored.
   framings, and "wrong question" findings that memory-driven critique
   is structurally unable to produce. Validated empirically; ships on
   its own cadence after MVP usage telemetry.
-- **Profile-based slot diversity.** Champion / simplifier / pessimist
-  as separate slot types with their own context filters. Deferred
-  until the single-slot model is validated in production.
+- **Richer perspective presets.** Slots already persist caller-provided or
+  default critic lenses. Named reusable perspective packs can build on that
+  contract without coupling diversity to agent identity.
 - **Cross-loop memory.** Promoting validated plan_drafts back into
   the project memory store with provenance. Today the synthesis
   artifact lives only in the loop event journal.

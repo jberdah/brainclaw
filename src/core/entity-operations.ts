@@ -42,7 +42,7 @@ import {
 } from './claims.js';
 import { listActionRequired } from './actions.js';
 import { listAgentIdentities } from './agent-registry.js';
-import { getCapabilityProfile, getSpawnableAgents } from './agent-capability.js';
+import { getCapabilityProfile, getSpawnableAgents, validateAgentForDispatch } from './agent-capability.js';
 import { buildReputationSnapshot, toPublicReputationSummary } from './reputation.js';
 import { loadAllSessions } from './identity.js';
 import { loadInstructions } from './instructions.js';
@@ -100,6 +100,7 @@ import {
   RuntimeNoteTypeSchema,
   SequenceStatusSchema,
   SeveritySchema,
+  MemoryVerificationSchema,
 } from './schema.js';
 import type {
   AgentIdentityDocument,
@@ -425,7 +426,14 @@ export function listEntities(
     isLowConfidenceAutoReflect(item as Record<string, unknown>, filter)
   ).length;
   const filtered = fieldFiltered.filter((item) => passesProvenanceFilter(item as Record<string, unknown>, filter));
-  const paged = applyPaging(filtered, filter);
+  const newestFirst = [...filtered].sort((a, b) => {
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const leftDate = String(left.updated_at ?? left.created_at ?? '');
+    const rightDate = String(right.updated_at ?? right.created_at ?? '');
+    return rightDate.localeCompare(leftDate) || String(left.id ?? '').localeCompare(String(right.id ?? ''));
+  });
+  const paged = applyPaging(newestFirst, filter);
   return {
     entity: name,
     total: filtered.length,
@@ -449,6 +457,8 @@ export interface BoundedListResult<T = unknown> {
   next_offset?: number;
   /** Items dropped from this page solely to keep the payload under the size budget. */
   omitted_for_size?: number;
+  /** One oversized row was reduced to identity/status fields. */
+  oversized_item_projected?: boolean;
   /** Hint on how to fetch the rest. Present only when has_more. */
   hint?: string;
 }
@@ -477,6 +487,16 @@ export function boundListResult<T = unknown>(
     items = items.slice(0, items.length - drop);
     omittedForSize = result.items.length - items.length;
   }
+  let oversizedItemProjected = false;
+  if (items.length === 1 && JSON.stringify(items).length > charBudget) {
+    const item = items[0];
+    if (item && typeof item === 'object') {
+      const row = item as Record<string, unknown>;
+      const compactKeys = ['id', 'short_label', 'status', 'created_at', 'updated_at', 'agent', 'scope', 'plan_id'];
+      items = [Object.fromEntries(compactKeys.filter((key) => row[key] !== undefined).map((key) => [key, row[key]])) as T];
+      oversizedItemProjected = true;
+    }
+  }
   const returned = items.length;
   const hasMore = offset + returned < result.total;
   const bounded: BoundedListResult<T> = {
@@ -485,12 +505,15 @@ export function boundListResult<T = unknown>(
     returned,
     has_more: hasMore,
     ...(omittedForSize > 0 ? { omitted_for_size: omittedForSize } : {}),
+    ...(oversizedItemProjected ? { oversized_item_projected: true } : {}),
   };
   if (hasMore) {
     bounded.next_offset = offset + returned;
     bounded.hint = omittedForSize > 0
       ? `Payload size-bounded: returned ${returned} of ${result.total} ${result.entity} item(s). Fetch more with filter.offset=${bounded.next_offset}, or narrow the filter (status/tag/author).`
       : `Returned ${returned} of ${result.total} ${result.entity} item(s). Page with filter.offset=${bounded.next_offset}, or narrow the filter.`;
+  } else if (oversizedItemProjected) {
+    bounded.hint = 'The matching item exceeded budget_tokens and was projected to identity/status fields. Use bclaw_get for the full item or request explicit bclaw_find fields.';
   }
   return bounded;
 }
@@ -567,6 +590,11 @@ function loadAgentsForRead(cwd: string, filter?: EntityFilter): Record<string, u
     : undefined;
   const project = (doc: AgentIdentityDocument): Record<string, unknown> => {
     const row = projectAgentForRead(doc);
+    const availability = validateAgentForDispatch(doc.agent_name, { requireSpawnable: true });
+    row.declared_spawnable = getCapabilityProfile(doc.agent_name)?.runtime.canBeSpawnedCli ?? false;
+    row.executable_now = availability.valid;
+    row.availability_code = availability.code;
+    row.availability_reason = availability.reason;
     if (reputationById) row.reputation = reputationById.get(String(row.id));
     return row;
   };
@@ -583,7 +611,13 @@ function loadAgentsForRead(cwd: string, filter?: EntityFilter): Record<string, u
   for (const { name } of getSpawnableAgents()) {
     const existing = byName.get(name);
     if (existing) { existing.dispatchable = true; continue; }
-    byName.set(name, projectCatalogAgentForRead(name));
+    const row = projectCatalogAgentForRead(name);
+    const availability = validateAgentForDispatch(name, { requireSpawnable: true });
+    row.declared_spawnable = true;
+    row.executable_now = availability.valid;
+    row.availability_code = availability.code;
+    row.availability_reason = availability.reason;
+    byName.set(name, row);
   }
   return [...byName.values()];
 }
@@ -761,6 +795,7 @@ export function createEntity(
         planId: data.plan_id as string | undefined,
       }, cwd);
       stampProvenanceOnStateItem('decision', res.id, defaultProvenance(data), cwd);
+      stampMemoryVerification('decision', res.id, data, cwd);
       return result({ entity: name, id: res.id, short_label: res.shortLabel });
     }
     case 'constraint': {
@@ -772,6 +807,7 @@ export function createEntity(
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
       stampProvenanceOnStateItem('constraint', res.id, defaultProvenance(data), cwd);
+      stampMemoryVerification('constraint', res.id, data, cwd);
       return result({ entity: name, id: res.id, short_label: res.shortLabel });
     }
     case 'trap': {
@@ -783,6 +819,7 @@ export function createEntity(
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
       stampProvenanceOnStateItem('trap', res.id, defaultProvenance(data), cwd);
+      stampMemoryVerification('trap', res.id, data, cwd);
       return result({ entity: name, id: res.id, short_label: res.shortLabel });
     }
     case 'runtime_note': {
@@ -1346,6 +1383,30 @@ function stampProvenanceOnStateItem(
     const item = (bucket as Array<Record<string, unknown>>).find((x) => x.id === id);
     if (!item) return;
     item.provenance = provenance;
+  }, cwd);
+}
+
+function stampMemoryVerification(
+  name: 'decision' | 'constraint' | 'trap',
+  id: string,
+  data: Record<string, unknown>,
+  cwd: string,
+): void {
+  const verification = data.verification === undefined
+    ? undefined
+    : MemoryVerificationSchema.parse(data.verification);
+  const verifiedAt = typeof data.verified_at === 'string' ? data.verified_at : verification?.verified_at;
+  const verifyCmd = typeof data.verify_cmd === 'string' ? data.verify_cmd : undefined;
+  if (!verification && !verifiedAt && !verifyCmd) return;
+  mutateState((state) => {
+    const bucket = name === 'decision' ? state.recent_decisions
+      : name === 'constraint' ? state.active_constraints
+      : state.known_traps;
+    const item = (bucket as Array<Record<string, unknown>>).find((entry) => entry.id === id);
+    if (!item) return;
+    if (verification) item.verification = verification;
+    if (verifiedAt) item.verified_at = verifiedAt;
+    if (verifyCmd) item.verify_cmd = verifyCmd;
   }, cwd);
 }
 

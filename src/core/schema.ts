@@ -154,6 +154,17 @@ export type Provenance = z.infer<typeof ProvenanceSchema>;
  */
 export const ProvenancePassthroughSchema = z.unknown().optional();
 
+/** Replayable empirical assertion attached to a perishable memory claim. */
+export const MemoryVerificationSchema = z.object({
+  kind: z.enum(['command', 'query']),
+  input: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
+  expected: z.string().min(1),
+  observed: z.string().optional(),
+  verified_at: z.string().datetime(),
+  outcome: z.enum(['pass', 'fail']),
+  max_age_days: z.number().positive().optional(),
+});
+
 export const ConstraintSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -173,6 +184,8 @@ export const ConstraintSchema = z.object({
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   expires_at: z.string().optional(),
+  verified_at: z.string().optional(),
+  verify_cmd: z.string().optional(),
   // pln#544 — memory-lifecycle (confirm/decay/reinforce). Symmetric across
   // constraint/decision/trap. `verified_at` (pln#530 perishable-fact
   // re-verification) is kept as a narrower legacy signal alongside.
@@ -185,6 +198,7 @@ export const ConstraintSchema = z.object({
   /** Bounded event log (most recent N) — older events are dropped, the
    *  counts remain accurate. Empty / absent means "never confirmed". */
   confirmations: z.array(MemoryConfirmationEventSchema).optional(),
+  verification: MemoryVerificationSchema.optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Constraint = z.infer<typeof ConstraintSchema>;
@@ -219,6 +233,7 @@ export const DecisionSchema = z.object({
   saved_me_count: z.number().int().nonnegative().optional(),
   misled_me_count: z.number().int().nonnegative().optional(),
   confirmations: z.array(MemoryConfirmationEventSchema).optional(),
+  verification: MemoryVerificationSchema.optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Decision = z.infer<typeof DecisionSchema>;
@@ -257,6 +272,7 @@ export const TrapSchema = z.object({
   saved_me_count: z.number().int().nonnegative().optional(),
   misled_me_count: z.number().int().nonnegative().optional(),
   confirmations: z.array(MemoryConfirmationEventSchema).optional(),
+  verification: MemoryVerificationSchema.optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Trap = z.infer<typeof TrapSchema>;
@@ -1221,6 +1237,15 @@ export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
  */
 export const LANE_RESULT_BODY_MAX_BYTES = 64 * 1024;
 
+export const LaneResultArtifactSchema = z.union([
+  z.string().min(1),
+  z.object({
+    type: z.string().min(1),
+    ref: z.string().min(1),
+    description: z.string().optional(),
+  }),
+]);
+
 export const LaneResultSchema = z.object({
   assignment_id: z.string(),
   /**
@@ -1242,7 +1267,7 @@ export const LaneResultSchema = z.object({
   status: z.enum(['completed', 'blocked', 'failed']),
   summary: z.string(),
   /** Paths or refs the worker produced (commits, files, docs). */
-  artifacts: z.array(z.string()).optional(),
+  artifacts: z.array(LaneResultArtifactSchema).optional(),
   /** Files the worker changed in the worktree. */
   files_changed: z.array(z.string()).optional(),
   /** Free-form notes (blockers, follow-ups). */

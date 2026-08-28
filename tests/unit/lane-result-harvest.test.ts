@@ -7,6 +7,9 @@ import { LaneResultSchema } from '../../src/core/schema.js';
 import { harvestLaneResults, getLaneResultPath } from '../../src/commands/harvest.js';
 import { acquireClaimScope } from '../../src/core/claims.js';
 import { createAssignment } from '../../src/core/assignments.js';
+import { executeMcpToolCall } from '../../src/commands/mcp.js';
+import { createTestWorkspace } from '../helpers/workspace.js';
+import { setAgentTrustLevel } from '../../src/core/agent-registry.js';
 
 // pln#526 — LANE-RESULT convention: a worker writes LANE-RESULT.json at its
 // worktree root; `brainclaw harvest <assignment_id>` ingests it.
@@ -35,6 +38,47 @@ describe('LaneResultSchema (pln#526)', () => {
 
   it('requires assignment_id and summary', () => {
     assert.throws(() => LaneResultSchema.parse({ status: 'completed' }));
+  });
+
+  it('accepts both legacy string refs and structured artifact objects', () => {
+    const parsed = LaneResultSchema.parse({
+      assignment_id: 'asgn_objects', status: 'completed', summary: 'done',
+      artifacts: ['art_legacy', { type: 'file', ref: 'CRITIQUE.md', description: 'full critique' }],
+    });
+    assert.equal(parsed.artifacts?.length, 2);
+    assert.deepEqual(parsed.artifacts?.[1], { type: 'file', ref: 'CRITIQUE.md', description: 'full critique' });
+  });
+});
+
+describe('bclaw_harvest MCP parity', () => {
+  it('harvests lane results through MCP and remains idempotent', async () => {
+    const workspace = createTestWorkspace({ currentAgent: 'claude-code' });
+    setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-mcp-lane-wt-'));
+    writeLane(wt, { assignment_id: 'asgn_mcp', status: 'completed', summary: 'via MCP' });
+    try {
+      const first = await executeMcpToolCall({
+        name: 'bclaw_harvest',
+        args: { assignmentId: 'asgn_mcp', worktreePaths: [wt], agent: workspace.currentAgent.agent_name, agentId: workspace.currentAgent.agent_id },
+        cwd: workspace.dir,
+      });
+      assert.equal(first.response.isError, false);
+      const firstPayload = first.response.structuredContent as { harvested: unknown[]; errors: string[] };
+      assert.equal(firstPayload.harvested.length, 1);
+      assert.deepEqual(firstPayload.errors, []);
+
+      const second = await executeMcpToolCall({
+        name: 'bclaw_harvest',
+        args: { assignmentId: 'asgn_mcp', worktreePaths: [wt], agent: workspace.currentAgent.agent_name, agentId: workspace.currentAgent.agent_id },
+        cwd: workspace.dir,
+      });
+      const secondPayload = second.response.structuredContent as { harvested: unknown[]; skipped: string[] };
+      assert.equal(secondPayload.harvested.length, 0);
+      assert.deepEqual(secondPayload.skipped, ['asgn_mcp']);
+    } finally {
+      fs.rmSync(wt, { recursive: true, force: true });
+      workspace.cleanup();
+    }
   });
 });
 
@@ -87,6 +131,38 @@ describe('harvestLaneResults (pln#526)', () => {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(wtX, { recursive: true, force: true });
       fs.rmSync(wtY, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers one schema-valid result written under the wrong root filename', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-cwd-'));
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-renamed-'));
+    fs.writeFileSync(path.join(wt, 'critique-result.json'), JSON.stringify({
+      assignment_id: 'asgn_renamed', status: 'completed', summary: 'valid result, wrong filename',
+    }), 'utf-8');
+    try {
+      const res = harvestLaneResults({ assignmentId: 'asgn_renamed', worktreePaths: [wt], dryRun: true, cwd });
+      assert.equal(res.errors.length, 0);
+      assert.equal(res.harvested[0]?.assignment_id, 'asgn_renamed');
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to guess when two renamed result files match the same assignment', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-cwd-'));
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-lane-ambiguous-'));
+    const lane = { assignment_id: 'asgn_ambiguous', status: 'completed', summary: 'duplicate result' };
+    fs.writeFileSync(path.join(wt, 'critique.json'), JSON.stringify(lane), 'utf-8');
+    fs.writeFileSync(path.join(wt, 'result.json'), JSON.stringify(lane), 'utf-8');
+    try {
+      const res = harvestLaneResults({ assignmentId: 'asgn_ambiguous', worktreePaths: [wt], dryRun: true, cwd });
+      assert.equal(res.harvested.length, 0);
+      assert.match(res.errors[0] ?? '', /Ambiguous lane-result files/);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(wt, { recursive: true, force: true });
     }
   });
 
@@ -185,7 +261,7 @@ describe('harvestLaneResults (pln#526)', () => {
       const res = harvestLaneResults({ worktreePaths: [wt], dryRun: true, cwd });
       // `warnings` is the pln#636 C2 conformity channel — always present, empty
       // when nothing was ingested.
-      assert.deepEqual(res, { harvested: [], skipped: [], errors: [], warnings: [] });
+      assert.deepEqual(res, { harvested: [], skipped: [], errors: [], warnings: [], continuations: [] });
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(wt, { recursive: true, force: true });

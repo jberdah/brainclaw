@@ -28,11 +28,11 @@ import { loadClaim } from './claims.js';
 import { getLoop, listLoops } from './loops/store.js';
 import { isProcessAlive } from './agentrun-reconciler.js';
 import { findRuntimeNoteById } from './runtime.js';
-import { latestActivityMs, decodeOemAwareBuffer, getRuntimeLogPath, getRuntimeSignalPath } from './runtime-signals.js';
+import { latestActivityMs, decodeOemAwareBuffer, getRuntimeLogPath, getRuntimeSignalPath, readCompletionSignals } from './runtime-signals.js';
 import { currentAttemptRunIdForAssignment } from './loops/attempt-reservation.js';
-import { LaneResultSchema } from './schema.js';
 import type { Assignment, AgentRun, Claim } from './schema.js';
 import type { LoopThread } from './loops/types.js';
+import { resolveLaneResultFile } from './lane-result-file.js';
 
 export type ResolvedFrom =
   | 'assignment_id'
@@ -65,6 +65,12 @@ export interface DispatchRuntimeSnapshot {
   /** true=alive, false=dead, undefined=cannot determine (no pid tracked). */
   pid_alive: boolean | undefined;
   ack_file: { exists: boolean; path: string | undefined };
+  /** Canonical wrapper exit evidence, independent of the tracked PID. */
+  terminal_signal?: {
+    status: 'completed' | 'failed' | 'contradictory';
+    completed_path: string;
+    failed_path: string;
+  };
   log_files: {
     stdout: LogFileSnapshot | undefined;
     stderr: LogFileSnapshot | undefined;
@@ -443,6 +449,24 @@ function computeDiagnosis(
     };
   }
 
+  if (runtime.terminal_signal) {
+    const signal = runtime.terminal_signal;
+    if (signal.status === 'contradictory') {
+      return {
+        health: 'unknown',
+        summary: 'both completed and failed terminal sentinels exist; outcome is contradictory and no terminal projection was inferred',
+        recommended_next_action: 'Inspect LANE-RESULT.json and both log files; preserve the worktree and reconcile the contradiction before retrying.',
+      };
+    }
+    return {
+      health: 'terminal',
+      summary: `worker wrapper emitted the canonical ${signal.status} terminal signal${agentRun && !TERMINAL_RUN_STATUSES.has(agentRun.status) ? ` (agent_run still ${agentRun.status})` : ''}`,
+      recommended_next_action: signal.status === 'completed'
+        ? 'Run bclaw_harvest (or `brainclaw harvest <assignment_id>`) to ingest LANE-RESULT and converge the Assignment/Claim.'
+        : 'Read stderr and LANE-RESULT if present, then replay or reroute the failed slot.',
+    };
+  }
+
   // pln#554 — git evidence is the #2 signal, ABOVE process sentinels and
   // administrative status: commits ahead of base with a clean tracked tree
   // means the worker delivered everything to the branch, even if its pid is
@@ -517,19 +541,11 @@ function computeDiagnosis(
     };
   }
 
-  if (runtime.pid_alive === true && stallAge > options.stallMs && fsActive) {
-    return {
-      health: 'healthy',
-      summary: `agent_run alive (pid=${runtime.pid}); last_event_at stale (${Math.round(stallAge / 1000)}s) but filesystem active ${Math.round((fsAge ?? 0) / 1000)}s ago — working through a long op without a heartbeat`,
-      recommended_next_action: 'No action — the worker is actively writing to logs/worktree. Re-check periodically until terminal.',
-    };
-  }
-
   if (runtime.pid_alive === true && stallAge > options.stallMs) {
     return {
       health: 'stalled',
-      summary: `agent_run alive (pid=${runtime.pid}) but no activity for ${Math.round(stallAge / 1000)}s AND no filesystem writes${fsAge !== undefined ? ` (last fs ${Math.round(fsAge / 1000)}s ago)` : ' (no logs/worktree mtime)'}; last_event_at=${agentRun.last_event_at ?? '(never)'}`,
-      recommended_next_action: 'Worker appears genuinely hung (no log/file writes). Tail stderr to confirm, then kill the pid and reroute.',
+      summary: `agent_run pid=${runtime.pid} is alive but no explicit progress/heartbeat arrived for ${Math.round(stallAge / 1000)}s${fsActive ? `; filesystem activity ${Math.round((fsAge ?? 0) / 1000)}s ago is context, not proof of worker progress` : ''}`,
+      recommended_next_action: 'Inspect stdout/stderr and the expected artifact path. If no phase artifact or progress heartbeat is advancing, replay/reroute the slot; do not treat PID or unrelated filesystem activity as health.',
     };
   }
 
@@ -600,6 +616,9 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
   const stderrPath = assignmentId
     ? getRuntimeLogPath(projectRoot, assignmentId, 'stderr', runtimeRunId)
     : undefined;
+  const completionSignals = assignmentId
+    ? readCompletionSignals(projectRoot, assignmentId, runtimeRunId)
+    : {};
 
   // pln#527 — filesystem-activity age: max mtime across the captured logs + the
   // run's worktree files (skipping junctions). The truer liveness signal when
@@ -625,14 +644,15 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
   let laneResult: { status: string; summary: string } | undefined;
   let laneResultStale: { assignment_id: string; status: string; summary: string } | undefined;
   if (worktreeForFs) {
-    try {
-      const parsed = LaneResultSchema.parse(JSON.parse(fs.readFileSync(path.join(worktreeForFs, 'LANE-RESULT.json'), 'utf-8')));
+    const resolvedLaneResult = resolveLaneResultFile(worktreeForFs, assignmentId);
+    if (resolvedLaneResult.kind === 'found') {
+      const parsed = resolvedLaneResult.lane;
       if (parsed.assignment_id === assignmentId) {
         laneResult = { status: parsed.status, summary: parsed.summary };
       } else {
         laneResultStale = { assignment_id: parsed.assignment_id, status: parsed.status, summary: parsed.summary };
       }
-    } catch { /* no / invalid LANE-RESULT.json */ }
+    }
   }
 
   // pln#554 — worktree git evidence (commits ahead of base + dirty tracked files).
@@ -645,6 +665,15 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
       exists: ackPath ? fs.existsSync(ackPath) : false,
       path: ackPath,
     },
+    ...(assignmentId && (completionSignals.completed || completionSignals.failed) ? {
+      terminal_signal: {
+        status: completionSignals.completed && completionSignals.failed
+          ? 'contradictory' as const
+          : completionSignals.completed ? 'completed' as const : 'failed' as const,
+        completed_path: getRuntimeSignalPath(projectRoot, assignmentId, 'completed', runtimeRunId),
+        failed_path: getRuntimeSignalPath(projectRoot, assignmentId, 'failed', runtimeRunId),
+      },
+    } : {}),
     log_files: {
       stdout: stdoutPath ? readLogTail(stdoutPath, tailLines) : undefined,
       stderr: stderrPath ? readLogTail(stderrPath, tailLines) : undefined,

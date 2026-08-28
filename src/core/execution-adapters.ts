@@ -517,6 +517,12 @@ export class CliExecutionAdapter implements ExecutionAdapter {
         contractBootstrapPath,
         expectedWorkspacePath: options.worktreePath,
       }, isWin32, options.turnEcho);
+      // Materialize advertised log paths before spawn. A shell/bootstrap error
+      // can otherwise happen before redirection creates either file.
+      for (const stream of ['stdout', 'stderr'] as const) {
+        const logPath = getRuntimeLogPath(signalRoot, options.assignmentId!, stream, runtimeRunId);
+        if (!fs.existsSync(logPath)) fs.writeFileSync(logPath, '', { encoding: 'utf8', mode: 0o600 });
+      }
       child = spawn(wrappedCmd, [], {
         detached: !isWin32,
         shell: true,
@@ -549,6 +555,9 @@ export class CliExecutionAdapter implements ExecutionAdapter {
       child.stdin.end();
     }
 
+    // Preserve fire-and-forget semantics while keeping an exit observer so
+    // libuv reaps the direct wrapper child on long-lived POSIX coordinators.
+    child.once('exit', () => { /* direct child reaped; sentinels own outcome */ });
     child.unref();
 
     const pid = child.pid;

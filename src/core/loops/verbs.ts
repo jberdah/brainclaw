@@ -930,7 +930,14 @@ function completeTurnCommit(input: CompleteTurnCommitInput, cwd?: string): LoopT
   // distinguish done/failed/cancelled without replaying the event journal.
   const terminalStatus: 'done' | 'failed' | 'cancelled' = outcome;
   const updatedSlots = current.slots.map((s) =>
-    s.slot_id === slot.slot_id ? { ...s, status: terminalStatus } : s,
+    s.slot_id === slot.slot_id ? {
+      ...s,
+      status: terminalStatus,
+      ...(terminalStatus === 'done' ? {
+        last_completed_phase: slot.phase ?? current.current_phase,
+        last_completed_iteration: current.iteration_count,
+      } : {}),
+    } : s,
   );
 
   // A negative convergence signal is only valid after the critic window has

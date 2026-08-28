@@ -64,4 +64,13 @@ describe('dispatch_status — LANE-RESULT ownership (trp_e824d2af)', { concurren
     assert.equal(status.diagnosis.health, 'terminal');
     assert.match(status.diagnosis.summary, /worker reported done/);
   });
+
+  it('recovers the dispatch result when an agent used a different JSON filename', () => {
+    fs.writeFileSync(path.join(wtDir, 'ideation-critique.json'), JSON.stringify({
+      assignment_id: 'asgn_target', status: 'completed', summary: 'right payload, wrong filename',
+    }));
+    const status = getDispatchStatus({ target_id: 'asgn_target', cwd: ws.dir });
+    assert.equal(status.runtime.lane_result?.status, 'completed');
+    assert.equal(status.diagnosis.health, 'terminal');
+  });
 });

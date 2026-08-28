@@ -56,6 +56,8 @@ export interface IdeationBriefInput {
   thread: LoopThread;
   /** Role of the slot this brief is being prepared for (e.g. 'critic'). */
   slotRole: string;
+  /** Stable lens assigned to this participant across loop iterations. */
+  slotPerspective?: string;
   memoryProvider: BriefMemoryProvider;
   /**
    * Cap for the assembled brief text. Default 48 000 ≈ 12 000 tokens
@@ -121,6 +123,7 @@ export function buildIdeationBrief(input: IdeationBriefInput): IdeationBriefResu
   const {
     thread,
     slotRole,
+    slotPerspective,
     memoryProvider,
     maxChars = DEFAULT_MAX_CHARS,
     topKPerCategory = DEFAULT_TOP_K_PER_CATEGORY,
@@ -155,14 +158,16 @@ export function buildIdeationBrief(input: IdeationBriefInput): IdeationBriefResu
   }
 
   // Loop-internal categories: pulled from thread.artifacts directly.
-  // critique_history → all critique artifacts in iterations < current.
-  // revision_history → all revision artifacts in iterations < current.
+  // Critique history includes contributions already made in the current
+  // round. Sequential ideation depends on this: participant B challenges A,
+  // then C sees both, instead of producing isolated first impressions.
+  // Revision history similarly includes the latest available revision.
   // synthesis_artifact → the most recent synthesis output (if any).
   const priorArtifactsBlock = includesLoopInternal
     ? renderPriorArtifactsBlock(thread, requestedCategories)
     : '';
 
-  const header = renderHeader(thread, slotRole, currentPhaseDef?.name ?? thread.current_phase);
+  const header = renderHeader(thread, slotRole, currentPhaseDef?.name ?? thread.current_phase, slotPerspective);
   const proposalBlock = renderProposalBlock(proposalText);
   const memoryBlock = renderMemoryBlock(fetchedItemsByCategory);
   const closing = renderClosingInstructions(slotRole, thread.current_phase);
@@ -220,7 +225,7 @@ function expandUserFacingCategories(
   return requested.filter((c) => !LOOP_INTERNAL_CATEGORIES.has(c) && c !== '*');
 }
 
-function renderHeader(thread: LoopThread, slotRole: string, phase: string): string {
+function renderHeader(thread: LoopThread, slotRole: string, phase: string, perspective?: string): string {
   const lines = [
     `# ${thread.kind}_loop brief`,
     `loop: ${thread.id}`,
@@ -230,6 +235,7 @@ function renderHeader(thread: LoopThread, slotRole: string, phase: string): stri
     `title: ${thread.title}`,
   ];
   if (thread.goal) lines.push(`goal: ${thread.goal}`);
+  if (perspective) lines.push(`perspective: ${perspective}`);
   return lines.join('\n');
 }
 
@@ -280,10 +286,10 @@ function renderPriorArtifactsBlock(
   const sections: string[] = [];
   if (wantsCritique) {
     const priorCritique = thread.artifacts.filter(
-      (a) => a.type === 'critique' && (a.iteration ?? 0) < thread.iteration_count,
+      (a) => a.type === 'critique' && (a.iteration ?? 0) <= thread.iteration_count,
     );
     if (priorCritique.length > 0) {
-      const lines = ['### critique_history (prior iterations)'];
+      const lines = ['### critique_history (conversation so far)'];
       for (const a of priorCritique) {
         lines.push(`- [${a.artifact_id}] (iter ${a.iteration ?? 0}) ${truncateLine(a.body)}`);
       }
@@ -292,7 +298,7 @@ function renderPriorArtifactsBlock(
   }
   if (wantsRevision) {
     const priorRevision = thread.artifacts.filter(
-      (a) => a.phase === 'revision' && (a.iteration ?? 0) < thread.iteration_count,
+      (a) => a.phase === 'revision' && (a.iteration ?? 0) <= thread.iteration_count,
     );
     if (priorRevision.length > 0) {
       const lines = ['### revision_history (prior iterations)'];
@@ -317,12 +323,20 @@ function renderPriorArtifactsBlock(
 }
 
 function renderClosingInstructions(slotRole: string, phase: string): string {
-  return [
+  const lines = [
     `## what to produce`,
     `- Phase "${phase}" expects you to act in role "${slotRole}".`,
     `- Emit findings as LoopArtifacts via bclaw_loop intent='complete_turn' or 'add_artifact'.`,
-    `- Cite the memory ids you relied on so the synthesis can audit coverage.`,
-  ].join('\n');
+  ];
+  if (phase === 'critique') {
+    lines.push(
+      `- Treat memory items as investigation leads, never as proof that the current worktree still behaves that way.`,
+      `- Verify every finding about the current implementation against the worktree. Cite at least one concrete file path plus a line, symbol, assertion, or test/command result.`,
+      `- If you cannot verify a memory-backed concern in the worktree, label it as an unverified question instead of reporting it as a finding.`,
+    );
+  }
+  lines.push(`- Cite the memory ids you relied on so the synthesis can audit coverage.`);
+  return lines.join('\n');
 }
 
 function truncateLine(s: string | undefined, maxLen = 200): string {

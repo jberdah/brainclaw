@@ -142,7 +142,9 @@ export function closeIdeationLoopFromLaneResult(
         // Prefer the typed envelope, but honor the legacy artifacts labels too:
         // coverage_gap used to be silently invisible to a critique gate.
         const reportedArtifactType = (lane as Pick<LaneResult, 'artifact_type' | 'artifacts'>).artifact_type?.trim()
-          ?? (lane as Pick<LaneResult, 'artifacts'>).artifacts?.find((label) => /^[a-z][a-z0-9_]*$/.test(label) && label !== expectedArtifactType);
+          ?? (lane as Pick<LaneResult, 'artifacts'>).artifacts
+            ?.map((item) => typeof item === 'string' ? item : item.type)
+            .find((label) => /^[a-z][a-z0-9_]*$/.test(label) && label !== expectedArtifactType);
         const body = (lane as Pick<LaneResult, 'body'>).body?.trim();
         const critique = body || [lane.summary, lane.notes]
           .map((s) => (s ?? '').trim())

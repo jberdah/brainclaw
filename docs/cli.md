@@ -1185,6 +1185,39 @@ brainclaw update-handoff hnd_001 --review-verdict request_changes --reviewed-by 
 
 ---
 
+## Worker result harvest
+
+### `brainclaw harvest [assignment_id]`
+
+Ingest a worker's `LANE-RESULT.json`, reconcile any bound loop turn, and report
+the exact continuation. Pass one assignment id or use `--all`; this is distinct
+from `harvest-candidates`, which imports proposed memory items.
+
+| Option | Description |
+|---|---|
+| `--all` | Scan every managed worktree |
+| `--integrate` | Also commit a sandboxed worker's worktree diff and settle its lifecycle |
+| `--orphaned` | Recover a dead worker that left no lane result, without deleting/resetting work |
+| `--base <ref>` | Base ref used by orphan recovery (default `master`) |
+| `--dry-run` | Preview without writing events or markers |
+| `--worktree <path>` | Explicit worktree to scan; repeatable |
+| `--json` | Return lane results, warnings, and loop continuations as JSON |
+
+```bash
+brainclaw harvest asgn_123
+brainclaw harvest --all --json
+brainclaw harvest --integrate asgn_123
+```
+
+The exact filename is `LANE-RESULT.json`. A unique root-level JSON file whose
+schema and `assignment_id` match can be recovered when a worker chose the wrong
+name; Brainclaw refuses ambiguous candidates. `artifacts` accepts either string
+refs or `{type, ref, description?}` objects, while loop workers must also emit
+the `artifact_type` named in their brief. A repairable schema/contract error
+keeps the real turn replayable and eligible for corrected re-harvest.
+
+---
+
 ## Dispatch
 
 The `dispatch` command group manages the local agent dispatcher: it analyzes the active sequence for lane readiness and assigns work to available agents.

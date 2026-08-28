@@ -120,6 +120,7 @@ export async function dispatchLoopTurn(input: DispatchLoopTurnInput): Promise<Di
   const phaseBrief = buildIdeationBrief({
     thread: loop,
     slotRole: slot.role,
+    slotPerspective: slot.perspective,
     memoryProvider: provider,
     seedText: input.task,
     scopeHints: slot.scope_hint ? slot.scope_hint.split(',').map((value) => value.trim()) : [],
@@ -217,6 +218,7 @@ export async function dispatchLoopTurn(input: DispatchLoopTurnInput): Promise<Di
         attempt_epoch: prepared.attempt_epoch,
         workspace_digest: prepared.workspace_digest,
       } : undefined,
+      artifactType: policy.expected_artifacts?.[0]?.loop_artifact_type,
       cwd: input.cwd,
     });
     const message = sendMessage({

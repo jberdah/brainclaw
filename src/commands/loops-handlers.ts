@@ -99,12 +99,15 @@ function successResponse(
   const resultLoop = result && typeof result === 'object' && 'loop' in result
     ? (result as { loop?: LoopThread }).loop
     : undefined;
+  const enrichedResult = resultLoop && result && typeof result === 'object'
+    ? { ...(result as Record<string, unknown>), progress: loopProgress(resultLoop) }
+    : result;
   const nextActions = resultLoop ? pipelineNextActions(resultLoop) : [];
   return {
     response: {
       status: 'ok',
       intent: `bclaw_loop.${intent}`,
-      result,
+      result: enrichedResult,
       artifacts,
       side_effects,
       warnings,
@@ -161,6 +164,30 @@ function pipelineNextActions(loop: LoopThread): NextAction[] {
     }];
   }
   return [];
+}
+
+function loopProgress(loop: LoopThread): Record<string, unknown> {
+  const phase = loop.phases.find((candidate) => candidate.name === loop.current_phase);
+  const phaseSlots = loop.slots.filter((slot) => (slot.phase ?? loop.current_phase) === loop.current_phase);
+  const slotCounts: Record<string, number> = {};
+  for (const slot of phaseSlots) slotCounts[slot.status] = (slotCounts[slot.status] ?? 0) + 1;
+  const artifactCounts: Record<string, number> = {};
+  for (const artifact of loop.artifacts.filter((item) => item.phase === loop.current_phase)) {
+    artifactCounts[artifact.type] = (artifactCounts[artifact.type] ?? 0) + 1;
+  }
+  const gate = evaluatePhaseAdvanceGate(loop, phase?.advance_gate);
+  const activeSlots = phaseSlots.filter((slot) => ['open', 'assigned', 'working', 'waiting_input'].includes(slot.status));
+  const stuck = loop.status === 'open' && !gate.advance && activeSlots.length === 0;
+  return {
+    phase: loop.current_phase,
+    iteration: loop.iteration_count,
+    slots_by_status: slotCounts,
+    artifacts_by_type: artifactCounts,
+    gate_met: gate.advance,
+    ...(gate.gate_reason ? { gate_reason: gate.gate_reason } : {}),
+    stuck,
+    ...(stuck ? { recovery: 'Replay a real slot turn with bclaw_loop(intent="turn", slot_id=…); add_artifact cannot satisfy strict evidence.' } : {}),
+  };
 }
 
 /** Concrete action evaluated by continuation policy; never exposed as an ungoverned hint. */

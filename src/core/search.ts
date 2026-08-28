@@ -2,6 +2,7 @@ import { loadState } from './state.js';
 import { listCandidates } from './candidates.js';
 import { listSequences } from './sequence.js';
 import type { State } from './schema.js';
+import { isTrapActive } from './traps.js';
 
 export interface SearchResult {
   id: string;
@@ -57,9 +58,9 @@ function buildCorpus(state: State, includePending: boolean, cwd?: string, includ
     docs.push({ ...item, section, terms: tokenize(textParts.join(' ')) });
   };
 
-  for (const c of state.active_constraints) add('constraints', c);
+  for (const c of state.active_constraints.filter((item) => item.status === 'active')) add('constraints', c);
   for (const d of state.recent_decisions) add('decisions', d);
-  for (const t of state.known_traps) add('traps', { ...t, text: t.text });
+  for (const t of state.known_traps.filter((item) => isTrapActive(item))) add('traps', { ...t, text: t.text });
   for (const h of state.open_handoffs) add('handoffs', { ...h, text: `${h.from} -> ${h.to}: ${h.text}` });
   for (const p of state.plan_items) add('plans', p);
 

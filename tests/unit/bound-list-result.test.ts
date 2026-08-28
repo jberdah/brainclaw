@@ -53,10 +53,13 @@ describe('boundListResult (pln#491)', () => {
     assert.match(out.hint ?? '', /size-bounded/);
   });
 
-  it('always keeps at least one item even if a single item exceeds the budget', () => {
+  it('projects one oversized item to identity fields instead of exceeding the budget', () => {
     const out = boundListResult(result(1, 1, 50000), 0, 20000);
     assert.equal(out.returned, 1);
     assert.equal(out.has_more, false);
     assert.equal(out.omitted_for_size, undefined);
+    assert.equal(out.oversized_item_projected, true);
+    assert.deepEqual(out.items, [{ id: 't0' }]);
+    assert.match(out.hint ?? '', /bclaw_get/);
   });
 });

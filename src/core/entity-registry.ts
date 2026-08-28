@@ -201,7 +201,7 @@ const decision: EntitySpec = {
   shortLabelPrefix: 'dec',
   schema: DecisionSchema,
   updatable: [
-    'text', 'tags', 'outcome', 'scope', 'related_paths', 'verified_at', 'verify_cmd',
+    'text', 'tags', 'outcome', 'scope', 'related_paths', 'verified_at', 'verify_cmd', 'verification',
     // pln#544 lifecycle (touched via memory-lifecycle.ts recordMemoryEvent;
     // exposing them here keeps bclaw_update straight-through for tests and
     // operator backfills).
@@ -225,7 +225,7 @@ const constraint: EntitySpec = {
   shortLabelPrefix: 'cst',
   schema: ConstraintSchema,
   updatable: [
-    'text', 'tags', 'category', 'scope', 'related_paths', 'expires_at',
+    'text', 'tags', 'category', 'scope', 'related_paths', 'expires_at', 'verified_at', 'verify_cmd', 'verification',
     // pln#544 lifecycle — see decision.updatable.
     'last_confirmed_at', 'last_infirmed_at',
     'confirmation_count', 'infirmation_count',
@@ -250,7 +250,7 @@ const trap: EntitySpec = {
   schema: TrapSchema,
   updatable: [
     'text', 'tags', 'severity', 'scope', 'related_paths', 'expires_at', 'platform_scope',
-    'verified_at', 'verify_cmd',
+    'verified_at', 'verify_cmd', 'verification',
     // pln#544 lifecycle — see decision.updatable.
     'last_confirmed_at', 'last_infirmed_at',
     'confirmation_count', 'infirmation_count',

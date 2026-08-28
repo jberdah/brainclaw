@@ -286,27 +286,30 @@ describe('buildProtocolSection — deps-mode brief honesty (trp_37b05a15)', () =
     return wt;
   }
 
-  it('install + deps_provisioned=true → tells the worker deps are ready (do NOT reinstall)', () => {
-    const wt = worktreeWithSidecar({ deps_mode: 'install', deps_provisioned: true });
+  it('install + a verified node_modules directory → tells the worker deps are ready', () => {
+    const wt = worktreeWithSidecar({ deps_mode: 'install', deps_provisioned: true, deps_paths: ['node_modules'] });
+    fs.mkdirSync(path.join(wt, 'node_modules'));
     const brief = buildProtocolSection({ worktreePath: wt });
-    assert.match(brief, /real in-root directory \(deps_mode=install\)/);
+    assert.match(brief, /verified in-root node_modules at node_modules \(deps_mode=install\)/);
     assert.match(brief, /do NOT reinstall/);
     fs.rmSync(wt, { recursive: true, force: true });
   });
 
-  it('install + deps_provisioned=false → tells the worker provisioning FAILED, install first', () => {
+  it('install + deps_provisioned=false → reports missing deps without authorizing network fallback', () => {
     const wt = worktreeWithSidecar({ deps_mode: 'install', deps_provisioned: false });
     const brief = buildProtocolSection({ worktreePath: wt });
-    assert.match(brief, /FAILED/);
-    assert.match(brief, /Run the project's install/);
+    assert.match(brief, /did not produce a usable node_modules tree/);
+    assert.match(brief, /Do not invoke npx or any network-backed install/);
     assert.ok(!/do NOT reinstall/.test(brief), 'must not claim deps are ready on failure');
     fs.rmSync(wt, { recursive: true, force: true });
   });
 
-  it('no sidecar → default link-mode dependency text', () => {
+  it('no sidecar and no node_modules → does not invent link-mode availability', () => {
     const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-brief-nolink-'));
     const brief = buildProtocolSection({ worktreePath: wt });
-    assert.match(brief, /node_modules is linked from the main repo/);
+    assert.match(brief, /no node_modules directory was verified/);
+    assert.doesNotMatch(brief, /linked from the main repo/);
+    assert.match(brief, /Do not invoke npx/);
     fs.rmSync(wt, { recursive: true, force: true });
   });
 });
@@ -323,7 +326,7 @@ describe('createWorktree deps_mode wiring (trp_37b05a15)', () => {
     return { repo, git };
   }
 
-  function readSidecar(wt: string): { deps_mode?: string; deps_provisioned?: boolean; symlink_warnings?: string[] } {
+  function readSidecar(wt: string): { deps_mode?: string; deps_provisioned?: boolean; deps_paths?: string[]; symlink_warnings?: string[] } {
     return JSON.parse(fs.readFileSync(path.join(wt, '.brainclaw-worktree.json'), 'utf-8'));
   }
 
@@ -343,6 +346,8 @@ describe('createWorktree deps_mode wiring (trp_37b05a15)', () => {
       assert.ok(!fs.lstatSync(nm).isSymbolicLink(), 'node_modules is a real dir, not an out-of-root symlink');
       const sidecar = readSidecar(wt);
       assert.equal(sidecar.deps_mode, 'copy');
+      assert.equal(sidecar.deps_provisioned, true);
+      assert.deepEqual(sidecar.deps_paths, ['node_modules']);
       assert.ok(!(sidecar.symlink_warnings ?? []).some((w) => /Turbopack/.test(w)), 'no Turbopack warning in copy mode');
     } finally {
       spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
@@ -366,13 +371,41 @@ describe('createWorktree deps_mode wiring (trp_37b05a15)', () => {
       const wt = createWorktree(repo, 'feat/link');
       const sidecar = readSidecar(wt);
       assert.ok((sidecar.symlink_warnings ?? []).some((w) => /Turbopack/.test(w)), 'Turbopack warning present in link mode');
-      assert.equal(sidecar.deps_mode, undefined, 'default link mode is not recorded in the sidecar');
+      assert.equal(sidecar.deps_mode, 'link');
+      assert.equal(sidecar.deps_provisioned, true);
+      assert.deepEqual(sidecar.deps_paths, ['node_modules']);
     } finally {
       spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
       fs.rmSync(targetPath, { recursive: true, force: true });
       fs.rmSync(repo, { recursive: true, force: true });
       if (prev !== undefined) process.env.BRAINCLAW_WORKTREE_DEPS_MODE = prev;
       if (prevNoLink !== undefined) process.env.BRAINCLAW_NO_LINK_DEPS = prevNoLink;
+    }
+  });
+
+  it('link mode with no source node_modules records unavailable capacity', () => {
+    const prev = process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+    delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+    const { repo, git } = initRepo('bclaw-wt-link-missing-');
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest' } }));
+    git(['add', 'package.json']);
+    git(['commit', '-m', 'add package manifest']);
+    const targetPath = resolveWorktreePath(repo, 'feat/link-missing');
+    try {
+      const wt = createWorktree(repo, 'feat/link-missing');
+      const sidecar = readSidecar(wt);
+      assert.equal(sidecar.deps_mode, 'link');
+      assert.equal(sidecar.deps_provisioned, false);
+      assert.deepEqual(sidecar.deps_paths, []);
+      const brief = buildProtocolSection({ worktreePath: wt });
+      assert.match(brief, /no node_modules directory was verified/);
+      assert.match(brief, /Do not invoke npx/);
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+      if (prev === undefined) delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+      else process.env.BRAINCLAW_WORKTREE_DEPS_MODE = prev;
     }
   });
 

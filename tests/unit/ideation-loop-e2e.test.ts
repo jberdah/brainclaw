@@ -113,6 +113,7 @@ describe('ideate e2e — search-backed memory makes it into the brief (pln#492 s
       intent: 'ideate',
       task: 'Should we refactor the dispatcher to extract claim handling into a separate module?',
       targetAgents: ['codex', 'opencode', 'github-copilot'],
+      ideation_schedule: 'parallel',
       agent: 'claude-code',
     });
 
@@ -148,6 +149,7 @@ describe('ideate e2e — search-backed memory makes it into the brief (pln#492 s
       intent: 'ideate',
       task: 'Refactor the dispatcher entirely',
       targetAgents: ['codex', 'opencode', 'github-copilot'],
+      ideation_schedule: 'parallel',
       agent: 'claude-code',
     });
 
@@ -171,7 +173,7 @@ describe('ideate e2e — search-backed memory makes it into the brief (pln#492 s
     const messages = readInbox({ agent: 'codex' }, workspace.dir).messages;
     assert.ok(messages.length > 0);
     const briefBody = messages[0].text;
-    const BRIEF_ENVELOPE_MAX = 48_000 + 6_000;
+    const BRIEF_ENVELOPE_MAX = 48_000 + 6_500;
     assert.ok(
       briefBody.length <= BRIEF_ENVELOPE_MAX,
       `brief (content cap + Phase 2 dispatch envelope) should be <= ${BRIEF_ENVELOPE_MAX}; got ${briefBody.length}`,

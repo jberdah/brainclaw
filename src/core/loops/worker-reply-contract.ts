@@ -152,7 +152,7 @@ export function renderWorkerReplyProse(contract: WorkerReplyContract): string {
     `- MCP path: call \`${action.tool}\` with ${JSON.stringify(action.args)}`,
     `- The body must be NON-EMPTY: an artifact without usable content does not count toward the gate.`,
     `- Body cap: ${contract.body_max_bytes} bytes. If your output is larger, write the full version to a markdown file in your worktree and put a dense summary plus the file path in the body.`,
-    `- File fallback (no MCP): in LANE-RESULT.json set "artifact_type":"${contract.requirements[0].type}" and put your full output in "body" — the harvester records it under this contract.`,
+    `- File fallback (no MCP): write the worktree-root filename exactly as \`LANE-RESULT.json\` (uppercase, hyphen, no suffix or subdirectory); set "artifact_type":"${contract.requirements[0].type}" and put your full output in "body" — the harvester records it under this contract.`,
     `- This contract is FROZEN for loop version ${contract.loop_version}, phase "${contract.phase}". If your submit reports a version conflict or the loop has advanced, your work is still recorded under phase "${contract.phase}" — do not re-target a newer phase.`,
   ];
   if (contract.other_conditions.length > 0) {

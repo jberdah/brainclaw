@@ -22,7 +22,8 @@ import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core
 import { assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { createCandidateFromInput } from './reflect.js';
-import { harvestCandidates } from './harvest.js';
+import { harvestCandidates, harvestLaneResults, integrateLaneResults } from './harvest.js';
+import { dispatchReviewLoopTurn } from '../core/review-loop-turn-dispatch.js';
 import { ensureTrust, scanMcpWriteText, appendSecurityWarnings } from './mcp-write-support.js';
 import {
   toolResponse,
@@ -506,6 +507,93 @@ export function handleBclawHarvestCandidates(payload: McpToolExecutionPayload, _
       errors: harvestResult.errors,
       candidates: harvestResult.harvested.map((c) => ({ id: c.id, type: c.type })),
       dry_run: dryRun,
+    }),
+  };
+}
+
+/** MCP parity for the CLI lane-result harvest path (distinct from candidates). */
+export async function handleBclawHarvestLane(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
+  const { args, cwd, connectionSessionId } = payload;
+  const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+  if (resolved.error) {
+    return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+  }
+  const assignmentId = typeof args.assignmentId === 'string' ? args.assignmentId : undefined;
+  const all = args.all === true;
+  if (!assignmentId && !all) {
+    return { response: createToolErrorResponse('validation_error', 'Provide assignmentId, or set all=true to scan every managed lane.') };
+  }
+  if (assignmentId && all) {
+    return { response: createToolErrorResponse('validation_error', 'assignmentId and all=true are mutually exclusive.') };
+  }
+  const worktreePaths = Array.isArray(args.worktreePaths) ? args.worktreePaths.filter((value): value is string => typeof value === 'string') : undefined;
+  const dryRun = args.dryRun === true;
+  const actor = resolved.identity!.agent_name;
+
+  if (args.integrate === true) {
+    const integrated = integrateLaneResults({ assignmentId, worktreePaths, dryRun, cwd, agent: actor });
+    const dispatchedTurns: Array<{ loop_id: string; agent: string; iteration: number; execution_status?: string; error?: string }> = [];
+    if (!dryRun) {
+      for (const next of integrated.next_turns) {
+        const dispatched = await dispatchReviewLoopTurn({
+          loopId: next.loop_id,
+          slot: { slot_id: next.slot_id, role: next.role, agent: next.agent, agent_id: next.agent_id },
+          phase: next.phase,
+          task: next.task,
+          dispatcherAgent: actor,
+          dispatcherAgentId: resolved.identity!.agent_id,
+          cwd,
+        });
+        dispatchedTurns.push({
+          loop_id: next.loop_id,
+          agent: next.agent,
+          iteration: next.iteration,
+          execution_status: dispatched.execution_status,
+          error: dispatched.error,
+        });
+      }
+    }
+    return {
+      response: toolResponse({
+        content: [{ type: 'text', text: `✔ Lane integrate${dryRun ? ' (dry-run)' : ''}: ${integrated.integrated.length} integrated, ${dispatchedTurns.length} re-dispatched, ${integrated.errors.length} error(s).` }],
+        ...integrated,
+        dispatched_turns: dispatchedTurns,
+        dry_run: dryRun,
+      }),
+    };
+  }
+
+  const harvested = harvestLaneResults({ assignmentId, worktreePaths, dryRun, cwd, agent: actor });
+  const continuationActions = harvested.continuations.flatMap((continuation) => {
+    const next = continuation.next_expected;
+    if (!next) return [];
+    if (next.action === 'turn' && next.slot_id) {
+      return [{
+        tool: 'bclaw_loop',
+        args: { intent: 'turn', loop_id: continuation.loop_id, slot_id: next.slot_id, dispatch: true },
+        when: next.reason ?? 'dispatch the next sequential loop participant',
+      }];
+    }
+    if (next.action === 'advance') {
+      return [{ tool: 'bclaw_loop', args: { intent: 'advance', loop_id: continuation.loop_id }, when: 'the current phase gate is satisfied' }];
+    }
+    return [{ tool: 'bclaw_loop', args: { intent: 'get', loop_id: continuation.loop_id }, when: next.reason ?? `inspect the expected ${next.action} action` }];
+  });
+  return {
+    response: toolResponse({
+      content: [{ type: 'text', text: `✔ Lane harvest${dryRun ? ' (dry-run)' : ''}: ${harvested.harvested.length} harvested, ${harvested.skipped.length} skipped, ${harvested.errors.length} error(s), ${harvested.warnings.length} warning(s).` }],
+      structuredContent: {
+        harvested: harvested.harvested,
+        skipped: harvested.skipped,
+        errors: harvested.errors,
+        warnings: harvested.warnings,
+        continuations: harvested.continuations,
+        dry_run: dryRun,
+        next_actions: [
+          ...continuationActions,
+          ...harvested.warnings.flatMap((warning) => warning.next_actions ?? []),
+        ],
+      },
     }),
   };
 }

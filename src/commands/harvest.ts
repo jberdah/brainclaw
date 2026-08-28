@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { CandidateSchema, type Candidate, LaneResultSchema, type LaneResult, type AssignmentArtifact, type AssignmentStatus } from '../core/schema.js';
+import { CandidateSchema, type Candidate, type LaneResult, type AssignmentArtifact, type AssignmentStatus } from '../core/schema.js';
 import { gitEvidence } from '../core/dispatch-status.js';
 import { listCandidates, listArchivedCandidates, saveCandidate } from '../core/candidates.js';
 import { createRuntimeEvent } from '../core/events.js';
@@ -27,13 +27,15 @@ import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult, type ReviewL
 import { closeIdeationLoopFromLaneResult } from '../core/ideation-loop-close.js';
 import { dispatchReviewLoopTurn, turnOwnedLoopEnabled } from '../core/review-loop-turn-dispatch.js';
 import { reconcileTurnOwnedLane, turnOwnedLaneEvidence, type ReconcileTurnResult, type TurnOwnedLaneEvidence } from '../core/loops/reconcile-turn.js';
-import type { TurnReservation } from '../core/loops/attempt-reservation.js';
+import { findReservationByAssignmentId, type TurnReservation } from '../core/loops/attempt-reservation.js';
 import { getLoop } from '../core/loops/store.js';
+import { computeNextExpected, type NextExpectedHint } from '../core/loops/next-expected.js';
 import { phasePolicy } from '../core/loops/kind-policies.js';
 import { reconcileClaimConformity } from '../core/claim-conformity.js';
 import { toWarningDetail } from '../core/warnings.js';
 import type { WarningDetail } from '../core/facade-schema.js';
 import { harvestHarnessObservation } from '../core/harness-adapters/index.js';
+import { LANE_RESULT_FILENAME, resolveLaneResultFile } from '../core/lane-result-file.js';
 
 /**
  * pln#630 PR3a — finalize a TURN-OWNED review lane via the exactly-once `reconcileTurn`
@@ -409,7 +411,7 @@ export function runHarvestCandidates(options: RunHarvestOptions = {}): void {
 
 /** Conventional path of a worker's lane-result file at the worktree root. */
 export function getLaneResultPath(worktreePath: string): string {
-  return path.join(worktreePath, 'LANE-RESULT.json');
+  return path.join(worktreePath, LANE_RESULT_FILENAME);
 }
 
 /** Idempotency marker so a lane-result is harvested once. */
@@ -441,6 +443,8 @@ export interface LaneHarvestResult {
    * and additive — a caller that ignores this field sees unchanged behaviour.
    */
   warnings: WarningDetail[];
+  /** Exact loop continuation surfaced after a turn result is reconciled. */
+  continuations: Array<{ assignment_id: string; loop_id: string; next_expected: NextExpectedHint | null }>;
 }
 
 /**
@@ -453,13 +457,21 @@ export interface LaneHarvestResult {
 export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarvestResult {
   const cwd = options.cwd ?? process.cwd();
   const agent = options.agent ?? 'coordinator';
-  const result: LaneHarvestResult = { harvested: [], skipped: [], errors: [], warnings: [] };
+  const result: LaneHarvestResult = { harvested: [], skipped: [], errors: [], warnings: [], continuations: [] };
 
   const worktreePaths = resolveLaneScanPaths(options, cwd);
 
   for (const worktreePath of worktreePaths) {
-    const file = getLaneResultPath(worktreePath);
-    const fileExists = fs.existsSync(file);
+    const fileResolution = resolveLaneResultFile(worktreePath, options.assignmentId);
+    if (fileResolution.kind === 'invalid') {
+      result.errors.push(`Failed to parse ${fileResolution.path}: ${fileResolution.error}`);
+      continue;
+    }
+    if (fileResolution.kind === 'ambiguous') {
+      result.errors.push(`Ambiguous lane-result files for ${options.assignmentId ?? worktreePath}: ${fileResolution.paths.join(', ')}`);
+      continue;
+    }
+    const fileExists = fileResolution.kind === 'found';
     let nativeObservation: ReturnType<typeof harvestHarnessObservation>;
     if (options.assignmentId) {
       try {
@@ -473,12 +485,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
 
     let lane: LaneResult;
     if (fileExists) {
-      try {
-        lane = LaneResultSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
-      } catch (err) {
-        result.errors.push(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
-        continue;
-      }
+      lane = fileResolution.lane;
     } else {
       lane = nativeObservation!.lane;
     }
@@ -674,6 +681,25 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     }
 
     result.harvested.push(lane);
+    if (!options.dryRun) {
+      const reservation = findReservationByAssignmentId(lane.assignment_id, cwd);
+      if (reservation) {
+        try {
+          const loop = getLoop(reservation.loop_id, cwd);
+          if (loop) {
+            result.continuations.push({
+              assignment_id: lane.assignment_id,
+              loop_id: loop.id,
+              next_expected: computeNextExpected(loop),
+            });
+          }
+        } catch {
+          // Reconciliation already reports corrupt/unreadable loop state as a
+          // loud warning. Continuation hints are best-effort and must not turn
+          // a successfully harvested result into an uncaught failure.
+        }
+      }
+    }
   }
 
   return result;
@@ -813,16 +839,17 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
   const worktreePaths = resolveLaneScanPaths(options, cwd);
 
   for (const worktreePath of worktreePaths) {
-    const file = getLaneResultPath(worktreePath);
-    if (!fs.existsSync(file)) continue;
-
-    let lane: LaneResult;
-    try {
-      lane = LaneResultSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
-    } catch (err) {
-      result.errors.push(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
+    const fileResolution = resolveLaneResultFile(worktreePath, options.assignmentId);
+    if (fileResolution.kind === 'absent') continue;
+    if (fileResolution.kind === 'invalid') {
+      result.errors.push(`Failed to parse ${fileResolution.path}: ${fileResolution.error}`);
       continue;
     }
+    if (fileResolution.kind === 'ambiguous') {
+      result.errors.push(`Ambiguous lane-result files for ${options.assignmentId ?? worktreePath}: ${fileResolution.paths.join(', ')}`);
+      continue;
+    }
+    const lane = fileResolution.lane;
 
     if (options.assignmentId && lane.assignment_id !== options.assignmentId) continue;
 
@@ -832,6 +859,11 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
       result.errors.push(`No assignment record for lane ${lane.assignment_id} — cannot integrate`);
       continue;
     }
+    const candidateTurnEvidence = turnOwnedLaneEvidence(lane, cwd);
+    const candidateOwnedLoop = candidateTurnEvidence ? getLoop(candidateTurnEvidence.reservation.loop_id, cwd) : undefined;
+    const ownedTurnEvidence = candidateTurnEvidence && candidateOwnedLoop && turnOwnedLoopEnabled(candidateOwnedLoop.kind)
+      ? candidateTurnEvidence
+      : undefined;
 
     const profile = getCapabilityProfile(assignment.agent);
     // No profile ⇒ assume it can commit (conservative: don't author for an
@@ -878,9 +910,14 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
           ...(entry.commit_sha ? [{ type: 'commit', ref: entry.commit_sha, description: 'on-behalf integration commit' }] : []),
           ...entry.files_changed.slice(0, 50).map((f) => ({ type: 'file', ref: f })),
         ];
-        entry.assignment_completed = forceCompleteAssignment(
-          lane.assignment_id, artifacts, `pln#534 on-behalf integration: ${lane.summary.slice(0, 120)}`, actor, cwd,
-        );
+        // Turn-owned lanes are terminalized only after their artifact contract
+        // passes reconcileTurn. A repairable envelope must not complete the
+        // Assignment or fail/release its slot before the corrected replay.
+        if (!ownedTurnEvidence) {
+          entry.assignment_completed = forceCompleteAssignment(
+            lane.assignment_id, artifacts, `pln#534 on-behalf integration: ${lane.summary.slice(0, 120)}`, actor, cwd,
+          );
+        }
 
         // pln#628 Focus 4B — map this lane onto its review loop BEFORE deciding
         // teardown: PR1 records the verdict + advances (auto-close on approve);
@@ -890,11 +927,8 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         // for non-review lanes / lanes without a verdict; never throws.
         // Legacy ideation lanes still use the historical closer. A turn-owned
         // lane of any kind is finalized exactly once by reconcileTurn below.
-        const candidateEvidence = turnOwnedLaneEvidence(lane, cwd);
-        const ownedLoop = candidateEvidence ? getLoop(candidateEvidence.reservation.loop_id, cwd) : undefined;
-        const turnOwnedEvidence = candidateEvidence && ownedLoop && turnOwnedLoopEnabled(ownedLoop.kind)
-          ? candidateEvidence
-          : undefined;
+        const ownedLoop = candidateOwnedLoop;
+        const turnOwnedEvidence = ownedTurnEvidence;
         if (!turnOwnedEvidence) {
           const ideationClose = closeIdeationLoopFromLaneResult(assignment, lane, actor, cwd);
           if (ideationClose) {
@@ -936,6 +970,7 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
           if (rr.next_turn) {
             result.next_turns.push({ loop_id: reservation.loop_id, ...rr.next_turn });
           }
+          entry.assignment_completed = loadAssignment(lane.assignment_id, cwd)?.status === 'completed';
           // Claim/run/assignment settling is OWNED by reconcileTurn, so we do NOT run the
           // legacy teardown gate — just reflect the resulting claim state. Settlement
           // semantics (reconcile-turn.ts, review #1): an ACCEPTED lane — approve OR
@@ -1438,6 +1473,7 @@ export async function runHarvestLane(assignmentId: string | undefined, options: 
       // collected but never emitted on ANY channel; the silent half of the
       // 2026-08-02/03 review-loop stalls.
       warnings: result.warnings,
+      continuations: result.continuations,
     }, null, 2));
     return;
   }
@@ -1472,6 +1508,12 @@ export async function runHarvestLane(assignmentId: string | undefined, options: 
   // whose loop turn did not converge used to vanish behind "N harvested".
   for (const w of result.warnings) {
     console.log(`  ⚠ ${w.message}`);
+  }
+  for (const continuation of result.continuations) {
+    const next = continuation.next_expected;
+    if (!next) continue;
+    const slot = next.slot_id ? ` slot=${next.slot_id}` : '';
+    console.log(`  ↻ Next loop action [${continuation.loop_id}]: ${next.action}${slot}${next.reason ? ` — ${next.reason}` : ''}`);
   }
   const warnTag = result.warnings.length > 0 ? `, ${result.warnings.length} warning(s)` : '';
   console.log(`\n✔ Lane harvest complete${dryTag}: ${result.harvested.length} harvested, ${result.skipped.length} skipped, ${result.errors.length} error(s)${warnTag}.`);
