@@ -7,6 +7,15 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.7] — 2026-08-31
+
+### Fixed
+
+- **Agent hooks preserve the selected project.** Hook events now hydrate their
+  session identity from stdin before resolving the effective project, keeping
+  context-diff output routed to the session's active project in multi-project
+  workspaces.
+
 ## [1.28.6] — 2026-08-28
 
 ### Fixed
