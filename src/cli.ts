@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Command } from 'commander';
 
 import { getInstalledBrainclawVersion } from './core/brainclaw-version.js';
-import { cleanOrphanFiles, memoryDir } from './core/io.js';
+import { cleanOrphanFiles, isSafeSessionId, memoryDir } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { resolveProjectCwd } from './core/cross-project.js';
@@ -97,6 +97,41 @@ function trailingGlobalOptionError(argv: string[], actionCommand: Command): stri
 }
 
 /**
+ * Hook subprocesses do not reliably inherit the MCP process environment. The
+ * agent integrations do, however, provide their session identity in the JSON
+ * event on stdin. Hydrate it before preAction resolves the effective project;
+ * otherwise a session-scoped switch silently falls back to the workspace root.
+ *
+ * This is deliberately best-effort: hooks are advisory, stdin may be empty or
+ * non-JSON, and an explicitly exported session id remains authoritative.
+ */
+function hydrateHookSessionFromStdin(argv: string[]): void {
+  if (!argv.includes('--hook') || process.stdin.isTTY || process.env.BRAINCLAW_SESSION_ID) return;
+
+  try {
+    const raw = fs.readFileSync(0, 'utf8').trim();
+    if (!raw) return;
+    const event = JSON.parse(raw) as {
+      session_id?: unknown;
+      sessionId?: unknown;
+      metadata?: { session?: unknown };
+    };
+    const sessionId = typeof event.session_id === 'string'
+      ? event.session_id.trim()
+      : typeof event.sessionId === 'string'
+        ? event.sessionId.trim()
+        : typeof event.metadata?.session === 'string'
+          ? event.metadata.session.trim()
+          : '';
+    if (sessionId && isSafeSessionId(sessionId)) {
+      process.env.BRAINCLAW_SESSION_ID = sessionId;
+    }
+  } catch {
+    // Invalid hook input must never break the agent's prompt loop.
+  }
+}
+
+/**
  * Resolve the (possibly nested) subcommand named in argv without parsing.
  * Used to run the trailing-global-option guard BEFORE Commander parses:
  * with positional options enabled, Commander would otherwise reject a
@@ -134,7 +169,9 @@ program
   .option('--cwd <path>', 'Override working directory for this invocation')
   .option('--project <name>', 'Run the command against a linked project (cross_project_links or workspace store-chain child). Resolves via resolveProjectCwd; mutually exclusive with --cwd.')
   .hook('preAction', (_thisCommand, actionCommand) => {
-    const root = parseLeadingGlobalOptions(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    hydrateHookSessionFromStdin(argv);
+    const root = parseLeadingGlobalOptions(argv);
     initLogLevel({ verbose: root.verbose, debug: root.debug });
 
     // Skip effective cwd resolution for commands that create the store
