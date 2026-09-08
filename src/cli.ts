@@ -160,7 +160,9 @@ program
 
     if (!skipResolution) {
       // Resolve effective cwd (explicit > BRAINCLAW_PROJECT > active-project > process.cwd)
+      const resolutionStarted = performance.now();
       const effectiveCwd = resolveEffectiveCwd({ explicitCwd });
+      logger.debug(`Startup project resolution: ${(performance.now() - resolutionStarted).toFixed(1)}ms`);
       if (effectiveCwd !== process.cwd()) {
         // Change process.cwd() so all commands resolve the correct store
         // without needing individual --cwd plumbing
@@ -168,7 +170,9 @@ program
         logger.info(`Resolved effective cwd: ${effectiveCwd}`);
       }
 
+      const cleanupStarted = performance.now();
       const removed = cleanOrphanFiles(memoryDir());
+      logger.debug(`Startup orphan cleanup: ${(performance.now() - cleanupStarted).toFixed(1)}ms`);
       if (removed > 0) {
         logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir()}`);
       }

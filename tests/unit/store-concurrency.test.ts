@@ -158,4 +158,41 @@ describe('store concurrency regressions', { concurrency: false }, () => {
     assert.equal(fs.existsSync(recentDeadTmp), true);
     assert.equal(fs.existsSync(unownedTmp), true);
   });
+
+  it('skips historical trees and links while cleaning nested active records', (t) => {
+    const dir = tmpDir();
+    const outside = tmpDir();
+    cleanupDirs.push(outside, dir);
+    const old = new Date(Date.now() - 120_000);
+    const tempName = `.record.json.9999999.${old.getTime()}.abcd.tmp`;
+    const putTemp = (folder: string): string => {
+      fs.mkdirSync(folder, { recursive: true });
+      const file = path.join(folder, tempName);
+      fs.writeFileSync(file, 'orphan');
+      fs.utimesSync(file, old, old);
+      return file;
+    };
+    const retained = ['.git', 'code', 'archive', 'gc-backups', 'migration-backups', 'recovery-backups']
+      .map(name => putTemp(path.join(dir, name, 'nested')));
+    retained.push(putTemp(outside));
+    fs.symlinkSync(outside, path.join(dir, 'external'), process.platform === 'win32' ? 'junction' : 'dir');
+    const activeDir = path.join(dir, 'coordination', 'runtime', 'codex');
+    const orphan = putTemp(activeDir);
+    const deadLock = path.join(activeDir, 'dead.json.lock');
+    const liveLock = path.join(activeDir, 'live.json.lock');
+    fs.writeFileSync(deadLock, JSON.stringify({ pid: 9999999, timestamp: old.getTime() }));
+    fs.writeFileSync(liveLock, JSON.stringify({ pid: process.pid, timestamp: old.getTime() }));
+    for (let i = 0; i < 1000; i++) fs.writeFileSync(path.join(activeDir, `record-${i}.json`), '{}');
+    const read = t.mock.method(fs, 'readdirSync');
+    const stat = t.mock.method(fs, 'statSync');
+    assert.equal(cleanOrphanFiles(dir), 2);
+    assert.equal(fs.existsSync(orphan), false);
+    assert.equal(fs.existsSync(deadLock), false);
+    assert.equal(fs.existsSync(liveLock), true);
+    for (const file of retained) assert.equal(fs.existsSync(file), true);
+    assert.equal(stat.mock.callCount(), 0, 'ordinary entities must not incur stat calls');
+    const visited = read.mock.calls.map(call => String(call.arguments[0]));
+    for (const file of retained) assert.ok(!visited.includes(path.dirname(file)));
+    assert.ok(!visited.includes(path.join(dir, 'external')));
+  });
 });
