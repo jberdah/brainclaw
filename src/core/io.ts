@@ -561,25 +561,30 @@ export function writeFileAtomic(filepath: string, content: string, options: Atom
  * Call once at CLI startup. Returns count of removed files.
  */
 export function cleanOrphanFiles(dirPath: string): number {
-  let removed = 0;
-  if (!fs.existsSync(dirPath)) return 0;
+  return cleanOrphanDirectory(dirPath, true);
+}
 
-  // Clean .tmp files (residual from crashed writeFileAtomic)
+function cleanOrphanDirectory(dirPath: string, root: boolean): number {
+  let removed = 0;
+  // Historical/derived trees are not startup-maintenance targets. Their writers
+  // reclaim stale locks when acquiring them; scanning their contents here makes
+  // connection latency proportional to Git history and Code Map size.
+  const excluded = new Set(['.git', 'code', 'archive', 'gc-backups', 'migration-backups', 'recovery-backups']);
   try {
-    for (const entry of fs.readdirSync(dirPath)) {
-      const full = path.join(dirPath, entry);
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(full);
-      } catch {
-        continue;
-      }
-      if (entry.endsWith('.tmp') && stat.isFile() && shouldRemoveTmp(entry, stat)) {
-        try { fs.unlinkSync(full); removed++; } catch { /* already gone */ }
-      }
-      // Recurse into subdirectories
-      if (stat.isDirectory()) {
-        removed += cleanOrphanFiles(full);
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+      const full = path.join(dirPath, entry.name);
+      // Dirents avoid a stat per entity and do not follow symlinks/junctions.
+      if (entry.isDirectory()) {
+        const name = entry.name.toLowerCase();
+        if (name !== '.git' && !(root && excluded.has(name))) removed += cleanOrphanDirectory(full, false);
+      } else if (entry.isFile() && tempOwnerPid(entry.name)) {
+        try {
+          const stat = fs.lstatSync(full);
+          if (stat.isFile() && shouldRemoveTmp(entry.name, stat)) {
+            fs.unlinkSync(full);
+            removed++;
+          }
+        } catch { /* disappeared or unreadable — skip */ }
       }
     }
   } catch { /* dir unreadable — skip */ }

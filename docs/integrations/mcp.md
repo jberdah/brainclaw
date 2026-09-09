@@ -564,4 +564,19 @@ The CLI remains valuable for:
 - release and packaging
 - debugging and fallback access
 
+### Diagnose MCP startup
+
+Measure startup with a fresh subprocess rather than timing a tool call on an
+existing connection:
+
+```bash
+node scripts/bench-mcp-startup.mjs --cwd . --cli dist/cli.js --repeats 3 --budget-ms 20000
+```
+
+The benchmark covers process launch, `initialize`, the initialized
+notification, and `tools/list`. It requires an explicit project directory
+because normal CLI startup maintenance may update that store. Pass `--debug`
+before the `mcp` command to report project-resolution and orphan-cleanup
+durations on stderr without corrupting JSON-RPC stdout.
+
 But for capable agents, MCP is the first-class path for both reads and writes.

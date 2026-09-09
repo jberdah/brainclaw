@@ -7,6 +7,23 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.8] — 2026-09-09
+
+### Fixed
+
+- **Large stores no longer delay MCP startup with an unbounded orphan scan.**
+  Startup cleanup now skips Git internals, Code Map data, archives, and backup
+  trees; avoids one filesystem stat per ordinary record; and never follows
+  directory links. Stale temporary files and locks in active store trees remain
+  eligible for the existing owner and age checks.
+
+### Added
+
+- **MCP startup has measurable phase diagnostics.** `--debug` reports project
+  resolution and orphan-cleanup durations on stderr, and
+  `scripts/bench-mcp-startup.mjs` measures a fresh subprocess through
+  `initialize` and `tools/list` with a configurable latency budget.
+
 ## [1.28.7] — 2026-08-31
 
 ### Fixed
